@@ -1,0 +1,15 @@
+{
+  "name": "map-capture",
+  "private": true,
+  "description": "Renders top-down images of Heroes of the Storm battlegrounds by driving the game client",
+  "type": "module",
+  "scripts": {
+    "inject": "node inject.mjs"
+  },
+  "dependencies": {
+    "@jamiephan/stormlib": "^0.3.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
