@@ -2,9 +2,9 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: the first full render placed by registration markers (Towers of Doom,
-rem structures kept, field of view 8, markers on). About 8 minutes; the log, the marker fits
-rem and the stitched image end up in the results folder.
+rem Current step: the first render with numbered markers and two shots per tile (one with the
+rem markers for calibration, one without that is kept). Towers of Doom, structures kept.
+rem Heroes must be at the main menu, not in a match. About 12 minutes.
 call "%~dp0render.cmd" "Towers of Doom" keep
 
 rem Copy this run's output (everything in work\ except the map files) to the results folder,

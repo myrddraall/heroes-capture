@@ -59,20 +59,20 @@ Map names are the file names in
 
 ### Options (inject.mjs)
 
-| Option                         | Default          | Effect                                                                                                                                     |
-| ------------------------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--structures keep\|hide`      | `keep`           | keep or hide forts, towers, cores and gates                                                                                                |
-| `--px-per-cell <n>`            | `48`             | output resolution; a map is ~220 cells wide, so 48 gives ~10,600 px                                                                        |
-| `--screen <w>x<h>`             | `3840x2160`      | the game's resolution while capturing; match your monitor                                                                                  |
-| `--fov <deg>`                  | `20`             | field of view; narrower is flatter (less lean on tall objects) but puts the camera further away                                            |
-| `--keep <0..1>`                | `0.6`            | share of each screenshot used, centred; the rest is overlap, used to measure the scale                                                     |
-| `--no-lens`                    |                  | don't set the field of view, far clip or yaw (see troubleshooting)                                                                         |
-| `--keep-mechanics`             |                  | keep map-mechanic units such as altars, which may sit over holes in the terrain (experimental)                                             |
-| `--freeze`                     |                  | pause model animations (experimental)                                                                                                      |
-| `--markers`                    | on in render.cmd | registration markers (magenta labels in each screenshot's margin): every screenshot is placed exactly by where they land, see `markers.py` |
-| `--show-ui`                    |                  | diagnostic: leave the HUD up, launch the map and stop                                                                                      |
-| `--probe-zoom` / `--probe-fov` |                  | diagnostic: with `--markers`, measure at which camera distance / field of view the markers still draw; writes `work\<what>-probe.txt`      |
-| `--margin <cells>`             | `0`              | also capture beyond the map's camera bounds (lifts them)                                                                                   |
+| Option                         | Default          | Effect                                                                                                                                                                                                           |
+| ------------------------------ | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--structures keep\|hide`      | `keep`           | keep or hide forts, towers, cores and gates                                                                                                                                                                      |
+| `--px-per-cell <n>`            | `48`             | output resolution; a map is ~220 cells wide, so 48 gives ~10,600 px                                                                                                                                              |
+| `--screen <w>x<h>`             | `3840x2160`      | the game's resolution while capturing; match your monitor                                                                                                                                                        |
+| `--fov <deg>`                  | `20`             | field of view; narrower is flatter (less lean on tall objects) but puts the camera further away                                                                                                                  |
+| `--keep <0..1>`                | `0.6`            | share of each screenshot used, centred; the rest is overlap, used to measure the scale                                                                                                                           |
+| `--no-lens`                    |                  | don't set the field of view, far clip or yaw (see troubleshooting)                                                                                                                                               |
+| `--keep-mechanics`             |                  | keep map-mechanic units such as altars, which may sit over holes in the terrain (experimental)                                                                                                                   |
+| `--freeze`                     |                  | pause model animations (experimental)                                                                                                                                                                            |
+| `--markers`                    | on in render.cmd | numbered registration markers and two shots per tile: one with the markers (calibration: exact camera geometry, and proof the view is the right tile) and one without, which is the image kept. See `markers.py` |
+| `--show-ui`                    |                  | diagnostic: leave the HUD up, launch the map and stop                                                                                                                                                            |
+| `--probe-zoom` / `--probe-fov` |                  | diagnostic: with `--markers`, measure at which camera distance / field of view the markers still draw; writes `work\<what>-probe.txt`                                                                            |
+| `--margin <cells>`             | `0`              | also capture beyond the map's camera bounds (lifts them)                                                                                                                                                         |
 
 Higher `--px-per-cell` means more screenshots and a closer camera. Past about 64–128 px per
 cell there is no more detail: that's the game's own texture resolution.
@@ -100,12 +100,13 @@ cell there is no more detail: that's the game's own texture resolution.
   cutscene, and the game's intro code then restores the camera, interface, sound and vision
   itself (found by reading Blizzard's `MapMechanicsLib` and `StartingExperienceLib`, fetched
   from the game's CDN).
-- **capture.py** launches the map through `Support64\HeroesSwitcher_x64.exe`, types `tile <n>`
-  for each tile, waits for the frame to settle and saves a PNG of the game window, on whichever
-  monitor it is. It only types while the game is in front. Black frames (a screen copy of a
-  hardware-rendered window sometimes returns one) are retaken, and if the view didn't change
-  the command is resent. Chat names the tile, so a missed keystroke can't shift every later
-  screenshot by one.
+- **capture.py** launches the map through `Support64\HeroesSwitcher_x64.exe` (Heroes must be
+  at the main menu: a running match keeps its map), learns the game font's digits from a
+  reference label, and for each tile takes two shots: with the numbered markers (each label is
+  the marker's number plus the tile number's last digit, so a stale frame is caught), and after
+  `clean` hides them, the image kept. It only types while the game is in front and pauses
+  whenever it isn't; black frames are retaken; it stops early if the map stops responding, and
+  leaves the match at the end (`quit`), ready for the next run.
 - **stitch.py** places each screenshot by what it shows, not by where the camera was sent
   (the game can hold the camera back near the edges, and its zoom can differ from the plan):
   like panorama software, it matches every screenshot against its neighbours to measure their

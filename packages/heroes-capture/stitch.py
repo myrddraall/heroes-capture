@@ -123,7 +123,10 @@ def main() -> None:
     scales = []
     for key, fit in fits.items():
         i = int(key)
-        if fit and fit["found"] >= 5 and fit["residual"] <= 3.0 and i in by_index and tile_path(by_index[i]).exists():
+        # Numbered markers are identified by their digits, so three suffice; the pattern
+        # fallback needs five to be sure which marker is which.
+        enough = 3 if fit and fit.get("ids") else 5
+        if fit and fit.get("fit") and fit["found"] >= enough and fit["residual"] <= 3.0 and i in by_index and tile_path(by_index[i]).exists():
             t = by_index[i]
             anchored[i] = (t["x"] + fit["centreOffsetCells"][0], t["y"] + fit["centreOffsetCells"][1])
             scales.append((fit["scale"][0] + fit["scale"][1]) / 2)

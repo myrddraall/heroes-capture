@@ -178,7 +178,7 @@ function planGrid(opts, info) {
  */
 function checkDefinitionOrder(script) {
   const defined = new Map();
-  for (const m of script.matchAll(/^(?:void|bool|int|fixed|string) (hrsCap_\w+) \(/gm))
+  for (const m of script.matchAll(/^(?:void|bool|int|fixed|string|text) (hrsCap_\w+) \(/gm))
     defined.set(m[1], m.index);
   for (const m of script.matchAll(/\b(hrsCap_[A-Za-z]\w*)\s*\(/g)) {
     const at = defined.get(m[1]);
@@ -206,40 +206,27 @@ async function main() {
     const lens = opts.lens
       ? { fov: opts.fov, farClip: Math.max(800, Math.ceil(grid.distance * 3)) }
       : null;
-    // Eight markers per screenshot, in the margin the stitch discards: corners and edge
-    // midpoints, 42% of the view from the centre (the kept share is at most 30% either side).
+    // Numbered markers, spread irregularly over the view. Each tile is shot twice, with them and
+    // without, so they may sit anywhere on screen; within 0.32 of the view from its centre keeps
+    // most of them on screen when the game holds the camera back at an edge.
     const viewW = opts.screen.w / opts.pxPerCell;
     const viewH = opts.screen.h / opts.pxPerCell;
-    // Eight markers around the view's edge, at irregular positions: every pairwise offset
-    // between two markers is distinct, so when the game holds the camera back (shifting the
-    // whole pattern on screen, sometimes with markers off the edge) the pattern cannot be
-    // mistaken for a shifted copy of itself. A regular grid could: a camera held back by one
-    // grid step made a row of markers pass for the next row, and the tile was placed a row off.
-    // Outermost marker at 0.32 of the view from its centre (0.42 lost markers off the edge when
-    // the camera was held back, and the game covers the bottom-right corner with something even
-    // with the interface hidden). The layout is scaled to that from a 0.42 design.
-    const MARKER_INSET = 0.32;
     const LAYOUT = [
-      [-0.42, -0.42],
-      [-0.33, 0.06],
-      [-0.42, 0.38],
-      [0.09, -0.4],
-      [-0.12, 0.42],
-      [0.42, -0.34],
-      [0.36, 0.11],
-      [0.42, 0.42],
-    ].map(([i, j]) => [(i * MARKER_INSET) / 0.42, (j * MARKER_INSET) / 0.42]);
+      [-0.32, -0.32],
+      [-0.25, 0.05],
+      [-0.32, 0.29],
+      [0.07, -0.3],
+      [-0.09, 0.32],
+      [0.32, -0.26],
+      [0.27, 0.08],
+      [0.32, 0.32],
+    ];
     const markers = opts.markers
       ? LAYOUT.map(([i, j]) => ({ dx: i * viewW, dy: j * viewH }))
       : null;
-    // The page: the part of each screenshot the stitch may use, like a print page with bleed.
-    // The markers sit in the bleed, so the page stops short of them (a label is ~50 px wide).
-    // Half the view either side of the centre, as a share of the view.
-    const pageShare = opts.markers ? MARKER_INSET - 0.03 : null;
-    if (pageShare !== null && pageShare < opts.keep / 2 + 0.02)
-      throw new Error(
-        `--keep ${opts.keep} needs pages larger than the markers allow; use --keep ${(2 * (pageShare - 0.02)).toFixed(2)} or less`,
-      );
+    // The part of each kept screenshot the stitch may use: all of it, since the kept (clean)
+    // shot has no markers in it.
+    const pageShare = null;
 
     const original = archive.readFileAsString('MapScript.galaxy');
     const init = original.lastIndexOf('void InitMap () {');

@@ -100,7 +100,10 @@ export function captureScript({
 const int hrsCap_markerCount = ${markerCount};
 fixed[${markerCount}] hrsCap_markerDX;
 fixed[${markerCount}] hrsCap_markerDY;
-int[${markerCount}] hrsCap_markers;`
+int[${markerCount}] hrsCap_markers;
+int hrsCap_glyphs = c_textTagNone;
+trigger hrsCap_gt_Clean;
+trigger hrsCap_gt_Glyphs;`
     : '';
   const markerFuncs = markers
     ? `
@@ -108,10 +111,18 @@ void hrsCap_InitMarkers () {
 ${markers.map((m, k) => `    hrsCap_markerDX[${k}] = ${fixed(m.dx)}; hrsCap_markerDY[${k}] = ${fixed(m.dy)}; hrsCap_markers[${k}] = c_textTagNone;`).join('\n')}
 }
 
-// Registration markers: solid magenta labels pinned to known ground points, drawn over
-// everything so nothing can hide them. Created once, while the camera is briefly close (the
-// game does not draw labels created under a far camera, but keeps drawing them once created),
-// then moved from tile to tile.
+// A marker's label: its number, then the tile number's last digit, so every calibration shot
+// also proves it shows the tile that was asked for.
+text hrsCap_MarkerText (int lp_k, int lp_index) {
+    return StringToText((IntToString(lp_k) + IntToString(ModI(lp_index, 10))));
+}
+
+// Numbered registration markers: magenta labels with black digits, pinned to known ground
+// points. Each tile is shot twice: once with them (calibration: where they land gives the exact
+// camera geometry) and once without ("clean": the image that is kept). Created once, while the
+// camera is briefly close (the game does not draw labels created under a far camera, but keeps
+// drawing them once created), together with the "0123456789" reference label the capture
+// learns the digits from; then moved, renumbered and shown per tile.
 void hrsCap_ShowMarkers (int lp_index) {
     int lv_k;
     int lv_p;
@@ -126,11 +137,15 @@ void hrsCap_ShowMarkers (int lp_index) {
         }
         lv_k = 0;
         for ( ; lv_k < hrsCap_markerCount ; lv_k += 1 ) {
-            TextTagCreate(StringToText("WW"), 24, Point((hrsCap_tileX[lp_index] + hrsCap_markerDX[lv_k]), (hrsCap_tileY[lp_index] + hrsCap_markerDY[lv_k])), 0.0, true, false, PlayerGroupAll());
-            TextTagSetColor(TextTagLastCreated(), c_textTagColorText, Color(100.00, 0.00, 100.00));
+            TextTagCreate(hrsCap_MarkerText(lv_k, lp_index), 24, Point((hrsCap_tileX[lp_index] + hrsCap_markerDX[lv_k]), (hrsCap_tileY[lp_index] + hrsCap_markerDY[lv_k])), 0.0, true, false, PlayerGroupAll());
+            TextTagSetColor(TextTagLastCreated(), c_textTagColorText, Color(0.00, 0.00, 0.00));
             TextTagSetColor(TextTagLastCreated(), c_textTagColorBackground, ColorWithAlpha(100.00, 0.00, 100.00, 100.00));
             hrsCap_markers[lv_k] = TextTagLastCreated();
         }
+        TextTagCreate(StringToText("0123456789"), 24, Point(hrsCap_tileX[lp_index], hrsCap_tileY[lp_index]), 0.0, false, false, PlayerGroupAll());
+        TextTagSetColor(TextTagLastCreated(), c_textTagColorText, Color(0.00, 0.00, 0.00));
+        TextTagSetColor(TextTagLastCreated(), c_textTagColorBackground, ColorWithAlpha(100.00, 0.00, 100.00, 100.00));
+        hrsCap_glyphs = TextTagLastCreated();
         lv_p = 1;
         for ( ; lv_p <= 10 ; lv_p += 1 ) {
             if ((PlayerStatus(lv_p) == c_playerStatusActive)) {
@@ -142,7 +157,47 @@ void hrsCap_ShowMarkers (int lp_index) {
     lv_k = 0;
     for ( ; lv_k < hrsCap_markerCount ; lv_k += 1 ) {
         TextTagSetPosition(hrsCap_markers[lv_k], Point((hrsCap_tileX[lp_index] + hrsCap_markerDX[lv_k]), (hrsCap_tileY[lp_index] + hrsCap_markerDY[lv_k])), 0.0);
+        TextTagSetText(hrsCap_markers[lv_k], hrsCap_MarkerText(lv_k, lp_index));
+        TextTagShow(hrsCap_markers[lv_k], PlayerGroupAll(), true);
     }
+}
+
+// Hide the markers (and the reference label) for the clean shot.
+void hrsCap_HideMarkers () {
+    int lv_k;
+
+    lv_k = 0;
+    for ( ; lv_k < hrsCap_markerCount ; lv_k += 1 ) {
+        if ((hrsCap_markers[lv_k] != c_textTagNone)) {
+            TextTagShow(hrsCap_markers[lv_k], PlayerGroupAll(), false);
+        }
+    }
+    if ((hrsCap_glyphs != c_textTagNone)) {
+        TextTagShow(hrsCap_glyphs, PlayerGroupAll(), false);
+    }
+}
+
+// Chat "clean": hide the markers, camera unmoved.
+bool hrsCap_gt_Clean_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    hrsCap_HideMarkers();
+    return true;
+}
+
+// Chat "glyphs": show the reference label at the current tile's centre (markers hidden), for
+// the capture to learn the game font's digits.
+bool hrsCap_gt_Glyphs_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    hrsCap_HideMarkers();
+    if ((hrsCap_glyphs != c_textTagNone)) {
+        TextTagSetPosition(hrsCap_glyphs, Point(hrsCap_tileX[hrsCap_currentTile], hrsCap_tileY[hrsCap_currentTile]), 0.0);
+        TextTagShow(hrsCap_glyphs, PlayerGroupAll(), true);
+    }
+    return true;
 }
 `
     : '';
@@ -152,7 +207,11 @@ void hrsCap_ShowMarkers (int lp_index) {
     : '';
   const markerInit = markers
     ? `
-    hrsCap_InitMarkers();`
+    hrsCap_InitMarkers();
+    hrsCap_gt_Clean = TriggerCreate("hrsCap_gt_Clean_Func");
+    TriggerAddEventChatMessage(hrsCap_gt_Clean, c_playerAny, "clean", true);
+    hrsCap_gt_Glyphs = TriggerCreate("hrsCap_gt_Glyphs_Func");
+    TriggerAddEventChatMessage(hrsCap_gt_Glyphs, c_playerAny, "glyphs", true);`
     : '';
 
   return `//--------------------------------------------------------------------------------------------------
@@ -164,6 +223,7 @@ const fixed hrsCap_distance = ${fixed(distance)};
 fixed hrsCap_zoom = 0.0; // set by chat "zoom <distance>"; 0 means the planned distance
 fixed hrsCap_fov = 0.0; // set by chat "fov <degrees>"; 0 means the planned field of view
 const int hrsCap_tileCount = ${n};
+int hrsCap_currentTile = 0;
 fixed[${n}] hrsCap_tileX;
 fixed[${n}] hrsCap_tileY;
 trigger hrsCap_gt_Tile;
@@ -255,6 +315,7 @@ bool hrsCap_gt_Tile_Func (bool testConds, bool runActions) {
     if (!runActions) {
         return true;
     }
+    hrsCap_currentTile = lv_index;
     hrsCap_ClearUnits();
     hrsCap_Scene();
     CameraPan(EventPlayer(), Point(hrsCap_tileX[lv_index], hrsCap_tileY[lv_index]), 0.0, -1, 10.0, false);${markerCall}

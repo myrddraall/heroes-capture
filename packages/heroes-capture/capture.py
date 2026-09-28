@@ -28,7 +28,7 @@ import numpy as np
 import pydirectinput
 from PIL import Image
 
-from markers import describe, fit_markers
+from markers import count_labels, describe, fit_markers, fit_numbered, learn_digits
 
 DEFAULT_GAME = r"D:\Games\Heroes of the Storm"
 
@@ -344,21 +344,73 @@ def main() -> None:
         send_chat(f"tile {tiles[args.start]['index']}")
         settle(args.settle)
 
+        # Numbered markers: learn the game font's digits from the "0123456789" reference label.
+        digits = None
+        if manifest.get("markers"):
+            send_chat("glyphs")
+            settle(args.settle)
+            ref = grab()
+            if ref is not None:
+                Image.fromarray(np.ascontiguousarray(ref)).save(out.parent / "glyphs.png", compress_level=1)
+                digits = learn_digits(ref)
+            log("digits learned from the reference label" if digits else
+                "could not learn the digits (see glyphs.png); falling back to the marker pattern")
+
+        def calibrate(tile: dict) -> tuple[dict | None, int]:
+            """Calibration shot: (fit, labels on screen)."""
+            frame = grab()
+            if frame is None:
+                return None, 0
+            if digits:
+                fit = fit_numbered(frame, manifest["markers"], digits, tile["index"])
+            else:
+                fit = fit_markers(frame, manifest["markers"], manifest["screen"], manifest["pxPerCell"])
+            return fit, count_labels(frame)
+
         previous = None
-        failures = 0  # consecutive tiles that stayed black or didn't move
+        failures = 0  # consecutive tiles that stayed black
+        silent = 0  # consecutive tiles whose calibration shot showed no labels at all
         started = time.time()
         for tile in tiles[args.start :]:
             send_chat(f"tile {tile['index']}")
             settle(args.settle)
+            note = ""
+            if manifest.get("markers"):
+                # Shot 1 of 2, calibration: the numbered markers give the exact camera geometry,
+                # and their tile digit proves the view is this tile. One retake if not.
+                fit, labels = calibrate(tile)
+                if not (fit and fit.get("fit")):
+                    send_chat(f"tile {tile['index']}")
+                    settle(args.settle)
+                    fit, labels = calibrate(tile)
+                silent = silent + 1 if labels == 0 else 0
+                if silent >= 3:
+                    quit_match()
+                    sys.exit(
+                        "\nStopped: no markers on screen for three tiles in a row. The map's script is\n"
+                        "not responding to the chat commands; if every interface panel is visible in the\n"
+                        "game, the script failed to compile."
+                    )
+                if fit and not fit.get("fit"):
+                    fit = None  # labels named another tile: a stale frame, no usable fit
+                marker_fits[str(tile["index"])] = fit
+                markers_path.write_text(json.dumps(marker_fits))
+                note = "  " + describe(fit)
+                # Shot 2 of 2, clean: markers hidden, camera unmoved. This is the image kept.
+                send_chat("clean")
+                settle(0.5)
             frame = grab()
-            # Resend once if the view didn't change. Near the edges the game holds the camera
-            # back, so neighbouring tiles can really show the same view; keep it either way (the
-            # stitch places duplicates on top of each other). Only black frames are failures.
-            if frame is not None and previous is not None and same_view(frame, previous):
-                log(f"    view unchanged; resending tile {tile['index']} once (held back at an edge?)")
-                send_chat(f"tile {tile['index']}")
-                settle(args.settle)
+            if frame is not None and manifest.get("markers") and count_labels(frame) > 0:
+                send_chat("clean")
+                settle(0.5)
                 frame = grab()
+                if frame is not None and count_labels(frame) > 0:
+                    note += "  (labels still visible in the clean shot)"
+            # Near the edges the game holds the camera back, so neighbouring tiles can really
+            # show the same view; keep it either way (the stitch places duplicates on top of each
+            # other). Only black frames are failures.
+            if frame is not None and previous is not None and same_view(frame, previous):
+                note += "  (same view as the previous tile)"
 
             if frame is None:
                 failures += 1
@@ -374,29 +426,6 @@ def main() -> None:
                 continue
             failures = 0
             previous = frame
-            note = ""
-            if manifest.get("markers"):
-                fit = fit_markers(frame, manifest["markers"], manifest["screen"], manifest["pxPerCell"])
-                if fit is None:
-                    # Not there, or the frame was caught before the labels moved: one more try.
-                    send_chat(f"tile {tile['index']}")
-                    settle(args.settle)
-                    again = grab()
-                    if again is not None:
-                        frame = again
-                        fit = fit_markers(frame, manifest["markers"], manifest["screen"], manifest["pxPerCell"])
-                marker_fits[str(tile["index"])] = fit
-                markers_path.write_text(json.dumps(marker_fits))
-                note = "  " + describe(fit)
-                # Identical fits on three tiles in a row: the view isn't moving, so the map's
-                # script isn't running (see checkDefinitionOrder in inject.mjs) or chat is broken.
-                recent = [marker_fits.get(str(tile["index"] - k)) for k in range(3)]
-                if all(recent) and len({json.dumps(r["fit"]) for r in recent}) == 1:
-                    sys.exit(
-                        "\nStopped: the view is not changing between tiles (identical marker fits).\n"
-                        "The map's script is not responding to the chat commands. If every interface\n"
-                        "panel is visible in the game, the script failed to compile."
-                    )
             path = out / f"tile_{tile['index']:04d}.png"
             Image.fromarray(np.ascontiguousarray(frame)).save(path, compress_level=1)
             done = tile["index"] - args.start + 1
