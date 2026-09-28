@@ -3,7 +3,7 @@
     python capture.py work/towers-of-doom-structures.json [options]
 
 Moves the camera by typing `tile <n>` into the game's chat (the injected script listens for
-it), waits for the frame to settle, and saves the screen as a lossless PNG. Chat is used
+it), waits until the screen shows that tile, and saves the screen as a lossless PNG. Chat is used
 rather than a hotkey because it names the tile: a missed keystroke cannot shift every later
 screenshot by one.
 
@@ -14,6 +14,7 @@ alone while it captures.
 
 import argparse
 import ctypes
+import ctypes.wintypes as wt
 import json
 import math
 import shutil
@@ -21,6 +22,7 @@ import subprocess
 import tempfile
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import mss
@@ -33,6 +35,42 @@ from markers import count_labels, describe, fit_markers, fit_numbered, learn_dig
 DEFAULT_GAME = r"D:\Games\Heroes of the Storm"
 
 pydirectinput.PAUSE = 0.02  # between synthetic key events
+
+
+# Keyboard input for typing a whole command in one SendInput call (see type_burst).
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [("wVk", wt.WORD), ("wScan", wt.WORD), ("dwFlags", wt.DWORD), ("time", wt.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [("dx", wt.LONG), ("dy", wt.LONG), ("mouseData", wt.DWORD), ("dwFlags", wt.DWORD), ("time", wt.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+
+
+class HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [("uMsg", wt.DWORD), ("wParamL", wt.WORD), ("wParamH", wt.WORD)]
+
+
+class _INPUTUNION(ctypes.Union):
+    _fields_ = [("ki", KEYBDINPUT), ("mi", MOUSEINPUT), ("hi", HARDWAREINPUT)]
+
+
+class INPUT(ctypes.Structure):
+    _anonymous_ = ("u",)
+    _fields_ = [("type", wt.DWORD), ("u", _INPUTUNION)]
+
+
+def type_burst(keys: list[str]) -> None:
+    """Press and release each key, all in one SendInput call: the game gets them in order with
+    nothing else in between, as fast as it reads them. Scan codes, which the game accepts.
+    Only for characters typed into the open chat box: the game can miss a hotkey (such as the
+    Enter that opens and sends chat) pressed and released in the same instant; see hold_key."""
+    events = []
+    for key in keys:
+        code = pydirectinput.KEYBOARD_MAPPING[key]
+        for up in (0, 0x0002):  # KEYEVENTF_KEYUP
+            events.append(INPUT(type=1, ki=KEYBDINPUT(0, code, 0x0008 | up, 0, 0)))  # KEYEVENTF_SCANCODE
+    batch = (INPUT * len(events))(*events)
+    ctypes.windll.user32.SendInput(len(events), batch, ctypes.sizeof(INPUT))
 
 # Real pixel coordinates on every monitor, whatever the Windows display scaling.
 try:
@@ -102,19 +140,29 @@ def wait_for_game() -> None:
     time.sleep(1.0)
 
 
+def hold_key(key: str, seconds: float = 0.04) -> None:
+    """Press a key and hold it for a few frames, so the game can't miss it."""
+    code = pydirectinput.KEYBOARD_MAPPING[key]
+    for up in (0, 0x0002):
+        event = INPUT(type=1, ki=KEYBDINPUT(0, code, 0x0008 | up, 0, 0))
+        ctypes.windll.user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT))
+        if not up:
+            time.sleep(seconds)
+
+
 def send_chat(text: str) -> None:
-    """Open chat, type, send, checking the game is in front before every key. If it loses focus
-    part way, wait for it to come back, clear the half-typed line with Esc, and start again.
-    pydirectinput uses scan codes, which the game accepts."""
+    """Open chat, type, send, only while the game is in front: a held Enter, a moment for the
+    chat box to open, the text in one burst, and a held Enter to send it. If it loses focus
+    part way, wait for it to come back, clear the half-typed line with Esc, and start again."""
     keys = ["enter", *("space" if ch == " " else ch for ch in text), "enter"]
     while True:
         wait_for_game()
-        for i, key in enumerate(keys):
-            if not foreground_is_game():
-                break
-            pydirectinput.press(key)
-            time.sleep(0.15 if i == 0 else 0.02)  # the chat box needs a moment to open
-        else:
+        hold_key("enter")
+        time.sleep(0.15)  # the chat box needs a moment (a few frames) to open
+        if foreground_is_game():
+            type_burst(keys[1:-1])
+            time.sleep(0.03)
+            hold_key("enter")
             return
         print("  focus lost while typing; retrying", flush=True)
         wait_for_game()
@@ -247,7 +295,7 @@ def main() -> None:
     ap.add_argument("--launch-only", action="store_true", help="launch the map and stop (to try chat commands by hand)")
     ap.add_argument("--probe-zoom", action="store_true", help="find the camera distance beyond which the markers stop drawing")
     ap.add_argument("--probe-fov", action="store_true", help="find the narrowest field of view at which the markers still draw")
-    ap.add_argument("--settle", type=float, default=1.0, help="seconds to wait after each move (default 1.0)")
+    ap.add_argument("--settle", type=float, default=0.5, help="least seconds from a move to the kept screenshot (default 0.5)")
     ap.add_argument("--start", type=int, default=0, help="first tile, to resume a run (default 0)")
     ap.add_argument("--monitor", type=int, help="capture this mss monitor number instead of the game window")
     args = ap.parse_args()
@@ -342,13 +390,13 @@ def main() -> None:
         settle(3.0)
         wait_until_still(grab, limit=45)
         send_chat(f"tile {tiles[args.start]['index']}")
-        settle(args.settle)
+        settle(1.0)
 
         # Numbered markers: learn the game font's digits from the "0123456789" reference label.
         digits = None
         if manifest.get("markers"):
             send_chat("glyphs")
-            settle(args.settle)
+            settle(1.0)
             ref = grab()
             if ref is not None:
                 Image.fromarray(np.ascontiguousarray(ref)).save(out.parent / "glyphs.png", compress_level=1)
@@ -356,32 +404,80 @@ def main() -> None:
             log("digits learned from the reference label" if digits else
                 "could not learn the digits (see glyphs.png); falling back to the marker pattern")
 
+        # The tile id label is zero-padded like this (capture-script.mjs).
+        id_digits = max(3, len(str(len(manifest["tiles"]) - 1)))
+
+        last_calibration: list[np.ndarray] = []  # the latest calibration shot, kept if it fails
+
         def calibrate(tile: dict) -> tuple[dict | None, int]:
             """Calibration shot: (fit, labels on screen)."""
             frame = grab()
+            last_calibration[:] = [frame] if frame is not None else []
             if frame is None:
                 return None, 0
             if digits:
-                fit = fit_numbered(frame, manifest["markers"], digits, tile["index"])
+                fit = fit_numbered(frame, manifest["markers"], digits, tile["index"], id_digits)
             else:
                 fit = fit_markers(frame, manifest["markers"], manifest["screen"], manifest["pxPerCell"])
             return fit, count_labels(frame)
+
+        # After a command: a first shot shortly after, one retake a little later, and if neither
+        # shows the command's effect, the command is sent again (it may have been missed).
+        FIRST_SHOT, RETAKE, SENDS = 0.1, 0.15, 4
+
+        def command_calibration(tile: dict) -> tuple[dict | None, int, float]:
+            """`tile N`, until a calibration shot shows this tile's id and a marker fit:
+            (fit, labels on screen, time of the last send)."""
+            for _ in range(SENDS):
+                send_chat(f"tile {tile['index']}")
+                moved = time.time()
+                for wait in (FIRST_SHOT, RETAKE):
+                    settle(wait)
+                    fit, labels = calibrate(tile)
+                    if fit and fit.get("fit"):
+                        return fit, labels, moved
+            return fit, labels, moved
+
+        def command_clean(moved: float) -> np.ndarray | None:
+            """`clean`, until a shot has no labels left; then the kept shot, a moment later: the
+            chat box may still be closing and the "clean" message still showing (the script
+            clears messages at once and four times a second). Not before --settle seconds from
+            the move, for the textures to finish loading."""
+            wait = moved + args.settle - time.time()
+            if wait > 0:
+                settle(wait)
+            frame = None
+            for _ in range(SENDS):
+                send_chat("clean")
+                for wait in (FIRST_SHOT, RETAKE):
+                    settle(wait)
+                    frame = grab()
+                    if frame is None:
+                        return None
+                    if count_labels(frame) == 0:
+                        settle(0.3)
+                        return grab()
+            return frame
+
+        # PNGs are written in the background while the next tile is shot.
+        saver = ThreadPoolExecutor(max_workers=2)
 
         previous = None
         failures = 0  # consecutive tiles that stayed black
         silent = 0  # consecutive tiles whose calibration shot showed no labels at all
         started = time.time()
         for tile in tiles[args.start :]:
-            send_chat(f"tile {tile['index']}")
-            settle(args.settle)
             note = ""
             if manifest.get("markers"):
                 # Shot 1 of 2, calibration: the numbered markers give the exact camera geometry,
-                # and their tile digit proves the view is this tile. One retake if not.
-                fit, labels = calibrate(tile)
-                if not (fit and fit.get("fit")):
+                # and the tile id label proves the view is this tile. Without learned digits
+                # there is no id to check: one send and a fixed wait instead.
+                if digits:
+                    fit, labels, moved = command_calibration(tile)
+                else:
                     send_chat(f"tile {tile['index']}")
-                    settle(args.settle)
+                    moved = time.time()
+                    settle(1.0)
                     fit, labels = calibrate(tile)
                 silent = silent + 1 if labels == 0 else 0
                 if silent >= 3:
@@ -391,21 +487,25 @@ def main() -> None:
                         "not responding to the chat commands; if every interface panel is visible in the\n"
                         "game, the script failed to compile."
                     )
+                if not (fit and fit.get("fit")) and last_calibration:
+                    # Kept for diagnosis: what the reader saw when it found no usable fit.
+                    failed = out.parent / "failed-calibration"
+                    failed.mkdir(exist_ok=True)
+                    shot = Image.fromarray(np.ascontiguousarray(last_calibration[0]))
+                    saver.submit(shot.save, failed / f"tile_{tile['index']:04d}.png", compress_level=1)
                 if fit and not fit.get("fit"):
-                    fit = None  # labels named another tile: a stale frame, no usable fit
+                    fit = None  # the id label named another tile: a stale frame, no usable fit
                 marker_fits[str(tile["index"])] = fit
                 markers_path.write_text(json.dumps(marker_fits))
                 note = "  " + describe(fit)
                 # Shot 2 of 2, clean: markers hidden, camera unmoved. This is the image kept.
-                send_chat("clean")
-                settle(0.5)
-            frame = grab()
-            if frame is not None and manifest.get("markers") and count_labels(frame) > 0:
-                send_chat("clean")
-                settle(0.5)
-                frame = grab()
+                frame = command_clean(moved)
                 if frame is not None and count_labels(frame) > 0:
                     note += "  (labels still visible in the clean shot)"
+            else:
+                send_chat(f"tile {tile['index']}")
+                settle(max(args.settle, 1.0))
+                frame = grab()
             # Near the edges the game holds the camera back, so neighbouring tiles can really
             # show the same view; keep it either way (the stitch places duplicates on top of each
             # other). Only black frames are failures.
@@ -427,10 +527,12 @@ def main() -> None:
             failures = 0
             previous = frame
             path = out / f"tile_{tile['index']:04d}.png"
-            Image.fromarray(np.ascontiguousarray(frame)).save(path, compress_level=1)
+            saver.submit(Image.fromarray(np.ascontiguousarray(frame)).save, path, compress_level=1)
             done = tile["index"] - args.start + 1
             eta = (time.time() - started) / done * (len(tiles) - args.start - done)
             log(f"  tile {tile['index'] + 1}/{len(tiles)}  (row {tile['row']}, col {tile['col']})  ~{eta:.0f}s left{note}")
+
+        saver.shutdown(wait=True)
 
     quit_match()
     if manifest.get("markers"):

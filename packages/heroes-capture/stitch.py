@@ -209,7 +209,18 @@ def main() -> None:
         if worst <= 3:
             break
         kept = [e for e, r in zip(kept, residual) if r <= max(3, np.median(residual) * 3)]
-    placed = {i: pos[col_of[i]] for i in solved_ids}  # top-left of each screenshot
+    # Dropping matches can cut screenshots loose (no anchor, no match left); the solve leaves
+    # those at (0, 0), so keep only what is still connected to the anchors (or the pinned tile).
+    reach = {ANCHOR} if anchors else {solved_ids[0]}
+    reach |= set(anchors)
+    grew = True
+    while grew:
+        grew = False
+        for a, b, *_ in kept:
+            if (a in reach) != (b in reach):
+                reach |= {a, b}
+                grew = True
+    placed = {i: pos[col_of[i]] for i in solved_ids if i in reach}  # top-left of each screenshot
     log(f"placed {len(placed)} of {len(tiles)} screenshots from {len(kept)} matches ({len(edges)} measured)")
     unplaced = [t["index"] for t in present if t["index"] not in placed]
     if unplaced:

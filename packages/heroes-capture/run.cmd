@@ -17,7 +17,7 @@ if not defined HRS_RESULTS (
 echo.
 echo Copying results to %HRS_RESULTS% ...
 if not exist "%HRS_RESULTS%" mkdir "%HRS_RESULTS%"
-robocopy "%~dp0work" "%HRS_RESULTS%" /MIR /XF *.stormmap /NDL /NJH /NP
+robocopy "%~dp0work" "%HRS_RESULTS%" /E /XF *.stormmap /NDL /NJH /NP
 if errorlevel 8 (
   echo Copy FAILED - see the robocopy output above.
   exit /b 1

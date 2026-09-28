@@ -134,7 +134,7 @@ def describe(fit: dict | None) -> str:
     if fit is None:
         return "markers not found"
     if not fit.get("fit"):
-        return "labels name another tile (stale frame)"
+        return "tile id names another tile (stale frame)"
     ox, oy = fit["centreOffsetCells"]
     held = f"camera {abs(ox):.1f} cells {'east' if ox > 0 else 'west'}" if abs(ox) > 0.5 else ""
     if abs(oy) > 0.5:
@@ -146,47 +146,83 @@ def describe(fit: dict | None) -> str:
 
 
 # --- Numbered markers -------------------------------------------------------------------------
-# Each marker's label is two digits: the marker's number, then the tile number's last digit.
-# The digit shapes are learned once per capture from a "0123456789" reference label in the
+# Each marker's label is a single digit, its own number, the same on every tile; one more label
+# at the view's centre carries the full tile number, zero-padded to at least three digits.
+# Labels are magenta digits drawn straight on the map (text tags have no background by
+# default). The digit shapes are learned once per capture from a "0123456789" reference label in the
 # game's own font (text tags are drawn flat on the screen at a fixed size, so every "3" looks
 # the same), then each label is read by comparing its digits with those shapes.
 
 GLYPH_SIZE = (12, 18)  # width, height every digit is normalised to for comparison
 
 
+def _ink(frame: np.ndarray) -> np.ndarray:
+    """Magenta text pixels, including the anti-aliased edges of the strokes."""
+    f = frame.astype(int)
+    r, g, b = f[:, :, 0], f[:, :, 1], f[:, :, 2]
+    return (np.minimum(r, b) - g > 70) & (r > 110) & (b > 110)
+
+
 def _label_boxes(frame: np.ndarray) -> list[tuple[int, int, int, int]]:
-    """Bounding boxes (x0, y0, x1, y1) of magenta label backgrounds."""
+    """Bounding boxes (x0, y0, x1, y1) of magenta labels (the characters of one label merged)."""
     mask = magenta_mask(frame)
     if not mask.any():
         return []
-    labels, n = ndimage.label(ndimage.binary_dilation(mask, iterations=2))
+    labels, n = ndimage.label(ndimage.binary_dilation(mask, iterations=4))
     boxes = []
     for sl in ndimage.find_objects(labels):
         y0, y1, x0, x1 = sl[0].start, sl[0].stop, sl[1].start, sl[1].stop
-        if (x1 - x0) >= 12 and (y1 - y0) >= 10 and mask[sl].sum() > 60:
+        if (x1 - x0) >= 12 and (y1 - y0) >= 10 and mask[sl].sum() > 30:
             boxes.append((x0, y0, x1, y1))
+    # The game's font leaves wide gaps around a "1", wider than the dilation bridges, so
+    # characters on the same line less than half a label's height apart are one label.
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(boxes)):
+            for j in range(i + 1, len(boxes)):
+                a, b = boxes[i], boxes[j]
+                height = max(a[3] - a[1], b[3] - b[1])
+                overlap = min(a[3], b[3]) - max(a[1], b[1])
+                gap = max(a[0], b[0]) - min(a[2], b[2])
+                if overlap > 0.6 * height and gap < 0.5 * height:
+                    boxes[i] = (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
+                    del boxes[j]
+                    merged = True
+                    break
+            if merged:
+                break
     return boxes
 
 
 def _glyphs(frame: np.ndarray, box: tuple[int, int, int, int]) -> list[np.ndarray]:
-    """The dark characters inside one label box, left to right, each normalised to GLYPH_SIZE."""
+    """The characters of one label, left to right, each normalised to GLYPH_SIZE.
+    Characters are split at the empty columns between them."""
     from PIL import Image
 
     x0, y0, x1, y1 = box
-    crop = frame[y0:y1, x0:x1].astype(int)
-    # Tighten to the magenta background itself (the box came from a dilated mask).
-    inside = magenta_mask(frame[y0:y1, x0:x1])
-    ys, xs = np.nonzero(inside)
-    crop = crop[ys.min() : ys.max() + 1, xs.min() : xs.max() + 1]
-    dark = crop.max(axis=2) < 90
-    labels, n = ndimage.label(dark)
+    ink = _ink(frame[y0:y1, x0:x1])
+    cols = ink.any(axis=0)
     out = []
-    h, w = dark.shape
-    for sl in sorted(ndimage.find_objects(labels), key=lambda s: s[1].start):
-        g = dark[sl]
-        touches_edge = sl[0].start == 0 or sl[1].start == 0 or sl[0].stop == h or sl[1].stop == w
-        if touches_edge or g.sum() < 6 or g.shape[0] < 5:
+    x = 0
+    while x < len(cols):
+        if not cols[x]:
+            x += 1
             continue
+        start = x
+        while x < len(cols) and cols[x]:
+            x += 1
+        g = ink[:, start:x]
+        ys = np.nonzero(g.any(axis=1))[0]
+        g = g[ys.min() : ys.max() + 1]
+        if g.sum() < 6 or g.shape[0] < 5:
+            continue
+        # Centre on a canvas of the normalised shape, so a narrow "1" keeps its proportions.
+        h, w = g.shape
+        cw = max(w, round(h * GLYPH_SIZE[0] / GLYPH_SIZE[1]))
+        canvas = np.zeros((h, cw), dtype=bool)
+        canvas[:, (cw - w) // 2 : (cw - w) // 2 + w] = g
+        g = canvas
         img = Image.fromarray((g * 255).astype(np.uint8)).resize(GLYPH_SIZE, Image.BILINEAR)
         out.append(np.asarray(img, dtype=np.float32) / 255.0)
     return out
@@ -217,36 +253,47 @@ def _read(glyph: np.ndarray, digits: dict[int, np.ndarray]) -> tuple[int, float]
 
 
 def fit_numbered(
-    frame: np.ndarray, markers: list[dict], digits: dict[int, np.ndarray], tile_index: int
+    frame: np.ndarray, markers: list[dict], digits: dict[int, np.ndarray], tile_index: int, id_digits: int = 3
 ) -> dict | None:
-    """Read every label and fit the mapping from the ones that name a marker and this tile.
+    """Read every label and fit the mapping from the single-digit marker labels, once the tile id
+    label (the full tile number, zero-padded to `id_digits`) confirms this is the right tile.
 
-    Returns the same shape as fit_markers, plus "tileDigitOk" (False when labels were read but
-    named another tile: a stale frame). None when fewer than three markers were identified.
+    Returns the same shape as fit_markers, plus "tileIdOk" (False when the id label names another
+    tile: a stale frame). None when the id label can't be read or fewer than three markers were
+    identified.
     """
     identified: dict[int, tuple[float, float]] = {}
-    wrong_tile = 0
+    tile_id = None
     for box in _label_boxes(frame):
         glyphs = _glyphs(frame, box)
-        if len(glyphs) != 2:
+        reads = [_read(g, digits) for g in glyphs]
+        if not reads or min(score for _, score in reads) < 0.6:
             continue
-        (k, sk), (t, st) = _read(glyphs[0], digits), _read(glyphs[1], digits)
-        if min(sk, st) < 0.6 or k >= len(markers):
-            continue
-        if t != tile_index % 10:
-            wrong_tile += 1
-            continue
-        x0, y0, x1, y1 = box
-        identified[k] = ((x0 + x1) / 2, (y0 + y1) / 2)
+        if len(reads) == id_digits:
+            tile_id = int("".join(str(d) for d, _ in reads))
+        elif len(reads) == 1 and reads[0][0] < len(markers):
+            x0, y0, x1, y1 = box
+            identified[reads[0][0]] = ((x0 + x1) / 2, (y0 + y1) / 2)
+    if tile_id is None:
+        return None
+    if tile_id != tile_index:
+        return {"found": 0, "tileIdOk": False}
     if len(identified) < 3:
-        return {"found": 0, "tileDigitOk": False} if wrong_tile >= 3 else None
+        return None
     ks = sorted(identified)
-    rows = np.array([[markers[k]["dx"], markers[k]["dy"], 1.0] for k in ks])
-    xs = np.array([identified[k][0] for k in ks])
-    ys = np.array([identified[k][1] for k in ks])
-    cx, *_ = np.linalg.lstsq(rows, xs, rcond=None)
-    cy, *_ = np.linalg.lstsq(rows, ys, rcond=None)
-    residual = float(max(np.abs(rows @ cx - xs).max(), np.abs(rows @ cy - ys).max()))
+    # A label can be thrown off by nearby magenta-ish map lights; while the fit is off by more
+    # than 2 px, drop the worst marker and refit, keeping at least four.
+    while True:
+        rows = np.array([[markers[k]["dx"], markers[k]["dy"], 1.0] for k in ks])
+        xs = np.array([identified[k][0] for k in ks])
+        ys = np.array([identified[k][1] for k in ks])
+        cx, *_ = np.linalg.lstsq(rows, xs, rcond=None)
+        cy, *_ = np.linalg.lstsq(rows, ys, rcond=None)
+        errors = np.hypot(rows @ cx - xs, rows @ cy - ys)
+        residual = float(max(np.abs(rows @ cx - xs).max(), np.abs(rows @ cy - ys).max()))
+        if residual <= 2.0 or len(ks) <= 4:
+            break
+        del ks[int(np.argmax(errors))]
     a, b, c = (float(v) for v in cx)
     d, e, f = (float(v) for v in cy)
     h, w = frame.shape[:2]
@@ -259,7 +306,7 @@ def fit_numbered(
         "scale": [a, -e],
         "residual": residual,
         "centreOffsetCells": [centre[0], centre[1]],
-        "tileDigitOk": True,
+        "tileIdOk": True,
     }
 
 

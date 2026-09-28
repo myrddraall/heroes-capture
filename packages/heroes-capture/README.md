@@ -103,8 +103,8 @@ cell there is no more detail: that's the game's own texture resolution.
 - **capture.py** launches the map through `Support64\HeroesSwitcher_x64.exe` (Heroes must be
   at the main menu: a running match keeps its map), learns the game font's digits from a
   reference label, and for each tile takes two shots: with the numbered markers (each label is
-  the marker's number plus the tile number's last digit, so a stale frame is caught), and after
-  `clean` hides them, the image kept. It only types while the game is in front and pauses
+  just the marker's number, plus one label at the centre with the full tile number, so a stale
+  frame is caught), and after `clean` hides them, the image kept. It only types while the game is in front and pauses
   whenever it isn't; black frames are retaken; it stops early if the map stops responding, and
   leaves the match at the end (`quit`), ready for the next run.
 - **stitch.py** places each screenshot by what it shows, not by where the camera was sent
@@ -151,5 +151,6 @@ natives not seen in Heroes scripts.
   script matches any message containing `tile`.
 - **Trees or props missing or low-detail:** the camera is too far away for the game's detail
   distance. Raise `--px-per-cell` or `--fov` (both bring the camera closer).
-- **Minions flicker into some screenshots:** raise `--settle` in capture.py; units are swept
-  four times a second.
+- **Minions flicker into some screenshots, or some screenshots have blurry textures:** raise
+  `--settle` in capture.py (the least time from a camera move to the kept screenshot, 0.5 s by
+  default); units are swept four times a second.

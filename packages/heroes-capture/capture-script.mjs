@@ -26,8 +26,9 @@ const fixed = (n) => (Number.isInteger(n) ? `${n}.0` : n.toFixed(4));
  * @param {boolean} o.freeze Pause model animations, so neighbouring screenshots match.
  * @param {boolean} o.showUi Leave the HUD up (to check what the HUD hiding affects).
  * @param {{ dx: number, dy: number }[] | null} o.markers Registration markers, as offsets in map
- *   cells from each tile's camera target: solid magenta text tags pinned to those ground points,
- *   shown only while that tile is on screen. Null for none.
+ *   cells from each tile's camera target: magenta single-digit text tags pinned to those ground
+ *   points, shown (with a tile id label at the view's centre) only while that tile is on
+ *   screen. Null for none.
  */
 export function captureScript({
   tiles,
@@ -95,6 +96,15 @@ export function captureScript({
         }
     }`;
   const markerCount = markers ? markers.length : 0;
+  // Tile ids are zero-padded to at least three digits: never one digit like a marker, never ten
+  // like the reference label.
+  const idDigits = Math.max(3, String(n - 1).length);
+  const idPad = Array.from({ length: idDigits - 1 }, (_, k) => {
+    const below = 10 ** (idDigits - 1 - k);
+    return `    if ((lp_index < ${below})) {
+        lv_s = ("0" + lv_s);
+    }`;
+  }).join('\n');
   const markerDecl = markers
     ? `
 const int hrsCap_markerCount = ${markerCount};
@@ -102,6 +112,7 @@ fixed[${markerCount}] hrsCap_markerDX;
 fixed[${markerCount}] hrsCap_markerDY;
 int[${markerCount}] hrsCap_markers;
 int hrsCap_glyphs = c_textTagNone;
+int hrsCap_idLabel = c_textTagNone;
 trigger hrsCap_gt_Clean;
 trigger hrsCap_gt_Glyphs;`
     : '';
@@ -111,18 +122,24 @@ void hrsCap_InitMarkers () {
 ${markers.map((m, k) => `    hrsCap_markerDX[${k}] = ${fixed(m.dx)}; hrsCap_markerDY[${k}] = ${fixed(m.dy)}; hrsCap_markers[${k}] = c_textTagNone;`).join('\n')}
 }
 
-// A marker's label: its number, then the tile number's last digit, so every calibration shot
-// also proves it shows the tile that was asked for.
-text hrsCap_MarkerText (int lp_k, int lp_index) {
-    return StringToText((IntToString(lp_k) + IntToString(ModI(lp_index, 10))));
+// The tile id label: the full tile number, zero-padded to ${idDigits} digits, so it can't be mistaken for
+// a (single-digit) marker. It only proves the calibration shot shows the tile that was asked
+// for; it is never used for positioning.
+text hrsCap_IdText (int lp_index) {
+    string lv_s;
+
+    lv_s = IntToString(lp_index);
+${idPad}
+    return StringToText(lv_s);
 }
 
-// Numbered registration markers: magenta labels with black digits, pinned to known ground
-// points. Each tile is shot twice: once with them (calibration: where they land gives the exact
+// Numbered registration markers: magenta digits pinned to known ground points. Each marker's
+// label is only its own number, the same on every tile, so it always has the same shape and
+// its measured position means the same thing on every tile. Each tile is shot twice: once with them (calibration: where they land gives the exact
 // camera geometry) and once without ("clean": the image that is kept). Created once, while the
 // camera is briefly close (the game does not draw labels created under a far camera, but keeps
 // drawing them once created), together with the "0123456789" reference label the capture
-// learns the digits from; then moved, renumbered and shown per tile.
+// learns the digits from and the tile id label; then moved and shown per tile.
 void hrsCap_ShowMarkers (int lp_index) {
     int lv_k;
     int lv_p;
@@ -137,15 +154,16 @@ void hrsCap_ShowMarkers (int lp_index) {
         }
         lv_k = 0;
         for ( ; lv_k < hrsCap_markerCount ; lv_k += 1 ) {
-            TextTagCreate(hrsCap_MarkerText(lv_k, lp_index), 24, Point((hrsCap_tileX[lp_index] + hrsCap_markerDX[lv_k]), (hrsCap_tileY[lp_index] + hrsCap_markerDY[lv_k])), 0.0, true, false, PlayerGroupAll());
-            TextTagSetColor(TextTagLastCreated(), c_textTagColorText, Color(0.00, 0.00, 0.00));
-            TextTagSetColor(TextTagLastCreated(), c_textTagColorBackground, ColorWithAlpha(100.00, 0.00, 100.00, 100.00));
+            TextTagCreate(StringToText(IntToString(lv_k)), 24, Point((hrsCap_tileX[lp_index] + hrsCap_markerDX[lv_k]), (hrsCap_tileY[lp_index] + hrsCap_markerDY[lv_k])), 0.0, true, false, PlayerGroupAll());
+            TextTagSetColor(TextTagLastCreated(), c_textTagColorText, Color(100.00, 0.00, 100.00));
             hrsCap_markers[lv_k] = TextTagLastCreated();
         }
         TextTagCreate(StringToText("0123456789"), 24, Point(hrsCap_tileX[lp_index], hrsCap_tileY[lp_index]), 0.0, false, false, PlayerGroupAll());
-        TextTagSetColor(TextTagLastCreated(), c_textTagColorText, Color(0.00, 0.00, 0.00));
-        TextTagSetColor(TextTagLastCreated(), c_textTagColorBackground, ColorWithAlpha(100.00, 0.00, 100.00, 100.00));
+        TextTagSetColor(TextTagLastCreated(), c_textTagColorText, Color(100.00, 0.00, 100.00));
         hrsCap_glyphs = TextTagLastCreated();
+        TextTagCreate(hrsCap_IdText(lp_index), 24, Point(hrsCap_tileX[lp_index], hrsCap_tileY[lp_index]), 0.0, true, false, PlayerGroupAll());
+        TextTagSetColor(TextTagLastCreated(), c_textTagColorText, Color(100.00, 0.00, 100.00));
+        hrsCap_idLabel = TextTagLastCreated();
         lv_p = 1;
         for ( ; lv_p <= 10 ; lv_p += 1 ) {
             if ((PlayerStatus(lv_p) == c_playerStatusActive)) {
@@ -154,15 +172,18 @@ void hrsCap_ShowMarkers (int lp_index) {
         }
         return;
     }
+    TextTagShow(hrsCap_glyphs, PlayerGroupAll(), false);
     lv_k = 0;
     for ( ; lv_k < hrsCap_markerCount ; lv_k += 1 ) {
         TextTagSetPosition(hrsCap_markers[lv_k], Point((hrsCap_tileX[lp_index] + hrsCap_markerDX[lv_k]), (hrsCap_tileY[lp_index] + hrsCap_markerDY[lv_k])), 0.0);
-        TextTagSetText(hrsCap_markers[lv_k], hrsCap_MarkerText(lv_k, lp_index));
         TextTagShow(hrsCap_markers[lv_k], PlayerGroupAll(), true);
     }
+    TextTagSetPosition(hrsCap_idLabel, Point(hrsCap_tileX[lp_index], hrsCap_tileY[lp_index]), 0.0);
+    TextTagSetText(hrsCap_idLabel, hrsCap_IdText(lp_index));
+    TextTagShow(hrsCap_idLabel, PlayerGroupAll(), true);
 }
 
-// Hide the markers (and the reference label) for the clean shot.
+// Hide the markers, the tile id label and the reference label, for the clean shot.
 void hrsCap_HideMarkers () {
     int lv_k;
 
@@ -175,14 +196,18 @@ void hrsCap_HideMarkers () {
     if ((hrsCap_glyphs != c_textTagNone)) {
         TextTagShow(hrsCap_glyphs, PlayerGroupAll(), false);
     }
+    if ((hrsCap_idLabel != c_textTagNone)) {
+        TextTagShow(hrsCap_idLabel, PlayerGroupAll(), false);
+    }
 }
 
-// Chat "clean": hide the markers, camera unmoved.
+// Chat "clean": hide the markers, camera unmoved, and clear the chat message just sent.
 bool hrsCap_gt_Clean_Func (bool testConds, bool runActions) {
     if (!runActions) {
         return true;
     }
     hrsCap_HideMarkers();
+    UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
     return true;
 }
 
