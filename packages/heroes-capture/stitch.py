@@ -516,11 +516,12 @@ def main() -> None:
             return rgba
         # Void seen through gaps in foliage at the edge is black too but cut off from the
         # outside by the leaves: any dark pixel within ~40 px of the void counts as void.
-        coarse = void.reshape(void.shape[0] // 4, 4, void.shape[1] // 4, 4).any(axis=(1, 3)) if void.shape[0] % 4 == 0 and void.shape[1] % 4 == 0 else None
-        if coarse is not None:
-            around = ndimage.binary_dilation(coarse, iterations=10)
-            around = np.repeat(np.repeat(around, 4, axis=0), 4, axis=1)
-            void |= dark & around
+        h, w = void.shape
+        padded = np.zeros((-(-h // 4) * 4, -(-w // 4) * 4), dtype=bool)
+        padded[:h, :w] = void
+        coarse = padded.reshape(padded.shape[0] // 4, 4, padded.shape[1] // 4, 4).any(axis=(1, 3))
+        around = np.repeat(np.repeat(ndimage.binary_dilation(coarse, iterations=10), 4, axis=0), 4, axis=1)[:h, :w]
+        void |= dark & around
         out = rgba.copy()
         out[void, 3] = 0
         # The edge: pixels within a few px of the void are blends of the map's colour with the
