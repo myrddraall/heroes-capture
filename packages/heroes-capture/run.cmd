@@ -2,16 +2,12 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: Dragon Shire, a map not rendered before, with the refit look's direction found
-rem from the map's own data (no --refit-yaw): inject.mjs prints "main light: ...". About 6 minutes.
-call "%~dp0render.cmd" "Dragon Shire" keep
+rem Current step: Punisher Arena (brawl) render, with the run stopping early if the camera
+rem bounds can't be measured (their shots come back for diagnosis). About 8 minutes if it works.
+set "HRS_STOP_IF_NO_BOUNDS=1"
+call "%~dp0render.cmd" "Punisher Arena" keep
 
 :copy
-call "%~dp0render.cmd" "Battlefield of Eternity" keep --probe-light --pitch 89.5
-
-
-:copy
-
 rem Copy this run's output (everything in work\ except the map files) to the results folder,
 rem which update.cmd points at the development machine's tmp\ folder.
 if not defined HRS_RESULTS (

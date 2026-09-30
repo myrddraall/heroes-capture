@@ -345,3 +345,17 @@ def count_labels(frame: np.ndarray, digits: dict[int, np.ndarray] | None = None,
                 continue
         count += 1
     return count
+
+
+def read_label(frame: np.ndarray, digits: dict[int, np.ndarray], length: int) -> str | None:
+    """The digits of the one label on screen with exactly `length` characters (the bounds
+    label the map script shows on request), or None if there isn't one that reads cleanly."""
+    for box in _label_boxes(frame):
+        glyphs = _glyphs(frame, box)
+        if len(glyphs) != length:
+            continue
+        reads = [_read(g, digits) for g in glyphs]
+        scores = [score for _, score in reads]
+        if min(scores) >= 0.35 and sum(scores) / len(scores) >= 0.75:
+            return "".join(str(d) for d, _ in reads)
+    return None

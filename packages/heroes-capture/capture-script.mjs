@@ -140,6 +140,21 @@ ${idPad}
     return StringToText(lv_s);
 }
 
+// The map's size in cells, from the game.
+fixed hrsCap_MapWidth () {
+    return PointGetX(RegionGetBoundsMax(RegionEntireMap()));
+}
+
+fixed hrsCap_MapHeight () {
+    return PointGetY(RegionGetBoundsMax(RegionEntireMap()));
+}
+
+// Where the tile id label goes: the tile's centre, kept a few cells inside the map (text tags
+// outside the map aren't drawn, and a tile at the map's corner has its centre on the edge).
+point hrsCap_IdPoint (int lp_index) {
+    return Point(MaxF(3.0, MinF(hrsCap_curX, (hrsCap_MapWidth() - 3.0))), MaxF(3.0, MinF(hrsCap_curY, (hrsCap_MapHeight() - 3.0))));
+}
+
 // Numbered registration markers: magenta digits pinned to known ground points. Each marker's
 // label is only its own number, the same on every tile, so it always has the same shape and
 // its measured position means the same thing on every tile. Each tile is shot twice: once with them (calibration: where they land gives the exact
@@ -161,15 +176,18 @@ void hrsCap_ShowMarkers (int lp_index) {
         }
         lv_k = 0;
         for ( ; lv_k < hrsCap_markerCount ; lv_k += 1 ) {
-            TextTagCreate(StringToText(IntToString(lv_k)), 24, Point((hrsCap_tileX[lp_index] + hrsCap_markerDX[lv_k]), (hrsCap_tileY[lp_index] + hrsCap_markerDY[lv_k])), 0.0, true, false, PlayerGroupAll());
+            TextTagCreate(StringToText(IntToString(lv_k)), 24, Point((hrsCap_curX + hrsCap_markerDX[lv_k]), (hrsCap_curY + hrsCap_markerDY[lv_k])), 0.0, true, false, PlayerGroupAll());
             TextTagSetColor(TextTagLastCreated(), c_textTagColorText, Color(100.00, 0.00, 100.00));
+            TextTagSetFogVisibility(TextTagLastCreated(), c_visTypeFog);
             hrsCap_markers[lv_k] = TextTagLastCreated();
         }
-        TextTagCreate(StringToText("0123456789"), 24, Point(hrsCap_tileX[lp_index], hrsCap_tileY[lp_index]), 0.0, false, false, PlayerGroupAll());
+        TextTagCreate(StringToText("0123456789"), 24, Point(hrsCap_curX, hrsCap_curY), 0.0, false, false, PlayerGroupAll());
         TextTagSetColor(TextTagLastCreated(), c_textTagColorText, Color(100.00, 0.00, 100.00));
+        TextTagSetFogVisibility(TextTagLastCreated(), c_visTypeFog);
         hrsCap_glyphs = TextTagLastCreated();
-        TextTagCreate(hrsCap_IdText(lp_index), 24, Point(hrsCap_tileX[lp_index], hrsCap_tileY[lp_index]), 0.0, true, false, PlayerGroupAll());
+        TextTagCreate(hrsCap_IdText(lp_index), 24, hrsCap_IdPoint(lp_index), 0.0, true, false, PlayerGroupAll());
         TextTagSetColor(TextTagLastCreated(), c_textTagColorText, Color(100.00, 0.00, 100.00));
+        TextTagSetFogVisibility(TextTagLastCreated(), c_visTypeFog);
         hrsCap_idLabel = TextTagLastCreated();
         lv_p = 1;
         for ( ; lv_p <= 10 ; lv_p += 1 ) {
@@ -182,10 +200,10 @@ void hrsCap_ShowMarkers (int lp_index) {
     TextTagShow(hrsCap_glyphs, PlayerGroupAll(), false);
     lv_k = 0;
     for ( ; lv_k < hrsCap_markerCount ; lv_k += 1 ) {
-        TextTagSetPosition(hrsCap_markers[lv_k], Point((hrsCap_tileX[lp_index] + hrsCap_markerDX[lv_k]), (hrsCap_tileY[lp_index] + hrsCap_markerDY[lv_k])), 0.0);
+        TextTagSetPosition(hrsCap_markers[lv_k], Point((hrsCap_curX + hrsCap_markerDX[lv_k]), (hrsCap_curY + hrsCap_markerDY[lv_k])), 0.0);
         TextTagShow(hrsCap_markers[lv_k], PlayerGroupAll(), true);
     }
-    TextTagSetPosition(hrsCap_idLabel, Point(hrsCap_tileX[lp_index], hrsCap_tileY[lp_index]), 0.0);
+    TextTagSetPosition(hrsCap_idLabel, hrsCap_IdPoint(lp_index), 0.0);
     TextTagSetText(hrsCap_idLabel, hrsCap_IdText(lp_index));
     TextTagShow(hrsCap_idLabel, PlayerGroupAll(), true);
 }
@@ -218,15 +236,16 @@ bool hrsCap_gt_Clean_Func (bool testConds, bool runActions) {
     return true;
 }
 
-// Chat "glyphs": show the reference label at the current tile's centre (markers hidden), for
-// the capture to learn the game font's digits.
+// Chat "glyphs": show the reference label where the camera is actually looking (markers
+// hidden), for the capture to learn the game font's digits. The camera's target, not the tile's
+// centre: an arena's camera bounds can keep the camera far from the tile it was sent to.
 bool hrsCap_gt_Glyphs_Func (bool testConds, bool runActions) {
     if (!runActions) {
         return true;
     }
     hrsCap_HideMarkers();
     if ((hrsCap_glyphs != c_textTagNone)) {
-        TextTagSetPosition(hrsCap_glyphs, Point(hrsCap_tileX[hrsCap_currentTile], hrsCap_tileY[hrsCap_currentTile]), 0.0);
+        TextTagSetPosition(hrsCap_glyphs, CameraGetTarget(EventPlayer()), 0.0);
         TextTagShow(hrsCap_glyphs, PlayerGroupAll(), true);
     }
     return true;
@@ -257,6 +276,9 @@ fixed hrsCap_pitch = ${fixed(pitch)};
 fixed hrsCap_fov = 0.0; // set by chat "fov <degrees>"; 0 means the planned field of view
 const int hrsCap_tileCount = ${n};
 int hrsCap_currentTile = 0;
+bool hrsCap_boundsBusy = false;  // a "bounds" measurement is under way (a second one would fight it for the camera)
+fixed hrsCap_curX = 0.0;  // the current tile's camera target (from the command, else the table)
+fixed hrsCap_curY = 0.0;
 fixed[${n}] hrsCap_tileX;
 fixed[${n}] hrsCap_tileY;
 trigger hrsCap_gt_Tile;
@@ -268,6 +290,7 @@ trigger hrsCap_gt_Look;
 trigger hrsCap_gt_Normal;
 trigger hrsCap_gt_Clip;
 trigger hrsCap_gt_Pitch;
+trigger hrsCap_gt_Bounds;
 trigger hrsCap_gt_Fov;${markerDecl}
 
 void hrsCap_InitTiles () {
@@ -389,11 +412,16 @@ bool hrsCap_IntroPlaying () {
     return false;
 }
 
+// Chat "tile <n> [<x> <y>]": tile n, at the given map position or the planned one. The capture
+// gives the position: its grid is planned from the camera bounds the game applies at run time
+// (an arena's are far tighter than its map file says), which it measures with "bounds".
 bool hrsCap_gt_Tile_Func (bool testConds, bool runActions) {
     int lv_index;
+    string lv_xs;
 
     lv_index = StringToInt(StringWord(EventChatMessage(false), 2));
-    if (((lv_index < 0) || (lv_index >= hrsCap_tileCount))) {
+    lv_xs = StringWord(EventChatMessage(false), 3);
+    if ((lv_index < 0) || (lv_index > 999) || ((lv_xs == "") && (lv_index >= hrsCap_tileCount))) {
         return true;
     }
     if (!runActions) {
@@ -405,17 +433,25 @@ bool hrsCap_gt_Tile_Func (bool testConds, bool runActions) {
         return true;
     }
     hrsCap_currentTile = lv_index;
+    if ((lv_xs != "")) {
+        hrsCap_curX = StringToFixed(lv_xs);
+        hrsCap_curY = StringToFixed(StringWord(EventChatMessage(false), 4));
+    }
+    else {
+        hrsCap_curX = hrsCap_tileX[lv_index];
+        hrsCap_curY = hrsCap_tileY[lv_index];
+    }
     hrsCap_ClearUnits();
     // The normal camera at the tile first, a few frames, so the game refits its lighting there
     // (see hrsCap_NormalCamera); then the scene and the capture camera.
-    CameraPan(EventPlayer(), Point(hrsCap_tileX[lv_index], hrsCap_tileY[lv_index]), 0.0, -1, 10.0, false);
+    CameraPan(EventPlayer(), Point(hrsCap_curX, hrsCap_curY), 0.0, -1, 10.0, false);
     hrsCap_NormalCamera(EventPlayer());
-    Wait(0.25, c_timeGame);
+    Wait(0.25, c_timeReal);  // real time: a map that holds game time still (an arena's selection phase) would never return
     if ((hrsCap_currentTile != lv_index)) {
         return true;  // another tile was asked for meanwhile
     }
     hrsCap_Scene();
-    CameraPan(EventPlayer(), Point(hrsCap_tileX[lv_index], hrsCap_tileY[lv_index]), 0.0, -1, 10.0, false);${markerCall}
+    CameraPan(EventPlayer(), Point(hrsCap_curX, hrsCap_curY), 0.0, -1, 10.0, false);${markerCall}
     return true;
 }
 
@@ -468,7 +504,7 @@ bool hrsCap_gt_Quit_Func (bool testConds, bool runActions) {
         return true;
     }
     hrsCap_Restore();
-    Wait(0.5, c_timeGame);
+    Wait(0.5, c_timeReal);
     GameOver(EventPlayer(), c_gameOverDefeat, false, false);
     return true;
 }
@@ -572,6 +608,76 @@ bool hrsCap_gt_Normal_Func (bool testConds, bool runActions) {
     return true;
 }
 
+// Three digits, zero-padded, for the bounds label.
+string hrsCap_Pad3 (fixed lp_v) {
+    string lv_s;
+
+    lv_s = IntToString(FixedToInt(MaxF(0.0, MinF(lp_v, 999.0)) + 0.5));
+    if ((StringLength(lv_s) < 2)) {
+        lv_s = ("0" + lv_s);
+    }
+    if ((StringLength(lv_s) < 3)) {
+        lv_s = ("0" + lv_s);
+    }
+    return lv_s;
+}
+
+// Chat "bounds": the camera bounds the game applies (an arena's are far tighter than its map
+// file says). The camera is sent to the map's four corners and asked where it stopped; the
+// result goes on the tile id label as twelve digits, left/bottom/right/top, three each, and
+// the camera returns to the current tile and the label goes where the camera actually looks.
+bool hrsCap_gt_Bounds_Func (bool testConds, bool runActions) {
+    point lv_p;
+    fixed lv_l;
+    fixed lv_b;
+    fixed lv_r;
+    fixed lv_t;
+    int lv_c;
+
+    if (!runActions) {
+        return true;
+    }
+    if (hrsCap_boundsBusy) {
+        return true;
+    }
+    hrsCap_boundsBusy = true;${markers ? `
+    hrsCap_HideMarkers();` : ''}
+    lv_l = hrsCap_MapWidth();
+    lv_b = hrsCap_MapHeight();
+    lv_r = 0.0;
+    lv_t = 0.0;
+    lv_c = 0;
+    for ( ; lv_c < 4 ; lv_c += 1 ) {
+        if ((lv_c == 0)) {
+            CameraPan(EventPlayer(), Point(0.0, 0.0), 0.0, -1, 10.0, false);
+        }
+        else if ((lv_c == 1)) {
+            CameraPan(EventPlayer(), Point(hrsCap_MapWidth(), 0.0), 0.0, -1, 10.0, false);
+        }
+        else if ((lv_c == 2)) {
+            CameraPan(EventPlayer(), Point(hrsCap_MapWidth(), hrsCap_MapHeight()), 0.0, -1, 10.0, false);
+        }
+        else {
+            CameraPan(EventPlayer(), Point(0.0, hrsCap_MapHeight()), 0.0, -1, 10.0, false);
+        }
+        Wait(0.2, c_timeReal);
+        lv_p = CameraGetTarget(EventPlayer());
+        lv_l = MinF(lv_l, PointGetX(lv_p));
+        lv_r = MaxF(lv_r, PointGetX(lv_p));
+        lv_b = MinF(lv_b, PointGetY(lv_p));
+        lv_t = MaxF(lv_t, PointGetY(lv_p));
+    }
+    CameraPan(EventPlayer(), Point(hrsCap_curX, hrsCap_curY), 0.0, -1, 10.0, false);${markers ? `
+    Wait(0.2, c_timeReal);
+    if ((hrsCap_idLabel != c_textTagNone)) {
+        TextTagSetText(hrsCap_idLabel, StringToText((hrsCap_Pad3(lv_l) + hrsCap_Pad3(lv_b) + hrsCap_Pad3(lv_r) + hrsCap_Pad3(lv_t))));
+        TextTagSetPosition(hrsCap_idLabel, CameraGetTarget(EventPlayer()), 0.0);
+        TextTagShow(hrsCap_idLabel, PlayerGroupAll(), true);
+    }` : ''}
+    hrsCap_boundsBusy = false;
+    return true;
+}
+
 // Chat "pitch <deg>" (lighting probe): the capture camera's pitch (90 is straight down).
 bool hrsCap_gt_Pitch_Func (bool testConds, bool runActions) {
     if (!runActions) {
@@ -599,6 +705,8 @@ void hrsCap_Init () {
     hrsCap_gt_Zoom = TriggerCreate("hrsCap_gt_Zoom_Func");
     TriggerAddEventChatMessage(hrsCap_gt_Zoom, c_playerAny, "zoom", false);
     hrsCap_gt_Freeze = TriggerCreate("hrsCap_gt_Freeze_Func");
+    hrsCap_gt_Bounds = TriggerCreate("hrsCap_gt_Bounds_Func");
+    TriggerAddEventChatMessage(hrsCap_gt_Bounds, c_playerAny, "bounds", true);
     hrsCap_gt_Pitch = TriggerCreate("hrsCap_gt_Pitch_Func");
     TriggerAddEventChatMessage(hrsCap_gt_Pitch, c_playerAny, "pitch", false);
     hrsCap_gt_Clip = TriggerCreate("hrsCap_gt_Clip_Func");
@@ -612,7 +720,7 @@ void hrsCap_Init () {
     hrsCap_gt_Fov = TriggerCreate("hrsCap_gt_Fov_Func");
     TriggerAddEventChatMessage(hrsCap_gt_Fov, c_playerAny, "fov", false);
     hrsCap_gt_Sweep = TriggerCreate("hrsCap_gt_Sweep_Func");
-    TriggerAddEventTimePeriodic(hrsCap_gt_Sweep, 0.25, c_timeGame);
+    TriggerAddEventTimePeriodic(hrsCap_gt_Sweep, 0.25, c_timeReal);
 }
 
 `;

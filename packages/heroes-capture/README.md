@@ -117,7 +117,10 @@ cell there is no more detail: that's the game's own texture resolution.
   directly it can't authenticate; `--battlenet` or `HRS_BATTLENET` if the app isn't in the
   usual place), then launches the map through `Support64\HeroesSwitcher_x64.exe` (Heroes must be
   at the main menu: a running match keeps its map), learns the game font's digits from a
-  reference label, and for each tile takes two shots: with the numbered markers (each label is
+  reference label, asks the map script for the camera bounds the game really applies (an
+  arena's are far tighter than its map file says; the script sends the camera to the four
+  corners, reads where it stopped and shows the answer as a 12-digit label), re-plans the
+  grid from them, sends each tile with its position (`tile <n> <x> <y>`), and for each tile takes two shots: with the numbered markers (each label is
   just the marker's number, plus one label at the centre with the full tile number, so a stale
   frame is caught), and after `clean` hides them, the image kept. It only types while the game is in front;
   if the game loses focus part way through a tile, that tile is dropped and redone from its

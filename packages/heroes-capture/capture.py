@@ -31,7 +31,7 @@ import numpy as np
 import pydirectinput
 from PIL import Image
 
-from markers import count_labels, describe, fit_markers, fit_numbered, label_height, learn_digits
+from markers import count_labels, describe, fit_markers, fit_numbered, label_height, learn_digits, read_label
 
 DEFAULT_GAME = r"D:\Games\Heroes of the Storm"
 
@@ -111,7 +111,18 @@ def foreground_is_game() -> bool:
 
 
 def game_running() -> bool:
-    """Whether any HeroesOfTheStorm*.exe is running (after a crash, none is)."""
+    """Whether any HeroesOfTheStorm*.exe is running (after a crash, none is). One look can miss
+    it (it did once, with the game plainly running), so three misses a second apart are
+    needed before it counts as gone."""
+    for attempt in range(3):
+        if _game_process_seen():
+            return True
+        if attempt < 2:
+            time.sleep(1.0)
+    return False
+
+
+def _game_process_seen() -> bool:
     kernel32 = ctypes.windll.kernel32
     pids = (ctypes.c_ulong * 4096)()
     used = ctypes.c_ulong()
@@ -152,9 +163,26 @@ def bring_game_to_front() -> bool:
         return False
     hold_key("alt", 0.02)
     user32.ShowWindow(found[0], 9)  # SW_RESTORE
+    user32.SwitchToThisWindow(found[0], True)  # what Alt+Tab does; SetForegroundWindow alone is often refused
     user32.SetForegroundWindow(found[0])
     time.sleep(0.5)
     return foreground_is_game()
+
+
+def foreground_program() -> str:
+    """The program of the window in front, for messages."""
+    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+    pid = ctypes.c_ulong()
+    user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), ctypes.byref(pid))
+    handle = kernel32.OpenProcess(0x1000, False, pid.value)
+    if not handle:
+        return "?"
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        size = ctypes.c_ulong(len(buf))
+        return Path(buf.value).name if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)) else "?"
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def _window_process_is_game(hwnd) -> bool:
@@ -222,7 +250,6 @@ def ensure_game_running(battlenet: str | None, game: str) -> None:
             "in update.cmd (or pass --battlenet)."
         )
     log(f"Heroes isn't running; starting it through Battle.net ({launcher}) ...")
-    log("Heroes isn't running; starting it through Battle.net ...")
     subprocess.Popen([str(launcher), "--exec=launch Hero"])
     deadline = time.time() + 180
     while not game_running():
@@ -235,27 +262,28 @@ def ensure_game_running(battlenet: str | None, game: str) -> None:
         if time.time() > deadline:
             sys.exit("Heroes started, but its window didn't appear within 3 minutes")
         time.sleep(1.0)
+    # Logging in comes between the window and the menu; a map launched during it leaves the
+    # game at the login screen afterwards. Arrived: the menu's fixed interface is on screen,
+    # two looks in a row.
+    last_note = 0.0
+    seen = 0
     with ScreenGrabber(game_region(), duplication=False) as screen:
-        previous, calm_since = None, None
-        while time.time() < deadline + 120:
+        while time.time() < deadline + 180:
             time.sleep(2.0)
             if not foreground_is_game():
-                bring_game_to_front()
+                if not bring_game_to_front() and time.time() - last_note > 10:
+                    log(f"  can't bring Heroes in front ({foreground_program()} is in front); click into the game")
+                    last_note = time.time()
                 continue
             frame = screen.grab()
-            score = menu_match(frame)
-            if score is not None:
-                arrived = score < 8.0
-            else:
-                arrived = previous is not None and changed_share(frame, previous) < 0.5
-            previous = frame
-            if arrived:
-                calm_since = calm_since or time.time()
-                if time.time() - calm_since >= (4 if score is not None else 10):
-                    log("Heroes is at the main menu")
-                    return
-            else:
-                calm_since = None
+            parts = menu_matches(frame)
+            seen = seen + 1 if parts >= 2 else 0
+            if seen >= 2:
+                log("Heroes is at the main menu")
+                return
+            if time.time() - last_note > 10:
+                log(f"  waiting for the menu ({parts} of 3 fixed parts of it on screen)")
+                last_note = time.time()
     log("  couldn't tell whether Heroes reached the menu; carrying on")
 
 
@@ -405,91 +433,96 @@ def disagree(a: np.ndarray, b: np.ndarray) -> bool:
     return changed_share(a, b) > 0.02
 
 
-_MENU_SHOT = None  # the game window just before the launch (the main menu), if it was in front
-_MENU_STATIC = None  # which 32-px blocks of it are fixed interface (buttons, chat), not animation
+_MENU_REFERENCE = None  # the main menu's fixed interface: templates shipped in menu-reference/
 
 
-def _blocks(frame: np.ndarray) -> np.ndarray:
-    h, w = frame.shape[0] // 32 * 32, frame.shape[1] // 32 * 32
-    return frame[:h, :w].astype(np.float32).mean(axis=2).reshape(h // 32, 32, w // 32, 32).mean(axis=(1, 3))
-
-
-def menu_match(frame: np.ndarray) -> float | None:
-    """How far the frame is from the menu on the menu's fixed parts (mean brightness difference
-    over the static blocks; the menu itself scores a few levels, anything else far more)."""
-    if _MENU_SHOT is None or _MENU_STATIC is None or frame.shape != _MENU_SHOT.shape:
-        return None
-    diff = np.abs(_blocks(frame) - _blocks(_MENU_SHOT))
-    return float(diff[_MENU_STATIC].mean())
-
-
-def load_saved_menu(saved: Path) -> bool:
-    """The menu shot and its fixed-interface mask saved by an earlier run, if any."""
-    global _MENU_SHOT, _MENU_STATIC
-    static_path = saved.with_name("menu-static.npy")
-    if saved.exists() and static_path.exists():
-        _MENU_SHOT = np.asarray(Image.open(saved).convert("RGB"))
-        _MENU_STATIC = np.load(static_path)
-        return _MENU_STATIC.shape == _blocks(_MENU_SHOT).shape
-    return False
-
-
-def remember_menu(saved: Path) -> None:
-    """Just before launching: a shot of the main menu, to tell when the game has left it and,
-    after the match, when it is back. Kept in `saved` for runs where the game isn't in front
-    at launch (started from a console window)."""
-    global _MENU_SHOT, _MENU_STATIC
-    if not foreground_is_game():
-        bring_game_to_front()
-    static_path = saved.with_name("menu-static.npy")
-    if foreground_is_game():
-        with ScreenGrabber(game_region(), duplication=False) as screen:
-            first = screen.grab()
-            time.sleep(2.5)
-            _MENU_SHOT = screen.grab()
-        # The menu's fixed interface is what stays put between the two shots; its animated
-        # backdrop is what changes.
-        _MENU_STATIC = np.abs(_blocks(first) - _blocks(_MENU_SHOT)) < 2.0
-        print(f"(menu shot taken: {int(_MENU_STATIC.sum())} of {_MENU_STATIC.size} blocks are fixed interface)", flush=True)
+def _load_menu_reference() -> list:
+    """Templates of the main menu's fixed parts (the top bar, the chat box, the buttons at the
+    bottom right), from a screenshot of the menu, with their positions relative to the screen
+    height and anchored to the corners, as the interface scales. Login, loading, in-game and
+    post-match screens have none of them."""
+    global _MENU_REFERENCE
+    if _MENU_REFERENCE is None:
+        folder = Path(__file__).with_name("menu-reference")
+        _MENU_REFERENCE = []
         try:
-            Image.fromarray(np.ascontiguousarray(_MENU_SHOT)).save(saved, compress_level=1)
-            np.save(static_path, _MENU_STATIC)
-        except OSError:
-            pass
-    elif load_saved_menu(saved):
-        print("(using the menu shot saved by an earlier run)", flush=True)
-    else:
-        print("(no menu shot: the game isn't in front; leaving the match will be judged by stillness alone)", flush=True)
+            for p in json.loads((folder / "patches.json").read_text())["patches"]:
+                p["template"] = np.asarray(Image.open(folder / f"{p['name']}.png").convert("L"), dtype=np.float32)
+                _MENU_REFERENCE.append(p)
+        except (OSError, KeyError, ValueError) as e:
+            print(f"(no menu reference: {e})", flush=True)
+    return _MENU_REFERENCE
+
+
+def menu_matches(frame: np.ndarray) -> int:
+    """How many of the menu's fixed parts are on screen where they belong (0 to 3)."""
+    grey = frame.astype(np.float32).mean(axis=2)
+    h, w = grey.shape
+    found = 0
+    for p in _load_menu_reference():
+        pw, ph = int(round(p["w"] * h)), int(round(p["h"] * h))
+        x = int(round(p["dx"] * h)) if p["anchor"].endswith("left") else w - int(round(p["dx"] * h)) - pw
+        y = int(round(p["dy"] * h)) if p["anchor"].startswith("top") else h - int(round(p["dy"] * h)) - ph
+        if x < 0 or y < 0 or x + pw > w or y + ph > h:
+            continue
+        region = np.asarray(Image.fromarray(grey[y : y + ph, x : x + pw].astype(np.uint8)).resize(p["template"].shape[::-1], Image.BILINEAR), dtype=np.float32)
+        t = p["template"]
+        a, b = region - region.mean(), t - t.mean()
+        denom = float(np.sqrt((a * a).sum() * (b * b).sum()))
+        if denom and float((a * b).sum() / denom) > 0.6:
+            found += 1
+    return found
+
+
+def is_menu(frame: np.ndarray) -> bool:
+    return menu_matches(frame) >= 2
+
+
+def tile_command(tile: dict) -> str:
+    """`tile <n> <x> <y>`: the map script takes the position from the command, so the grid can
+    be planned here, from the camera bounds measured in the game (see plan_grid)."""
+    return f"tile {tile['index']} {tile['x']:.2f} {tile['y']:.2f}"
+
+
+def plan_grid(manifest: dict, bounds: dict) -> None:
+    """Re-plan the capture grid for other camera bounds (inject.mjs's planGrid, in Python), in
+    place: tiles, area, cameraBounds, cols, rows, step. Camera targets stay inside the bounds
+    (the game clamps any beyond them), first and last on the bounds, the rest spread evenly,
+    at most `keep` of a screen apart."""
+    view_w = manifest["screen"]["w"] / manifest["pxPerCell"]
+    view_h = manifest["screen"]["h"] / manifest["pxPerCell"]
+
+    def spread(span: float, max_step: float) -> tuple[int, float]:
+        count = max(1, math.ceil(span / max_step) + 1)
+        return count, (span / (count - 1) if count > 1 else max_step)
+
+    cols, step_x = spread(bounds["right"] - bounds["left"], view_w * manifest["keep"])
+    rows, step_y = spread(bounds["top"] - bounds["bottom"], view_h * manifest["keep"])
+    tiles = []
+    for row in range(rows):
+        for col in range(cols):
+            tiles.append({"index": len(tiles), "row": row, "col": col, "x": bounds["left"] + col * step_x, "y": bounds["top"] - row * step_y})
+    manifest.update(tiles=tiles, area=dict(bounds), cameraBounds=dict(bounds), cols=cols, rows=rows, step={"x": step_x, "y": step_y})
 
 
 def wait_for_map_load(launched: bool) -> None:
     """After a launch, wait until the game has left the main menu (typing at the menu could send
-    chat to a channel): the screen no longer looks like the menu shot taken before the launch.
-    Without one (the game wasn't in front), a few seconds after it comes to the front. Slow
-    loading and the intro cutscene are waited out after this, by asking the map script until
-    it answers."""
+    chat to a channel): its fixed interface is gone. Slow loading and the intro cutscene are
+    waited out after this, by asking the map script until it answers."""
     wait_for_game()
     if not launched:
         return
     print("waiting for the map to load ...", flush=True)
-    if _MENU_SHOT is None:
-        time.sleep(5)
-        return
     started = time.time()
     try:
         with ScreenGrabber(game_region(), duplication=False) as screen:
             while time.time() - started < 60:
-                if foreground_is_game():
-                    frame = screen.grab()
-                    away = menu_match(frame)
-                    if away is None or away > 8.0:  # the menu's fixed interface is gone
-                        return
+                if foreground_is_game() and not is_menu(screen.grab()):
+                    return
                 time.sleep(0.5)
     except Exception as e:  # the check must never cost the run
         log(f"  couldn't watch for the map to load ({type(e).__name__}: {e}); waiting 5 s instead")
         time.sleep(5)
-
-
 class FocusLost(Exception):
     """The game lost focus part way through a step; the step is redone from its start."""
 
@@ -611,19 +644,11 @@ def _leave_and_wait_for_menu() -> None:
             frame = shot()
             since_match = changed_share(frame, in_match)
             since_last = changed_share(frame, previous) if previous is not None else 1.0
-            vs_menu = menu_match(frame)
-            trace.append(f"{time.time() - started:.0f}s:{since_match:.2f}/{since_last:.2f}/{'-' if vs_menu is None else f'{vs_menu:.1f}'}")
-            if vs_menu is not None:
-                # The menu's fixed interface (buttons, chat box) is back where it was, or
-                # nearly (the menu after a match differs a little from the one before: it
-                # scored 12 while the credits scored 28 to 40) and the screen has gone still.
-                arrived = vs_menu < 8.0 or (vs_menu < 20.0 and since_last < 0.05)
-                needed = 6
-            else:
-                # No menu shot: stillness alone. The credits over the map are still for about
-                # 20 s before the camera flies to a core, so it takes longer than that.
-                arrived = since_match > 0.3 and since_last < 0.5
-                needed = 35
+            parts = menu_matches(frame)
+            trace.append(f"{time.time() - started:.0f}s:{since_match:.2f}/{since_last:.2f}/{parts}")
+            # The menu's fixed interface (top bar, chat box, buttons) is back on screen.
+            arrived = parts >= 2
+            needed = 4
             if arrived:
                 calm_since = calm_since or time.time()
                 if time.time() - calm_since >= needed:
@@ -633,7 +658,7 @@ def _leave_and_wait_for_menu() -> None:
             previous = frame
         else:
             log("  the game hadn't settled back at the menu after 2 minutes; carrying on")
-        log("  leaving, change since the match / since the last look / vs the menu: " + " ".join(trace))
+        log("  leaving, change since the match / since the last look / menu parts seen: " + " ".join(trace))
     log(f"left the match after {time.time() - started:.0f} s (back at the menu for the next run)")
 
 
@@ -678,7 +703,7 @@ def probe_camera(args, manifest: dict, tiles: list, what: str, values: list) -> 
         sys.exit("the map was prepared without --markers; nothing to probe")
     view_h = manifest["screen"]["h"] / manifest["pxPerCell"]
     middle = min(tiles, key=lambda t: abs(t["row"] - manifest["rows"] / 2) + abs(t["col"] - manifest["cols"] / 2))
-    print(f"\n{what} probe. Leave the keyboard and mouse alone while it runs.")
+    print(f"{what.capitalize()} probe on {manifest['map']}: {len(values)} camera settings, counting marker pixels at each. Leave the keyboard and mouse alone.")
     wait_for_map_load(not args.no_launch)
     time.sleep(3)
     results = []
@@ -693,10 +718,10 @@ def probe_camera(args, manifest: dict, tiles: list, what: str, values: list) -> 
                 time.sleep(0.4)
             return None
 
-        wait_until_still(grab)
+        wait_until_still(grab, limit=45)
 
         def at_value(v: int) -> np.ndarray | None:
-            send_chat(f"tile {middle['index']}")
+            send_chat(tile_command(middle))
             settle(2.0)
             if what == "fov":
                 distance = view_h / 2 / math.tan(math.radians(v) / 2)
@@ -772,7 +797,6 @@ def main() -> None:
         switcher = Path(args.game) / "Support64" / "HeroesSwitcher_x64.exe"
         if not switcher.exists():
             sys.exit(f"not found: {switcher} (pass --game)")
-        load_saved_menu(args.manifest.parent / "menu.png")
         ensure_game_running(args.battlenet, args.game)
         # The game wants an absolute path, and may not read one on a network share (such as
         # \\wsl.localhost\...), so launch a local copy. Each launch gets a new name: with a
@@ -786,7 +810,6 @@ def main() -> None:
                 pass  # still open in a running game
         stormmap = str(shutil.copy(manifest["stormmap"], local / f"{manifest['id']}-{int(time.time())}.stormmap"))
         print(f"launching {manifest['map']} ({len(tiles)} tiles) ...")
-        remember_menu(args.manifest.parent / "menu.png")
         subprocess.Popen([str(switcher), stormmap])
 
     if args.probe_zoom:
@@ -804,13 +827,10 @@ def main() -> None:
         )
         return
 
-    print(
-        "\n(Heroes needs to be running from Battle.net and at the main menu, not in a match: a running\n"
-        "match keeps its map. Each run leaves the match at the end by itself.)\n"
-        "Capture waits for the map to load and the intro cutscene to finish, and only types while the\n"
-        "game is in front; if it loses focus part way through a tile, that tile is redone from its\n"
-        "start once the game is back. Don't touch anything while it runs."
-    )
+    if args.probe_light:
+        print(f"Lighting probe on {manifest['map']}: screenshots at chosen spots and cameras.")
+    else:
+        print(f"Capturing {manifest['map']}: {len(tiles) - args.start} tiles, two shots each (markers, then clean). Leave the keyboard and mouse alone.")
     wait_for_map_load(not args.no_launch)
     time.sleep(3)
 
@@ -848,7 +868,9 @@ def main() -> None:
         # The map script skips the intro cutscene and ignores `tile` until the intro's exit has
         # restored the camera and interface. With markers, the capture is ready once the "0123456789" reference label
         # reads: it only appears after a `tile` was accepted. So: ask, look, and ask again.
-        first = tiles[args.start]["index"]
+        # The start-up check (and the digits) at the middle tile: a tile at the map's corner has
+        # its labels outside the map, where text tags aren't drawn (Punisher Arena).
+        first_tile = min(tiles, key=lambda t: abs(t["row"] - manifest["rows"] / 2) + abs(t["col"] - manifest["cols"] / 2))
         digits = None
         ref_height = None
         if manifest.get("keepIntro"):
@@ -856,35 +878,110 @@ def main() -> None:
             # as skipping it.
             log("letting the intro cutscene play out (nothing typed for 60 s) ...")
             step(lambda: settle(60.0), "the wait for the intro")
+        def describe_labels(frame: np.ndarray, digits: dict) -> str:
+            """What the label reader sees: each label's digits and character count."""
+            from markers import _glyphs, _label_boxes, _read
+
+            seen = []
+            for box in _label_boxes(frame):
+                glyphs = _glyphs(frame, box)
+                seen.append("".join(str(_read(g, digits)[0]) for g in glyphs) + f"({len(glyphs)})")
+            return " ".join(seen) if seen else "none"
+
         if manifest.get("markers"):
             log("waiting for the intro cutscene to finish ...")
             deadline = time.time() + 180
+            attempts = 0
             ref = None
             def attempt() -> np.ndarray | None:
-                send_chat(f"tile {first}")
+                send_chat(tile_command(first_tile))
                 settle(1.0)
                 send_chat("glyphs")
                 settle(1.0)
                 return grab(dark_ok=True)
 
+            previous_ref, responded_tries = None, 0
             while True:
                 ref = step(attempt, "the start-up check")
                 digits = learn_digits(ref) if ref is not None else None
+                attempts += 1
                 if digits or time.time() > deadline:
                     break
+                # While an intro or a selection phase is running, `tile` is ignored and the
+                # screen barely changes between tries: keep asking (up to the 3-minute
+                # deadline). Once the screen answers a `tile` (a big change) the labels should
+                # be there too; several answered tries without them, and it's time to stop.
+                if ref is not None and previous_ref is not None and changed_share(ref, previous_ref) > 0.3:
+                    responded_tries += 1
+                previous_ref = ref
+                log(f"  start-up: try {attempts}, no readable labels yet" + (" (the map is answering)" if responded_tries else ""))
+                if responded_tries >= 5:
+                    if ref is not None:
+                        Image.fromarray(np.ascontiguousarray(ref)).save(out.parent / "glyphs.png", compress_level=1)
+                    quit_match()
+                    sys.exit(
+                        "\nStopped: the map answers the commands but the reference label never appeared. What the\n"
+                        f"capture saw is in {out.parent / 'glyphs.png'}. If every interface panel is visible in the\n"
+                        "game, the map's script failed to compile; if the view isn't flat and far, the map is\n"
+                        "overriding the camera."
+                    )
                 time.sleep(2.0)
             if ref is not None:
                 Image.fromarray(np.ascontiguousarray(ref)).save(out.parent / "glyphs.png", compress_level=1)
                 ref_height = label_height(ref) if digits else None
             log("digits learned from the reference label" if digits else
                 "could not learn the digits (see glyphs.png); falling back to the marker pattern")
+            if digits:
+                # The camera bounds the game really applies (an arena's are far tighter than
+                # its map file says): the script measures them and shows them as a 12-digit
+                # label. A grid planned for the wrong bounds spends most tiles on sky.
+                # One command, then several looks a while apart (the label stays up): the
+                # first look at a Punisher Arena run showed two 12-digit texts drawn on top of
+                # each other, unreadable; a later look may be clean. The command is repeated
+                # once if no two looks agree.
+                bounds, reads, look_no = None, [], 0
+                for attempt_no in range(2):
+                    send_chat("bounds")
+                    settle(2.5)
+                    for _look in range(3):
+                        shot = grab(dark_ok=True)
+                        text = read_label(shot, digits, 12) if shot is not None else None
+                        if shot is not None:
+                            # Kept for diagnosis, with what the reader saw.
+                            Image.fromarray(np.ascontiguousarray(shot)).save(out.parent / f"bounds-{look_no}.png", compress_level=1)
+                            log(f"  bounds look {look_no + 1}: labels on screen {describe_labels(shot, digits)}" + (f", read {text}" if text else ", no 12-digit label read"))
+                        look_no += 1
+                        if text:
+                            reads.append(text)
+                            if reads.count(text) >= 2:  # the same twelve digits twice: a clean read
+                                l, b, r, t = (int(text[i : i + 3]) for i in (0, 3, 6, 9))
+                                if l < r and b < t:
+                                    bounds = {"left": l, "bottom": b, "right": r, "top": t}
+                                break
+                        settle(1.5)
+                    if bounds is not None:
+                        break
+                if bounds is None:
+                    log("  couldn't measure the camera bounds in the game; using the map file's")
+                    if os.environ.get("HRS_STOP_IF_NO_BOUNDS"):
+                        quit_match()
+                        sys.exit("\nStopped: the camera bounds couldn't be measured (HRS_STOP_IF_NO_BOUNDS is set); see bounds-*.png")
+                else:
+                    planned = manifest["cameraBounds"]
+                    if any(abs(bounds[k] - planned[k]) > 2 for k in bounds):
+                        plan_grid(manifest, bounds)
+                        tiles = manifest["tiles"]
+                        args.manifest.write_text(json.dumps(manifest, indent=2))
+                        log(f"camera bounds in the game: {bounds} (map file: {planned}); grid re-planned: {manifest['cols']}x{manifest['rows']} = {len(tiles)} tiles")
+                    else:
+                        log(f"camera bounds in the game match the map file: {bounds}")
         else:
 
             def start() -> None:
-                send_chat(f"tile {first}")
+                send_chat(tile_command(first_tile))
                 settle(3.0)
                 wait_until_still(grab, limit=180)
-                send_chat(f"tile {first}")
+                send_chat(tile_command(first_tile))
                 settle(1.0)
 
             step(start, "the start-up")
@@ -1065,7 +1162,7 @@ def main() -> None:
             command is sent again."""
             fit, labels = None, 0
             for _ in range(SENDS):
-                send_chat(f"tile {tile['index']}")
+                send_chat(tile_command(tile))
                 moved = time.time()
                 before = None
                 for wait in (FIRST_SHOT, RETAKE, 0.05, 0.05):
@@ -1139,7 +1236,7 @@ def main() -> None:
             """One tile, start to finish, as one step: (fit, labels on the calibration shot,
             kept shot, whether the kept shot matched its calibration shot)."""
             if not manifest.get("markers"):
-                send_chat(f"tile {tile['index']}")
+                send_chat(tile_command(tile))
                 settle(max(args.settle, 1.0))
                 return None, 0, grab(), False
             # Shot 1 of 2, calibration: the numbered markers give the exact camera geometry,
@@ -1148,7 +1245,7 @@ def main() -> None:
             if digits:
                 fit, labels, moved = command_calibration(tile)
             else:
-                send_chat(f"tile {tile['index']}")
+                send_chat(tile_command(tile))
                 moved = time.time()
                 settle(1.0)
                 fit, labels = calibrate(tile)
@@ -1160,14 +1257,12 @@ def main() -> None:
             note = ""
             fit, labels, frame, mismatch = step(lambda: shoot(tile), f"tile {tile['index']}")
             if manifest.get("markers"):
+                # Tiles whose labels all fall outside the map (a corner of wide camera bounds,
+                # as on the arena maps) show none; the script is known to work since the
+                # digits were learned, so only a long run of label-less tiles means trouble.
                 silent = silent + 1 if labels == 0 else 0
-                if silent >= 3:
-                    quit_match()
-                    sys.exit(
-                        "\nStopped: no markers on screen for three tiles in a row. The map's script is\n"
-                        "not responding to the chat commands; if every interface panel is visible in the\n"
-                        "game, the script failed to compile."
-                    )
+                if silent and silent % 25 == 0:
+                    log(f"  no labels on screen for {silent} tiles in a row (sky beyond the map, or the map's script has stopped responding)")
                 if not (fit and fit.get("fit")) and last_calibration:
                     # Kept for diagnosis: what the reader saw when it found no usable fit.
                     failed = out.parent / "failed-calibration"
