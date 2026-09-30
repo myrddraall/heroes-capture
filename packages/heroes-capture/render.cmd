@@ -8,6 +8,7 @@ rem   render.cmd "Towers of Doom" keep --markers     further options go to injec
 rem     --show-ui      diagnostic: leave the HUD up, launch the map and stop
 rem     --probe-zoom   diagnostic: find how far the camera can be before markers stop drawing
 rem     --probe-fov    diagnostic: find the narrowest field of view that still draws markers
+rem     --probe-light  diagnostic: screenshots from several camera distances and positions
 rem
 rem Start Heroes from Battle.net first (so it is logged in), in Windowed (Fullscreen).
 setlocal
@@ -19,8 +20,10 @@ if "%MAP%"=="" set "MAP=Towers of Doom"
 set "STRUCTURES=%~2"
 if "%STRUCTURES%"=="" set "STRUCTURES=keep"
 set "SCREEN=3440x1440"
-rem Narrower FOV and a smaller share of each screenshot: flatter, fewer seams, more screenshots.
-set "FOV=8"
+rem Camera distance (the field of view is chosen to keep the scale): far, so tall objects lean
+rem little at the seams. (The dark areas seen at far distances were the game's lighting fitted
+rem to an old camera; the map script now refits it at every tile, so the distance is free.)
+set "DISTANCE=214"
 set "KEEP=0.4"
 rem Keep objective units such as altars (removing them leaves black holes in the terrain), and
 rem show registration markers, which place every screenshot exactly.
@@ -40,8 +43,10 @@ rem Diagnostic switches are handled here, not by inject.mjs.
 set "PROBE="
 echo %ARGS% | find "--probe-zoom" >nul && set "PROBE=--probe-zoom"
 echo %ARGS% | find "--probe-fov" >nul && set "PROBE=--probe-fov"
+echo %ARGS% | find "--probe-light" >nul && set "PROBE=--probe-light"
 if defined PROBE set "ARGS=%ARGS:--probe-zoom=%"
 if defined PROBE set "ARGS=%ARGS:--probe-fov=%"
+if defined PROBE set "ARGS=%ARGS:--probe-light=%"
 set "SHOWUI="
 echo %ARGS% | find "--show-ui" >nul && set "SHOWUI=1"
 
@@ -49,12 +54,12 @@ rem First run only: install what the scripts need.
 if not exist node_modules (
   call npm install || goto :error
 )
-py -c "import mss, pydirectinput, PIL, numpy, pyvips, scipy" 2>nul || py -m pip install -r requirements.txt || goto :error
+py -c "import mss, pydirectinput, PIL, numpy, pyvips, scipy, dxcam" 2>nul || py -m pip install -r requirements.txt || goto :error
 
 echo.
 echo [1/3] Preparing %MAP% (structures: %STRUCTURES%, %SCREEN%)
 set "MANIFEST="
-for /f "usebackq delims=" %%m in (`node inject.mjs "%MAP%" --structures %STRUCTURES% --screen %SCREEN% --fov %FOV% --keep %KEEP% %EXTRA%%ARGS%`) do set "MANIFEST=%%m"
+for /f "usebackq delims=" %%m in (`node inject.mjs "%MAP%" --structures %STRUCTURES% --screen %SCREEN% --distance %DISTANCE% --keep %KEEP% %EXTRA%%ARGS%`) do set "MANIFEST=%%m"
 if not defined MANIFEST goto :error
 
 if defined PROBE (

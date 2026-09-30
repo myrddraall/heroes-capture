@@ -13,16 +13,25 @@
  *   --px-per-cell <n>        output resolution, pixels per map cell         (default 48)
  *   --screen <w>x<h>         the game's resolution while capturing           (default 3840x2160)
  *   --fov <deg>              vertical field of view; narrower is flatter      (default 20)
+ *   --pitch <deg>            camera pitch (default 90, straight down)
+ *   --refit-yaw <deg>        yaw of the lighting-refit look before each tile; by default it
+ *                            faces the map's main light, found from the map's tileset and the
+ *                            game's light sets (light-sets.json); only a shallow look towards
+ *                            the light clears the dark boxes around holes
+ *   --distance <units>       camera distance instead: the field of view is chosen to keep
+ *                            --px-per-cell (beyond about 120 the game renders the terrain
+ *                            in low detail: dark squares around holes, dark wedges)
  *   --keep <0..1>            share of each screenshot used, centred           (default 0.6)
  *   --no-lens                leave field of view and far clip to the map
  *   --keep-mechanics         keep map-mechanic units such as altars (experimental)
  *   --freeze                 pause model animations (experimental)
  *   --markers                show registration markers around each screenshot (experimental)
  *   --show-ui                leave the HUD up (diagnostic)
+ *   --keep-intro             let the intro cutscene play out instead of skipping it (diagnostic)
  *   --margin <cells>         capture past the camera bounds (lifts them)      (default 0)
  *   --out <dir>              working folder                                   (default work)
  */
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import {
   Archive,
@@ -31,6 +40,7 @@ import {
   MPQ_FILE_REPLACEEXISTING,
 } from '@jamiephan/stormlib';
 import { captureScript } from './capture-script.mjs';
+import { mainLight } from './light-data.mjs';
 
 const S2MA_MAPS = 'https://raw.githubusercontent.com/jamiephan/HeroesOfTheStorm_S2MA/main/maps';
 
@@ -41,12 +51,16 @@ function parseArgs(argv) {
     pxPerCell: 48,
     screen: { w: 3840, h: 2160 },
     fov: 20,
+    distance: null,
+    pitch: 90,
+    refitYaw: null,
     keep: 0.6,
     lens: true,
     freeze: false,
     keepMechanics: false,
     markers: false,
     showUi: false,
+    keepIntro: false,
     margin: 0,
     out: 'work',
   };
@@ -59,10 +73,14 @@ function parseArgs(argv) {
       const [w, h] = next().split('x').map(Number);
       opts.screen = { w, h };
     } else if (a === '--fov') opts.fov = Number(next());
+    else if (a === '--distance') opts.distance = Number(next());
+    else if (a === '--pitch') opts.pitch = Number(next());
+    else if (a === '--refit-yaw') opts.refitYaw = Number(next());
     else if (a === '--keep') opts.keep = Number(next());
     else if (a === '--no-lens') opts.lens = false;
     else if (a === '--freeze') opts.freeze = true;
     else if (a === '--keep-mechanics') opts.keepMechanics = true;
+    else if (a === '--keep-intro') opts.keepIntro = true;
     else if (a === '--markers') opts.markers = true;
     else if (a === '--show-ui') opts.showUi = true;
     else if (a === '--margin') opts.margin = Number(next());
@@ -102,6 +120,35 @@ async function resolveMap(map, outDir) {
 }
 
 /**
+ * The yaw of the lighting-refit look: facing the map's main light (see light-data.mjs), or
+ * 180 with a warning when the light can't be found.
+ */
+function resolveRefitYaw(archive) {
+  const read = (name) => {
+    try {
+      return archive.readFile(name).toString('utf8');
+    } catch {
+      return null;
+    }
+  };
+  const table = JSON.parse(readFileSync(new URL('./light-sets.json', import.meta.url), 'utf8'));
+  const light = mainLight(
+    {
+      t3Terrain: read('t3Terrain.xml') || '',
+      terrainData: read('Base.StormData\\GameData\\TerrainData.xml'),
+      lightData: read('Base.StormData\\GameData\\LightData.xml'),
+    },
+    table,
+  );
+  if (light.yaw === null) {
+    console.error(`warning: the map's main light wasn't found (tileset ${light.tileset}, light set ${light.lighting}); the refit look faces yaw 180. Pass --refit-yaw, or regenerate light-sets.json.`);
+    return 180;
+  }
+  console.error(`main light: tileset ${light.tileset}, light set ${light.lighting}, from ${light.yaw.toFixed(0)} degrees (the refit look faces it)`);
+  return Math.round(light.yaw);
+}
+
+/**
  * MapInfo: map size at bytes 16 and 20, and the camera bounds (left, bottom, right, top) as
  * four uint32 right after a string. The bounds' offset moves with the strings before them, so
  * take the first aligned-to-a-string quadruple that fits the map; this matches all 35 current
@@ -134,6 +181,10 @@ function readMapInfo(buf) {
 function planGrid(opts, info) {
   const viewH = opts.screen.h / opts.pxPerCell;
   const viewW = opts.screen.w / opts.pxPerCell;
+  if (opts.distance) {
+    // The field of view that shows viewH cells from that distance.
+    opts.fov = (2 * Math.atan(viewH / 2 / opts.distance) * 180) / Math.PI;
+  }
   const distance = viewH / 2 / Math.tan((opts.fov * Math.PI) / 180 / 2);
   const m = opts.margin;
   const area = {
@@ -201,6 +252,7 @@ async function main() {
   const archive = Archive.open(target);
   try {
     const info = readMapInfo(archive.readFile('MapInfo'));
+    const refitYaw = opts.refitYaw ?? resolveRefitYaw(archive);
     const grid = planGrid(opts, info);
     // Far clip well past the camera, with a floor so the chat "zoom" command can pull back freely.
     const lens = opts.lens
@@ -237,11 +289,14 @@ async function main() {
       tiles: grid.tiles,
       hideStructures: opts.structures === 'hide',
       distance: grid.distance,
+      pitch: opts.pitch,
+      refitYaw,
       lens,
       unbound: opts.margin > 0,
       keepMechanics: opts.keepMechanics,
       freeze: opts.freeze,
       showUi: opts.showUi,
+      keepIntro: opts.keepIntro,
       markers,
     }).replace(/\n/g, eol);
     checkDefinitionOrder(script);
@@ -268,6 +323,8 @@ async function main() {
       fov: opts.lens ? opts.fov : null,
       keep: opts.keep,
       distance: grid.distance,
+      pitch: opts.pitch,
+      refitYaw,
       mapSize: { width: info.width, height: info.height },
       cameraBounds: info.bounds,
       area: grid.area,
@@ -277,6 +334,7 @@ async function main() {
       tiles: grid.tiles,
       markers,
       pageShare,
+      keepIntro: opts.keepIntro,
     };
     const manifestPath = resolve(opts.out, `${id}.json`);
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));

@@ -1,0 +1,2616 @@
+{
+ "generated": "2026-09-30",
+ "terrains": {
+  "Cyberworld": {},
+  "StormIceWorld": {},
+  "StormTwilightWorld": {},
+  "StormDesertWorld": {},
+  "StormCyberWorld": {
+   "lighting": "StormCyberworld"
+  },
+  "CyberworldArathi": {
+   "lighting": "Agria"
+  },
+  "CyberworldMeinhoff": {
+   "lighting": "Meinhoff"
+  },
+  "StormEgyptWorld": {},
+  "StormTransylvaniaWorld": {
+   "lighting": "StormTransylvania"
+  },
+  "StormKingsCrestGardens": {
+   "lighting": "StormArenaGardens"
+  },
+  "StormSnowWorld": {},
+  "StormAshenvale": {},
+  "StormKingsCrestRavenCourt": {
+   "lighting": "StormRavenCourtFinal"
+  },
+  "StormKingsCrestWinterRavenCourt": {
+   "lighting": "StormWinterCrest"
+  },
+  "StormKingsCrestDocks": {
+   "lighting": "StormKingsCrestALL"
+  },
+  "StormKingsCrestWinterDocks": {
+   "lighting": "StormKingsCrestALL"
+  },
+  "StormLuxoriaCrypts": {
+   "lighting": "LuxoriaCrypts"
+  },
+  "StormHeavenAndHellHeaven": {
+   "lighting": "StormHeaven"
+  },
+  "StormStitchesWars": {
+   "parent": "StormKingsCrestGardens"
+  },
+  "StormHeavenAndHellHell": {
+   "lighting": "StormHeaven"
+  },
+  "StormHeavenAndHellTransition": {
+   "lighting": "StormHeaven"
+  },
+  "StormOverwatchHanamura1": {
+   "lighting": "Storm_OWHana"
+  },
+  "StormOverwatchHanamura2": {
+   "lighting": "Storm_OWHana"
+  },
+  "StormOverwatchHanamura3": {
+   "lighting": "Storm_OWHana"
+  },
+  "StormHeavenAndHell2Heaven": {
+   "lighting": "StormHeaven"
+  },
+  "StormHeavenAndHell2Transition": {
+   "lighting": "StormHeaven"
+  },
+  "StormHeavenAndHell2Hell": {
+   "lighting": "StormHeaven"
+  },
+  "Braxis": {
+   "lighting": "StarcraftBraxis"
+  },
+  "Braxis2": {
+   "lighting": "StarcraftBraxis"
+  },
+  "StormOWVol": {
+   "lighting": "Storm_OWVol"
+  },
+  "StormOWVol2": {
+   "lighting": "Storm_OWVol"
+  },
+  "Zion": {
+   "lighting": "StarcraftZion"
+  },
+  "Zion2": {
+   "parent": "Zion"
+  },
+  "Zion3": {
+   "parent": "Zion"
+  },
+  "StormTestTilesetOne": {
+   "lighting": "StormKingsCrestALL"
+  },
+  "StormTestTilesetTwo": {
+   "lighting": "StormKingsCrestALL"
+  },
+  "StormTestTilesetThree": {
+   "lighting": "StormKingsCrestALL"
+  },
+  "StormTestTilesetFour": {
+   "lighting": "StormKingsCrestALL"
+  }
+ },
+ "lights": {
+  "default": {},
+  "DefaultLight": {
+   "key": [
+    0.146045,
+    0.953297,
+    -0.264378
+   ]
+  },
+  "MainMenuSwarm_Low": {
+   "parent": "default",
+   "key": [
+    0.130342,
+    0.961501,
+    0.241922
+   ]
+  },
+  "NoLight": {
+   "key": [
+    0,
+    0,
+    -1
+   ]
+  },
+  "GlueBackground": {
+   "parent": "default",
+   "key": [
+    0.169115,
+    -0.974,
+    -0.150743
+   ]
+  },
+  "MainMenuSwarm": {
+   "parent": "default",
+   "key": [
+    -0.011694,
+    0,
+    -0.999932
+   ]
+  },
+  "MainMenuDefault": {
+   "parent": "default",
+   "key": [
+    -0.011694,
+    0,
+    -0.999932
+   ]
+  },
+  "CinematicBaseLighting": {
+   "parent": "default",
+   "key": [
+    -0.684739,
+    0.611797,
+    -0.396026
+   ]
+  },
+  "UIAlliedCommander": {
+   "parent": "default",
+   "key": [
+    -0.706218,
+    0.204641,
+    -0.677775
+   ]
+  },
+  "UIZeratulPrologue": {
+   "parent": "default",
+   "key": [
+    0.652033,
+    0.356534,
+    -0.669131
+   ]
+  },
+  "UIZeratulPrologue_Low": {
+   "parent": "default",
+   "key": [
+    0.840312,
+    0.183525,
+    -0.510093
+   ]
+  },
+  "GameUIGorgeOverlayToys18_BM": {
+   "parent": "default",
+   "key": [
+    0.124094,
+    -0.270795,
+    -0.954605
+   ]
+  },
+  "StoreAAA_BASEcamera": {
+   "parent": "default",
+   "key": [
+    0.135081,
+    0.337726,
+    -0.931501
+   ]
+  },
+  "Gameboard_Toys18": {
+   "parent": "default",
+   "key": [
+    -0.381318,
+    0.056104,
+    -0.92274
+   ]
+  },
+  "Gameboard_Toys19": {
+   "parent": "default",
+   "key": [
+    0.855877,
+    0.515077,
+    -0.046584
+   ]
+  },
+  "Gameboard_Toys19_Full": {
+   "parent": "default",
+   "key": [
+    0.876212,
+    0.416806,
+    -0.241922
+   ]
+  },
+  "StormLightDraftBanned": {
+   "parent": "default",
+   "key": [
+    -0.760324,
+    0.276435,
+    -0.587785
+   ]
+  },
+  "StormLightDraftEnemyTeam": {
+   "parent": "default",
+   "key": [
+    -0.760324,
+    0.276435,
+    -0.587785
+   ]
+  },
+  "StormLightDraftMyTeam": {
+   "parent": "default",
+   "key": [
+    -0.760324,
+    0.276435,
+    -0.587785
+   ]
+  },
+  "GameOverScreen": {
+   "parent": "default",
+   "key": [
+    0.647974,
+    -0.12748,
+    -0.750919
+   ]
+  },
+  "GameUIGorgeOverlay": {
+   "parent": "default",
+   "key": [
+    -0.733034,
+    0.162912,
+    -0.660395
+   ]
+  },
+  "GameUICocoonOverlay": {
+   "parent": "default",
+   "key": [
+    -0.733034,
+    0.162912,
+    -0.660395
+   ]
+  },
+  "RankedMode_HeroLeague": {
+   "parent": "default",
+   "key": [
+    -0.00969,
+    0.854132,
+    -0.519966
+   ]
+  },
+  "RankedMode_HeroLeague_Low": {
+   "parent": "default",
+   "key": [
+    -0.00969,
+    0.854132,
+    -0.519966
+   ]
+  },
+  "StormGardenofTerrorDay": {
+   "parent": "default",
+   "key": [
+    0.598355,
+    0.335918,
+    -0.727414
+   ]
+  },
+  "StormLightGems": {
+   "parent": "default",
+   "key": [
+    -0.856392,
+    0.303937,
+    -0.417391
+   ]
+  },
+  "StormLightHeroSelectBase_Low": {
+   "parent": "default",
+   "key": [
+    0.00883,
+    0.954564,
+    -0.297874
+   ]
+  },
+  "StormLightHeroSelectDimmed_Low": {
+   "parent": "default",
+   "key": [
+    0.00883,
+    0.954564,
+    -0.297874
+   ]
+  },
+  "StormLightHeroSelectLocked": {
+   "parent": "default",
+   "key": [
+    0.019807,
+    0.822203,
+    -0.568849
+   ]
+  },
+  "StormLightHeroSelectLocked_Low": {
+   "parent": "default",
+   "key": [
+    0.00883,
+    0.954564,
+    -0.297874
+   ]
+  },
+  "StormLightHeroSelectSpotlight": {
+   "parent": "default",
+   "key": [
+    0.019807,
+    0.822203,
+    -0.568849
+   ]
+  },
+  "StormLightMediaGroupH11": {
+   "parent": "default",
+   "key": [
+    0.644052,
+    -0.211131,
+    -0.735269
+   ]
+  },
+  "StormLightMediaGroupH13": {
+   "parent": "default",
+   "key": [
+    0.195757,
+    0.812264,
+    -0.54946
+   ]
+  },
+  "StormLightStoreBaseWCAV": {
+   "parent": "default",
+   "key": [
+    -0.609493,
+    0.315257,
+    -0.727414
+   ]
+  },
+  "StormLightStoreBoost": {
+   "parent": "default",
+   "key": [
+    0.596068,
+    0.536702,
+    -0.597206
+   ]
+  },
+  "StormLightStoreSpotlight": {
+   "parent": "default",
+   "key": [
+    -0.026168,
+    0.499315,
+    -0.866025
+   ]
+  },
+  "Storm_DemonHunter_Base_Var1_Portrait": {
+   "parent": "default",
+   "key": [
+    -0.913499,
+    0.009247,
+    -0.406736
+   ]
+  },
+  "Storm_Portrait_Chogall_Corruptor": {
+   "parent": "default",
+   "key": [
+    0.733379,
+    -0.193493,
+    -0.651702
+   ]
+  },
+  "Storm_Portrait_Chogall_Ultiamte_Var2": {
+   "parent": "default",
+   "key": [
+    0.733379,
+    -0.193493,
+    -0.651702
+   ]
+  },
+  "Storm_Portrait_Chogall_Ultimate": {
+   "parent": "default",
+   "key": [
+    0.733379,
+    -0.193493,
+    -0.651702
+   ]
+  },
+  "Storm_Portrait_Chogall_Corruptor_Var1": {
+   "parent": "default",
+   "key": [
+    0.733379,
+    -0.193493,
+    -0.651702
+   ]
+  },
+  "Storm_Portrait_Chogall_Corruptor_Var2": {
+   "parent": "default",
+   "key": [
+    0.733379,
+    -0.193493,
+    -0.651702
+   ]
+  },
+  "Storm_Portrait_Chogall_Ultimate_Var1": {
+   "parent": "default",
+   "key": [
+    0.733379,
+    -0.193493,
+    -0.651702
+   ]
+  },
+  "Storm_Portrait_Dehaka_Base": {
+   "parent": "default",
+   "key": [
+    -0.584348,
+    0.669143,
+    -0.459114
+   ]
+  },
+  "Storm_Portrait_Dehaka_Master": {
+   "parent": "default",
+   "key": [
+    0.846356,
+    0.209138,
+    -0.489839
+   ]
+  },
+  "Storm_Portrait_Dehaka_Ultimate": {
+   "parent": "default",
+   "key": [
+    0.846356,
+    0.209138,
+    -0.489839
+   ]
+  },
+  "Storm_Portrait_GreymaneWorgen_Base_Var3": {
+   "parent": "default",
+   "key": [
+    0.744891,
+    0.142904,
+    -0.651702
+   ]
+  },
+  "Storm_Portrait_Greymane_Circus": {
+   "parent": "default",
+   "key": [
+    0.089338,
+    0.804069,
+    -0.587785
+   ]
+  },
+  "Storm_Portrait_Greymane_Ultimate": {
+   "parent": "default",
+   "key": [
+    0.06022,
+    0.962537,
+    -0.264378
+   ]
+  },
+  "Storm_Portrait_KingsCrest_GardenGolem": {
+   "parent": "default",
+   "key": [
+    -0.733034,
+    0.162912,
+    -0.660395
+   ]
+  },
+  "Storm_Portrait_Medic_Apoth": {
+   "parent": "default",
+   "key": [
+    0.613892,
+    0.243429,
+    -0.750919
+   ]
+  },
+  "Storm_Portrait_Medic_Love": {
+   "parent": "default",
+   "key": [
+    0.766812,
+    0.181549,
+    -0.615661
+   ]
+  },
+  "StormDragonFire": {
+   "parent": "default",
+   "key": [
+    0.647974,
+    -0.12748,
+    -0.750919
+   ]
+  },
+  "StormKingsCrestDocksNight": {
+   "parent": "default",
+   "key": [
+    0.647974,
+    -0.12748,
+    -0.750919
+   ]
+  },
+  "StormLightHeroSelectBase": {
+   "parent": "default",
+   "key": [
+    0.202893,
+    0.813759,
+    -0.544639
+   ]
+  },
+  "StormLightHeroSelectDimmed": {
+   "parent": "default",
+   "key": [
+    0.202893,
+    0.813759,
+    -0.544639
+   ]
+  },
+  "StormLightHeroSelectLocked3": {
+   "parent": "default",
+   "key": [
+    0.019807,
+    0.822203,
+    -0.568849
+   ]
+  },
+  "StormKingsCrestALL": {
+   "parent": "default",
+   "key": [
+    0.583283,
+    0.460484,
+    -0.669131
+   ]
+  },
+  "StormLightHeroSelectMount": {
+   "parent": "default",
+   "key": [
+    0.633577,
+    0.590407,
+    -0.5
+   ]
+  },
+  "StormLightStoreFrameBase": {
+   "parent": "default",
+   "key": [
+    -0.026168,
+    0.499315,
+    -0.866025
+   ]
+  },
+  "StormLightStoreFrameBaseLDR": {
+   "parent": "default",
+   "key": [
+    -0.026168,
+    0.499315,
+    -0.866025
+   ]
+  },
+  "StormLightStoreFrameBaseLDR_Low": {
+   "parent": "default",
+   "key": [
+    -0.026168,
+    0.499315,
+    -0.866025
+   ]
+  },
+  "StormLightStoreFrameDimmed": {
+   "parent": "default",
+   "key": [
+    -0.026168,
+    0.499315,
+    -0.866025
+   ]
+  },
+  "StormLightStoreFrameDimmedLDR": {
+   "parent": "default",
+   "key": [
+    -0.026168,
+    0.499315,
+    -0.866025
+   ]
+  },
+  "StormLightStoreFrameDimmedLDR_Low": {
+   "parent": "default",
+   "key": [
+    -0.026168,
+    0.499315,
+    -0.866025
+   ]
+  },
+  "StormLightTutorialRaynorIntro": {
+   "parent": "default",
+   "key": [
+    -0.011694,
+    0,
+    -0.999932
+   ]
+  },
+  "StormLightTutorialRaynorIntro_Low": {
+   "parent": "default",
+   "key": [
+    0.137361,
+    0.251833,
+    -0.957973
+   ]
+  },
+  "StormNewUserXPUther": {
+   "parent": "default",
+   "key": [
+    0.595837,
+    0.679661,
+    -0.427831
+   ]
+  },
+  "StormRavenCourt": {
+   "parent": "default",
+   "key": [
+    0.647974,
+    -0.12748,
+    -0.750919
+   ]
+  },
+  "StormRavenCourtCurseFinal": {
+   "parent": "default",
+   "key": [
+    0.554487,
+    0.418443,
+    -0.71934
+   ]
+  },
+  "StormRavenCourtFinal": {
+   "parent": "default",
+   "key": [
+    0.554487,
+    0.418443,
+    -0.71934
+   ]
+  },
+  "StormRavenCourtCurseTransition": {
+   "parent": "default",
+   "key": [
+    0.554487,
+    0.418443,
+    -0.71934
+   ]
+  },
+  "StormShopModelLightAnubarakLadyBug": {
+   "parent": "default",
+   "key": [
+    -0.555363,
+    -0.065338,
+    -0.829038
+   ]
+  },
+  "StormShopModelLightBarbarian": {
+   "parent": "default",
+   "key": [
+    -0.745784,
+    0.416463,
+    -0.519966
+   ]
+  },
+  "StormShopModelLightDefault": {
+   "parent": "default",
+   "key": [
+    0.647974,
+    -0.12748,
+    -0.750919
+   ]
+  },
+  "StormShopModelLightDemonHunterVampireHunter": {
+   "parent": "default",
+   "key": [
+    -0.188752,
+    0.310931,
+    -0.931501
+   ]
+  },
+  "StormShopModelLightDemonHunterVampireHunterDark": {
+   "parent": "default",
+   "key": [
+    -0.188752,
+    0.310931,
+    -0.931501
+   ]
+  },
+  "StormShopModelLightDemonHunterVampireHunterPoison": {
+   "parent": "default",
+   "key": [
+    -0.555363,
+    -0.065338,
+    -0.829038
+   ]
+  },
+  "StormShopModelLightDemonHunterVampireHunterWhite": {
+   "parent": "default",
+   "key": [
+    -0.555363,
+    -0.065338,
+    -0.829038
+   ]
+  },
+  "StormShopModelLightJaina": {
+   "parent": "default",
+   "key": [
+    0.556993,
+    0.586743,
+    -0.587785
+   ]
+  },
+  "StormShopModelLightMountDirewolfBase": {
+   "parent": "default",
+   "key": [
+    0.475165,
+    0.066273,
+    -0.877397
+   ]
+  },
+  "StormShopModelLightMountDirewolfBlack": {
+   "parent": "default",
+   "key": [
+    0.421093,
+    0.121861,
+    -0.898794
+   ]
+  },
+  "StormShopModelLightMountDirewolfBlue": {
+   "parent": "default",
+   "key": [
+    -0.627507,
+    0.439385,
+    -0.642788
+   ]
+  },
+  "StormShopModelLightMountDirewolfRed": {
+   "parent": "default",
+   "key": [
+    0.421093,
+    0.121861,
+    -0.898794
+   ]
+  },
+  "StormShopModelLightMountHorseArmoredBlue": {
+   "parent": "default",
+   "key": [
+    -0.87487,
+    -0.06655,
+    -0.479764
+   ]
+  },
+  "StormShopModelLightMountHorseArmoredRed": {
+   "parent": "default",
+   "key": [
+    -0.441527,
+    -0.18769,
+    -0.877397
+   ]
+  },
+  "StormShopModelLightMountHorseArmoredViolet": {
+   "parent": "default",
+   "key": [
+    0.421093,
+    0.121861,
+    -0.898794
+   ]
+  },
+  "StormShopModelLightMountHorseBase": {
+   "parent": "default",
+   "key": [
+    0.475165,
+    0.066273,
+    -0.877397
+   ]
+  },
+  "StormShopModelLightMountHorseBlack": {
+   "parent": "default",
+   "key": [
+    -0.555363,
+    -0.065338,
+    -0.829038
+   ]
+  },
+  "StormShopModelLightMountHorseFreckled": {
+   "parent": "default",
+   "key": [
+    -0.555363,
+    -0.065338,
+    -0.829038
+   ]
+  },
+  "StormShopModelLightMountHorseTan": {
+   "parent": "default",
+   "key": [
+    0.421093,
+    0.121861,
+    -0.898794
+   ]
+  },
+  "StormShopModelLightMountHorseUnicorn": {
+   "parent": "default",
+   "key": [
+    0.11964,
+    0.565773,
+    -0.815835
+   ]
+  },
+  "StormShopModelLightMountHorseUnicornRainbow": {
+   "parent": "default",
+   "key": [
+    0.11964,
+    0.565773,
+    -0.815835
+   ]
+  },
+  "StormShopModelLightMountPony": {
+   "parent": "default",
+   "key": [
+    0.475165,
+    0.066273,
+    -0.877397
+   ]
+  },
+  "StormShopModelLightStitchesChef": {
+   "parent": "default",
+   "key": [
+    0.475165,
+    0.066273,
+    -0.877397
+   ]
+  },
+  "StormShopModelLightStitchesPsycho": {
+   "parent": "default",
+   "key": [
+    0.421093,
+    0.121861,
+    -0.898794
+   ]
+  },
+  "StormShopModelLightTest": {
+   "parent": "default",
+   "key": [
+    0.836682,
+    0.282063,
+    -0.469472
+   ]
+  },
+  "StormLightStoreDimmed": {
+   "parent": "default",
+   "key": [
+    -0.026168,
+    0.499315,
+    -0.866025
+   ]
+  },
+  "StormShopModelLightUtherJudgement": {
+   "parent": "default",
+   "key": [
+    0.010426,
+    -0.711091,
+    -0.703023
+   ]
+  },
+  "StormShopModelLightZeratulNinja": {
+   "parent": "default",
+   "key": [
+    -0.827307,
+    0.11686,
+    -0.54946
+   ]
+  },
+  "StormTutorialPlanetFlyby1": {
+   "parent": "default",
+   "key": [
+    0.91847,
+    -0.178366,
+    -0.352985
+   ]
+  },
+  "StormTutorialPlanetFlyby2": {
+   "parent": "default",
+   "key": [
+    -0.466723,
+    -0.111103,
+    -0.877397
+   ]
+  },
+  "StormTutorialPlanetFlyby3": {
+   "parent": "default",
+   "key": [
+    -0.339454,
+    0.158434,
+    0.927184
+   ]
+  },
+  "StormTutorialPlanetFlyby4": {
+   "parent": "default",
+   "key": [
+    -0.529805,
+    -0.011005,
+    -0.848048
+   ]
+  },
+  "Storm_Portrait_D3BarbarianF_Wrath": {
+   "parent": "default",
+   "key": [
+    0.59918,
+    0.477292,
+    -0.642788
+   ]
+  },
+  "Storm_Portrait_Muradin_WCAV_Base": {
+   "parent": "default",
+   "key": [
+    -0.044658,
+    0.446624,
+    -0.893606
+   ]
+  },
+  "Storm_Portrait_Muradin_WCAV_Var12": {
+   "parent": "default",
+   "key": [
+    -0.044658,
+    0.446624,
+    -0.893606
+   ]
+  },
+  "Storm_Portrait_Muradin_WCAV_Var22": {
+   "parent": "default",
+   "key": [
+    -0.044658,
+    0.446624,
+    -0.893606
+   ]
+  },
+  "Storm_Portrait_SgtHammer_Doom": {
+   "parent": "default",
+   "key": [
+    0.38873,
+    0.906976,
+    -0.162121
+   ]
+  },
+  "Storm_Portrait_D3BarbarianF_Blood": {
+   "parent": "default",
+   "key": [
+    -0.424921,
+    0.392243,
+    -0.815835
+   ]
+  },
+  "Storm_Portrait_D3BarbarianF_Nordic": {
+   "parent": "default",
+   "key": [
+    -0.733034,
+    0.162912,
+    -0.660395
+   ]
+  },
+  "Storm_Portrait_D3BarbarianF_Super": {
+   "parent": "default",
+   "key": [
+    -0.693385,
+    0.042045,
+    -0.71934
+   ]
+  },
+  "Storm_Dead": {
+   "parent": "default",
+   "key": [
+    0.724693,
+    -0.124265,
+    -0.677775
+   ]
+  },
+  "Storm_Portrait_Diablo_Azure": {
+   "parent": "default",
+   "key": [
+    0.22322,
+    0.413009,
+    -0.882948
+   ]
+  },
+  "Storm_Portrait_Diablo_Toxic": {
+   "parent": "default",
+   "key": [
+    0.22322,
+    0.413009,
+    -0.882948
+   ]
+  },
+  "Storm_Portrait_DragonKnight": {
+   "parent": "default",
+   "key": [
+    -0.583723,
+    0.222902,
+    -0.780757
+   ]
+  },
+  "Storm_Portrait_SgtHammer_Base": {
+   "parent": "default",
+   "key": [
+    0.445143,
+    0.873643,
+    -0.196459
+   ]
+  },
+  "Storm_ShopModelLight_Anubarak": {
+   "parent": "default",
+   "key": [
+    -0.627507,
+    0.439385,
+    -0.642788
+   ]
+  },
+  "Storm_ShopModelLight_AnubarakSkin1": {
+   "parent": "default",
+   "key": [
+    -0.627507,
+    0.439385,
+    -0.642788
+   ]
+  },
+  "Storm_ShopModelLight_AnubarakSkin2": {
+   "parent": "default",
+   "key": [
+    -0.627507,
+    0.439385,
+    -0.642788
+   ]
+  },
+  "Storm_ShopModelLight_Arthas": {
+   "parent": "default",
+   "key": [
+    -0.745784,
+    0.416463,
+    -0.519966
+   ]
+  },
+  "Storm_ShopModelLight_ArthasSkin1": {
+   "parent": "default",
+   "key": [
+    -0.745784,
+    0.416463,
+    -0.519966
+   ]
+  },
+  "Storm_ShopModelLight_ArthasSkin2": {
+   "parent": "default",
+   "key": [
+    -0.745784,
+    0.416463,
+    -0.519966
+   ]
+  },
+  "Storm_ShopModelLight_CyberWolf": {
+   "parent": "default",
+   "key": [
+    -0.692676,
+    0.052447,
+    -0.71934
+   ]
+  },
+  "Storm_ShopModelLight_DemonHunter": {
+   "parent": "default",
+   "key": [
+    -0.692676,
+    0.052447,
+    -0.71934
+   ]
+  },
+  "Storm_ShopModelLight_DemonHunterSkin1": {
+   "parent": "default",
+   "key": [
+    -0.692676,
+    0.052447,
+    -0.71934
+   ]
+  },
+  "Storm_ShopModelLight_DemonHunterSkin2": {
+   "parent": "default",
+   "key": [
+    0.011113,
+    0.489713,
+    -0.871813
+   ]
+  },
+  "Storm_ShopModelLight_Diablo": {
+   "parent": "default",
+   "key": [
+    -0.627507,
+    0.439385,
+    -0.642788
+   ]
+  },
+  "Storm_ShopModelLight_DiabloSkin1": {
+   "parent": "default",
+   "key": [
+    -0.627507,
+    0.439385,
+    -0.642788
+   ]
+  },
+  "Storm_ShopModelLight_DiabloSkin2": {
+   "parent": "default",
+   "key": [
+    -0.627507,
+    0.439385,
+    -0.642788
+   ]
+  },
+  "Storm_ShopModelLight_Kerrigan": {
+   "parent": "default",
+   "key": [
+    -0.555363,
+    -0.065338,
+    -0.829038
+   ]
+  },
+  "Storm_ShopModelLight_KerriganSkin1": {
+   "parent": "default",
+   "key": [
+    -0.555363,
+    -0.065338,
+    -0.829038
+   ]
+  },
+  "Storm_ShopModelLight_KerriganSkin2": {
+   "parent": "default",
+   "key": [
+    -0.555363,
+    -0.065338,
+    -0.829038
+   ]
+  },
+  "Storm_ShopModelLight_RainbowPony": {
+   "parent": "default",
+   "key": [
+    0.571716,
+    0.172611,
+    -0.802088
+   ]
+  },
+  "Storm_ShopModelLight_Stitches": {
+   "parent": "default",
+   "key": [
+    -0.680522,
+    0.278409,
+    -0.677775
+   ]
+  },
+  "Storm_ShopModelLight_StitchesSkin1": {
+   "parent": "default",
+   "key": [
+    -0.680522,
+    0.278409,
+    -0.677775
+   ]
+  },
+  "Storm_ShopModelLight_StitchesSkin2": {
+   "parent": "default",
+   "key": [
+    -0.680522,
+    0.278409,
+    -0.677775
+   ]
+  },
+  "Storm_ShopModelLight_Tassadar": {
+   "parent": "default",
+   "key": [
+    -0.627507,
+    0.439385,
+    -0.642788
+   ]
+  },
+  "Storm_ShopModelLight_TassadarSkin1": {
+   "parent": "default",
+   "key": [
+    -0.627507,
+    0.439385,
+    -0.642788
+   ]
+  },
+  "Storm_ShopModelLight_TassadarSkin2": {
+   "parent": "default",
+   "key": [
+    -0.627507,
+    0.439385,
+    -0.642788
+   ]
+  },
+  "Storm_ShopModelLight_Tinker": {
+   "parent": "default",
+   "key": [
+    0.475165,
+    0.066273,
+    -0.877397
+   ]
+  },
+  "Storm_ShopModelLight_TinkerSkin1": {
+   "parent": "default",
+   "key": [
+    0.475165,
+    0.066273,
+    -0.877397
+   ]
+  },
+  "Storm_ShopModelLight_TinkerSkin2": {
+   "parent": "default",
+   "key": [
+    0.475165,
+    0.066273,
+    -0.877397
+   ]
+  },
+  "Storm_ShopModelLight_Tyrael": {
+   "parent": "default",
+   "key": [
+    0.690789,
+    0.073214,
+    -0.71934
+   ]
+  },
+  "Storm_ShopModelLight_TyraelSkin1": {
+   "parent": "default",
+   "key": [
+    0.690789,
+    0.073214,
+    -0.71934
+   ]
+  },
+  "Storm_ShopModelLight_TyraelSkin2": {
+   "parent": "default",
+   "key": [
+    0.577348,
+    -0.213796,
+    -0.788011
+   ]
+  },
+  "Storm_ShopModelLight_TyraelSkinInfernalChampion": {
+   "parent": "default",
+   "key": [
+    0.577348,
+    -0.213796,
+    -0.788011
+   ]
+  },
+  "Storm_ShopModelLight_TyraelSkinInfernalChampionMagic": {
+   "parent": "default",
+   "key": [
+    0.577348,
+    -0.213796,
+    -0.788011
+   ]
+  },
+  "Storm_ShopModelLight_TyraelSkinInfernalChampionPoison": {
+   "parent": "default",
+   "key": [
+    0.577348,
+    -0.213796,
+    -0.788011
+   ]
+  },
+  "Storm_ShopModelLight_Uther": {
+   "parent": "default",
+   "key": [
+    -0.441527,
+    -0.18769,
+    -0.877397
+   ]
+  },
+  "Storm_ShopModelLight_UtherSkin1": {
+   "parent": "default",
+   "key": [
+    -0.395381,
+    0.02259,
+    -0.918239
+   ]
+  },
+  "Storm_ShopModelLight_UtherSkin2": {
+   "parent": "default",
+   "key": [
+    -0.395381,
+    0.02259,
+    -0.918239
+   ]
+  },
+  "Storm_ShopModelLight_Warfield": {
+   "parent": "default",
+   "key": [
+    0.475165,
+    0.066273,
+    -0.877397
+   ]
+  },
+  "Storm_ShopModelLight_WarfieldSkin1": {
+   "parent": "default",
+   "key": [
+    0.556993,
+    0.586743,
+    -0.587785
+   ]
+  },
+  "Storm_ShopModelLight_WarfieldSkin2": {
+   "parent": "default",
+   "key": [
+    -0.827307,
+    0.11686,
+    -0.54946
+   ]
+  },
+  "Storm_ShopModelLight_Zagara": {
+   "parent": "default",
+   "key": [
+    -0.87487,
+    -0.06655,
+    -0.479764
+   ]
+  },
+  "Storm_ShopModelLight_ZagaraSkin1": {
+   "parent": "default",
+   "key": [
+    -0.680522,
+    0.278409,
+    -0.677775
+   ]
+  },
+  "Storm_ShopModelLight_ZagaraSkin2": {
+   "parent": "default",
+   "key": [
+    -0.87487,
+    -0.06655,
+    -0.479764
+   ]
+  },
+  "Storm_ShopModelLight_ZeratulSkin1": {
+   "parent": "default",
+   "key": [
+    -0.692676,
+    0.052447,
+    -0.71934
+   ]
+  },
+  "Storm_ShopModelLight_ZeratulSkin2": {
+   "parent": "default",
+   "key": [
+    -0.692676,
+    0.052447,
+    -0.71934
+   ]
+  },
+  "Storm_RavenCourt_Curse": {
+   "parent": "default",
+   "key": [
+    0.647974,
+    -0.12748,
+    -0.750919
+   ]
+  },
+  "StormLightStoreBase": {
+   "parent": "default",
+   "key": [
+    0,
+    0.5,
+    -0.866025
+   ]
+  },
+  "StormShopModelLightKerriganDemonQueen": {
+   "parent": "default",
+   "key": [
+    -0.555363,
+    -0.065338,
+    -0.829038
+   ]
+  },
+  "Storm_Portrait_Tassadar_DarkTemplar": {
+   "parent": "default",
+   "key": [
+    0.503398,
+    0.321318,
+    -0.802088
+   ]
+  },
+  "Storm_Portrait_Tyrael_Pink": {
+   "parent": "default",
+   "key": [
+    0.797058,
+    -0.089686,
+    -0.597206
+   ]
+  },
+  "HeroSelectDimmed": {
+   "parent": "default",
+   "key": [
+    0.571716,
+    0.172611,
+    -0.802088
+   ]
+  },
+  "HeroSelectLit": {
+   "parent": "default",
+   "key": [
+    0.571716,
+    0.172611,
+    -0.802088
+   ]
+  },
+  "StormTransylvania": {
+   "parent": "default",
+   "key": [
+    -0.424947,
+    -0.580404,
+    -0.694659
+   ]
+  },
+  "Blinded": {
+   "parent": "default",
+   "key": [
+    -0.56302,
+    0.492643,
+    -0.66356
+   ]
+  },
+  "StormDesertWorld": {
+   "parent": "default",
+   "key": [
+    0.724693,
+    -0.124265,
+    -0.677775
+   ]
+  },
+  "StormIceWorld": {
+   "parent": "default",
+   "key": [
+    0.447469,
+    -0.520231,
+    -0.727414
+   ]
+  },
+  "StormAshenvale": {
+   "parent": "default",
+   "key": [
+    0.724693,
+    -0.124265,
+    -0.677775
+   ]
+  },
+  "StormCyberworld": {
+   "parent": "default",
+   "key": [
+    0.708411,
+    -0.124912,
+    -0.694659
+   ]
+  },
+  "StormSnowWorld": {
+   "parent": "default",
+   "key": [
+    0.447469,
+    -0.520231,
+    -0.727414
+   ]
+  },
+  "StormEgyptWorld": {
+   "parent": "default",
+   "key": [
+    0.598355,
+    0.335918,
+    -0.727414
+   ]
+  },
+  "StormTwilightWorld": {
+   "parent": "default",
+   "key": [
+    0.554487,
+    -0.418443,
+    -0.71934
+   ]
+  },
+  "Dead": {
+   "parent": "default",
+   "key": [
+    0.724693,
+    -0.124265,
+    -0.677775
+   ]
+  },
+  "StormGardenofTerrorNight": {
+   "parent": "default",
+   "key": [
+    -0.469327,
+    0.384003,
+    -0.795156
+   ]
+  },
+  "StormGardenofTerrorTransition": {
+   "parent": "default",
+   "key": [
+    0.647974,
+    -0.12748,
+    -0.750919
+   ]
+  },
+  "StormGardenofTerrorNight_Low": {
+   "key": [
+    -0.469327,
+    0.384003,
+    -0.795156
+   ]
+  },
+  "LuxoriaCrypts": {
+   "parent": "default",
+   "key": [
+    0.33464,
+    0.627515,
+    -0.703023
+   ]
+  },
+  "StormHeaven": {
+   "parent": "default",
+   "key": [
+    0.59098,
+    0.086004,
+    -0.802088
+   ]
+  },
+  "Storm_Stiches_GFWinter_Portrait": {
+   "parent": "default",
+   "key": [
+    0.754127,
+    -0.641813,
+    -0.139173
+   ]
+  },
+  "Tradeshow_Left": {
+   "parent": "default",
+   "key": [
+    -0.579172,
+    -0.257379,
+    -0.773509
+   ]
+  },
+  "Tradeshow_Right": {
+   "parent": "default",
+   "key": [
+    0.722709,
+    0.082598,
+    -0.686199
+   ]
+  },
+  "UnrankedMode_Draft": {
+   "parent": "default",
+   "key": [
+    0.149044,
+    0.606798,
+    -0.780757
+   ]
+  },
+  "UnrankedMode_DraftRight": {
+   "parent": "default",
+   "key": [
+    0.864111,
+    -0.057546,
+    -0.5
+   ]
+  },
+  "UnrankedMode_DraftRight_Low": {
+   "parent": "default",
+   "key": [
+    0.970197,
+    -0.124457,
+    -0.207912
+   ]
+  },
+  "UnrankedMode_Draft_Low": {
+   "parent": "default",
+   "key": [
+    -0.032063,
+    0.650912,
+    -0.758476
+   ]
+  },
+  "inDev_StormLight": {
+   "parent": "default",
+   "key": [
+    0.220456,
+    0.88158,
+    -0.417391
+   ]
+  },
+  "GPU2020EventLight1": {
+   "parent": "default",
+   "key": [
+    -0.160765,
+    0.091848,
+    -0.98271
+   ]
+  },
+  "GPU2020EventLight2": {
+   "parent": "default",
+   "key": [
+    -0.104025,
+    0.092455,
+    -0.990268
+   ]
+  },
+  "StormLightMiniPortraitBase": {
+   "parent": "default",
+   "key": [
+    0.119155,
+    0.984644,
+    -0.127584
+   ]
+  },
+  "StormCastleWorld": {},
+  "StormKingsCrestFilmicTest": {},
+  "Char": {
+   "key": [
+    0.647974,
+    -0.12748,
+    -0.750919
+   ]
+  },
+  "CustomLight": {
+   "key": [
+    0.647974,
+    -0.12748,
+    -0.750919
+   ]
+  },
+  "Day": {
+   "parent": "default",
+   "key": [
+    0.391078,
+    -0.111771,
+    -0.913545
+   ]
+  },
+  "EditorTestLight": {
+   "key": [
+    0.647974,
+    -0.12748,
+    -0.750919
+   ]
+  },
+  "MeinhoffCampaignNight": {
+   "parent": "default",
+   "key": [
+    0.391078,
+    -0.111771,
+    -0.913545
+   ]
+  },
+  "StormLightLootBanner": {
+   "key": [
+    0.586706,
+    0.54692,
+    -0.597206
+   ]
+  },
+  "StormLightLootBanner_Low": {
+   "parent": "default",
+   "key": [
+    0.359633,
+    0.709181,
+    -0.606405
+   ]
+  },
+  "StormLightLootChest": {
+   "key": [
+    -0.380109,
+    0.690274,
+    -0.615661
+   ]
+  },
+  "StormLightLootChestBG": {
+   "parent": "default",
+   "key": [
+    -0.027147,
+    -0.931105,
+    -0.363739
+   ]
+  },
+  "StormLightLootChestBG_Low": {
+   "parent": "default",
+   "key": [
+    -0.027147,
+    -0.931105,
+    -0.363739
+   ]
+  },
+  "StormLightLootChestCloseup": {
+   "parent": "default",
+   "key": [
+    -0.337232,
+    0.446062,
+    -0.829038
+   ]
+  },
+  "StormLightLootChestCloseup_Lunar18": {
+   "parent": "default",
+   "key": [
+    -0.129768,
+    0.899414,
+    -0.417391
+   ]
+  },
+  "StormLightLootChestHallowsEnd": {
+   "parent": "default",
+   "key": [
+    0.371133,
+    0.858872,
+    0.352985
+   ]
+  },
+  "StormLightLootChestNonHilightedLeft": {
+   "parent": "default",
+   "key": [
+    -0.679715,
+    0.679715,
+    -0.275638
+   ]
+  },
+  "StormLightLootChestNonHilightedLeft_Lunar18": {
+   "parent": "default",
+   "key": [
+    -0.313257,
+    0.707238,
+    -0.633786
+   ]
+  },
+  "StormLightLootChestNonHilightedLeft_Lunar182": {
+   "parent": "default",
+   "key": [
+    -0.313257,
+    0.707238,
+    -0.633786
+   ]
+  },
+  "StormLightLootChestNonHilightedRight": {
+   "parent": "default",
+   "key": [
+    -0.679715,
+    0.679715,
+    -0.275638
+   ]
+  },
+  "StormLightLootChestHallowsEndNonHilightedLeft": {
+   "parent": "default",
+   "key": [
+    -0.679715,
+    0.679715,
+    -0.275638
+   ]
+  },
+  "StormLightLootChestHallowsEndNonHilightedRight": {
+   "parent": "default",
+   "key": [
+    -0.679715,
+    0.679715,
+    -0.275638
+   ]
+  },
+  "StormLightLootChestNonHilightedRight_Lunar18": {
+   "parent": "default",
+   "key": [
+    -0.313257,
+    0.707238,
+    -0.633786
+   ]
+  },
+  "StormLightLootChestSummer18NonHighlightedRight": {
+   "parent": "default",
+   "key": [
+    -0.679715,
+    0.679715,
+    -0.275638
+   ]
+  },
+  "StormLightLootChestSummer18NonHilightedLeft": {
+   "parent": "default",
+   "key": [
+    -0.679715,
+    0.679715,
+    -0.275638
+   ]
+  },
+  "StormLightLootChest_Low": {
+   "parent": "default",
+   "key": [
+    0.027739,
+    0.913124,
+    -0.406736
+   ]
+  },
+  "StormLightLootChest_Lunar18": {
+   "parent": "default",
+   "key": [
+    0.011431,
+    0.308806,
+    -0.951056
+   ]
+  },
+  "StormLightLootChest_Lunar18_Low": {
+   "parent": "default",
+   "key": [
+    0.011431,
+    0.308806,
+    -0.951056
+   ]
+  },
+  "StormLightLootChest_Summer18": {
+   "parent": "default",
+   "key": [
+    0.011431,
+    0.308806,
+    -0.951056
+   ]
+  },
+  "StormLightLootChest_Toy18": {
+   "parent": "default",
+   "key": [
+    -0.010646,
+    0.677691,
+    -0.735269
+   ]
+  },
+  "StormLightLootChest_Toy18Left": {
+   "parent": "default",
+   "key": [
+    0,
+    0.559193,
+    -0.829038
+   ]
+  },
+  "StormLightLootChest_Toy18Front": {
+   "parent": "default",
+   "key": [
+    -0.010646,
+    0.677691,
+    -0.735269
+   ]
+  },
+  "StormLightLootChest_Toy18Right": {
+   "parent": "default",
+   "key": [
+    0,
+    0.559193,
+    -0.829038
+   ]
+  },
+  "StormLightLootChest_spring19": {
+   "parent": "default",
+   "key": [
+    0.57683,
+    0.526165,
+    -0.624834
+   ]
+  },
+  "StormLightLootChest_spring19_BG": {
+   "parent": "default",
+   "key": [
+    -0.679715,
+    0.679715,
+    -0.275638
+   ]
+  },
+  "StormLightLootChest_Mecha19": {
+   "parent": "default",
+   "key": [
+    0.210201,
+    0.453669,
+    -0.866026
+   ]
+  },
+  "StormLightLootChest_Mecha19_BG": {
+   "parent": "default",
+   "key": [
+    -0.022396,
+    0.448292,
+    -0.893606
+   ]
+  },
+  "StormLightLootCoin": {
+   "key": [
+    0.315553,
+    0.812702,
+    -0.489839
+   ]
+  },
+  "StormLightLootCoin_Low": {
+   "parent": "default",
+   "key": [
+    0.070627,
+    0.777557,
+    -0.624834
+   ]
+  },
+  "StormArenaGardens": {
+   "parent": "default",
+   "key": [
+    0.598355,
+    0.335918,
+    -0.727414
+   ]
+  },
+  "StormSoulEaterSpawnFinal": {
+   "parent": "default",
+   "key": [
+    0.647974,
+    -0.12748,
+    -0.750919
+   ]
+  },
+  "StormSoulEaterSpawnTransition": {
+   "parent": "default",
+   "key": [
+    0.647974,
+    -0.12748,
+    -0.750919
+   ]
+  },
+  "LuxoriaCrypts_Low": {
+   "parent": "default",
+   "key": [
+    0.429393,
+    0.513184,
+    -0.743145
+   ]
+  },
+  "StormHoldoutEventActiveLight": {
+   "key": [
+    0.384003,
+    0.469327,
+    -0.795156
+   ]
+  },
+  "StormHoldoutZergActiveLight": {
+   "parent": "default",
+   "key": [
+    0.384003,
+    0.469327,
+    -0.795156
+   ]
+  },
+  "Storm_OWHana": {
+   "parent": "default",
+   "key": [
+    0.598355,
+    0.335918,
+    -0.727414
+   ]
+  },
+  "StarcraftBraxis": {
+   "parent": "default",
+   "key": [
+    0.557913,
+    0.33682,
+    -0.758476
+   ]
+  },
+  "StormWinterCrest": {
+   "parent": "default",
+   "key": [
+    0.606636,
+    0.282363,
+    -0.743145
+   ]
+  },
+  "Storm_OWVol": {
+   "key": [
+    0.629472,
+    0.293795,
+    -0.71934
+   ]
+  },
+  "Storm_Portrait_VolskayaVehicle": {
+   "parent": "default",
+   "key": [
+    0.155379,
+    0.693986,
+    -0.703023
+   ]
+  },
+  "Storm_Portrait_VolskayaVehicleGunner": {
+   "parent": "default",
+   "key": [
+    0.155379,
+    0.693986,
+    -0.703023
+   ]
+  },
+  "StarcraftZion": {
+   "parent": "default",
+   "key": [
+    -0.458664,
+    0.437391,
+    -0.773509
+   ]
+  },
+  "Home_Alarak": {
+   "parent": "default",
+   "key": [
+    -0.009843,
+    0.841736,
+    -0.5398
+   ]
+  },
+  "Home_Alarak_Low": {
+   "parent": "default",
+   "key": [
+    0.136246,
+    0.917119,
+    -0.374607
+   ]
+  },
+  "Home_Alexstrasza": {
+   "parent": "default",
+   "key": [
+    0.321199,
+    0.556783,
+    -0.766044
+   ]
+  },
+  "Home_Alexstrasza_Low": {
+   "parent": "default",
+   "key": [
+    0.095634,
+    0.860729,
+    -0.5
+   ]
+  },
+  "Home_Auriel": {
+   "parent": "default",
+   "key": [
+    -0.452666,
+    0.653733,
+    -0.606405
+   ]
+  },
+  "Home_Auriel_Low": {
+   "parent": "default",
+   "key": [
+    -0.3879,
+    0.545224,
+    -0.743145
+   ]
+  },
+  "Home_Butcher": {},
+  "Home_Deckard": {
+   "parent": "default",
+   "key": [
+    -0.532106,
+    -0.24971,
+    -0.809017
+   ]
+  },
+  "Home_Deckard_Low": {
+   "parent": "default",
+   "key": [
+    -0.859625,
+    0.105092,
+    -0.5
+   ]
+  },
+  "Home_DVa": {
+   "parent": "default",
+   "key": [
+    0.222934,
+    0.401356,
+    -0.888377
+   ]
+  },
+  "Home_DVa_Low": {
+   "parent": "default",
+   "key": [
+    -0.561706,
+    0.520874,
+    -0.642788
+   ]
+  },
+  "Home_Fenix": {
+   "parent": "default",
+   "key": [
+    -0.531561,
+    -0.581725,
+    -0.615661
+   ]
+  },
+  "Home_Fenix_Low": {
+   "parent": "default",
+   "key": [
+    -0.350606,
+    -0.721402,
+    -0.597206
+   ]
+  },
+  "Home_Firebat": {
+   "parent": "default",
+   "key": [
+    -0.141075,
+    -0.521039,
+    -0.841794
+   ]
+  },
+  "Home_Firebat_Low": {
+   "parent": "default",
+   "key": [
+    -0.659782,
+    0.188566,
+    -0.727414
+   ]
+  },
+  "Home_Garrosh": {
+   "parent": "default",
+   "key": [
+    -0.257428,
+    -0.190278,
+    -0.947378
+   ]
+  },
+  "Home_Guldan_Low": {
+   "parent": "default",
+   "key": [
+    0.92714,
+    -0.009062,
+    -0.374607
+   ]
+  },
+  "Home_Hanzo_Entrance": {
+   "parent": "default",
+   "key": [
+    0.082729,
+    0.977016,
+    -0.196459
+   ]
+  },
+  "Home_Hanzo_Entrance_Low": {
+   "parent": "default",
+   "key": [
+    0.082729,
+    0.977016,
+    -0.196459
+   ]
+  },
+  "Home_Hanzo_Stand_Low": {
+   "parent": "default",
+   "key": [
+    0.082729,
+    0.977016,
+    -0.196459
+   ]
+  },
+  "Home_Hanzo_Stand": {
+   "parent": "default",
+   "key": [
+    0.082729,
+    0.977016,
+    -0.196459
+   ]
+  },
+  "Home_Junkrat_Airborn": {
+   "parent": "default",
+   "key": [
+    0.471741,
+    0.553707,
+    -0.686199
+   ]
+  },
+  "Home_Junkrat_Airborn_Low": {
+   "parent": "default",
+   "key": [
+    0.471741,
+    0.553707,
+    -0.686199
+   ]
+  },
+  "Home_Junkrat_OnGround": {
+   "parent": "default",
+   "key": [
+    0.618678,
+    0.637535,
+    -0.459114
+   ]
+  },
+  "Home_Junkrat_OnGround_Low": {
+   "parent": "default",
+   "key": [
+    -0.202789,
+    0.92542,
+    -0.320117
+   ]
+  },
+  "Storm_Light_Home_KelThuzad": {
+   "parent": "default",
+   "key": [
+    0.438027,
+    0.812146,
+    -0.385423
+   ]
+  },
+  "Storm_Light_Home_KelThuzad_BGElemental": {
+   "parent": "default",
+   "key": [
+    0.627049,
+    0.465179,
+    -0.624834
+   ]
+  },
+  "Storm_Light_Home_KelThuzad_BGJaina": {
+   "parent": "default",
+   "key": [
+    0.823285,
+    0.203438,
+    -0.529919
+   ]
+  },
+  "Storm_Light_Home_KelThuzad_BGJaina_Low": {
+   "parent": "default",
+   "key": [
+    0.753221,
+    0.415286,
+    -0.510093
+   ]
+  },
+  "Storm_Light_Home_KelThuzad_Entrance": {
+   "parent": "default",
+   "key": [
+    0.438027,
+    0.812146,
+    -0.385423
+   ]
+  },
+  "Storm_Light_Home_KelThuzad_Entrance_Low": {
+   "parent": "default",
+   "key": [
+    0.438027,
+    0.812146,
+    -0.385423
+   ]
+  },
+  "Storm_Light_Home_KelThuzad_Low": {
+   "parent": "default",
+   "key": [
+    -0.475148,
+    0.66319,
+    -0.578285
+   ]
+  },
+  "Home_Maiev_Entrance_Low": {
+   "parent": "default",
+   "key": [
+    0.066179,
+    -0.022053,
+    -0.997564
+   ]
+  },
+  "Home_Maiev_Idle": {
+   "parent": "default",
+   "key": [
+    0.41495,
+    0.907166,
+    0.069756
+   ]
+  },
+  "Home_Maiev_Entrance": {
+   "parent": "default",
+   "key": [
+    0.41495,
+    0.907166,
+    0.069756
+   ]
+  },
+  "Home_Maiev_Idle_Low": {
+   "parent": "default",
+   "key": [
+    -0.419659,
+    0.888597,
+    -0.185153
+   ]
+  },
+  "Home_Malthael": {
+   "parent": "default",
+   "key": [
+    -0.410606,
+    -0.680938,
+    -0.606405
+   ]
+  },
+  "Home_Malthael_Low": {
+   "parent": "default",
+   "key": [
+    -0.609212,
+    -0.589955,
+    -0.529919
+   ]
+  },
+  "Home_Probius_Background_Entrance": {
+   "parent": "default",
+   "key": [
+    0.526112,
+    0.605435,
+    -0.597206
+   ]
+  },
+  "Home_Probius_Background_Entrance_Low": {
+   "parent": "default",
+   "key": [
+    0.526112,
+    0.605435,
+    -0.597206
+   ]
+  },
+  "Home_Probius_Background_Spotlight": {
+   "parent": "default",
+   "key": [
+    0.526112,
+    0.605435,
+    -0.597206
+   ]
+  },
+  "Home_Probius_Background_Spotlight_Low": {
+   "parent": "default",
+   "key": [
+    0.526112,
+    0.605435,
+    -0.597206
+   ]
+  },
+  "Home_Probius_Entrance": {
+   "parent": "default",
+   "key": [
+    0.526112,
+    0.605435,
+    -0.597206
+   ]
+  },
+  "Home_Probius_Entrance_Low": {
+   "parent": "default",
+   "key": [
+    0.171703,
+    0.600779,
+    -0.780757
+   ]
+  },
+  "Home_Probius_Spotlight": {
+   "parent": "default",
+   "key": [
+    0.526112,
+    0.605435,
+    -0.597206
+   ]
+  },
+  "Home_Probius_Spotlight_Low": {
+   "parent": "default",
+   "key": [
+    0.430432,
+    0.805788,
+    -0.406736
+   ]
+  },
+  "Home_Samuro": {
+   "parent": "default",
+   "key": [
+    0.632333,
+    -0.042886,
+    -0.773509
+   ]
+  },
+  "Home_Samuro_Low": {
+   "parent": "default",
+   "key": [
+    0.704138,
+    -0.472626,
+    -0.529919
+   ]
+  },
+  "Home_Stukov": {
+   "parent": "default",
+   "key": [
+    0.419895,
+    0.232082,
+    -0.877397
+   ]
+  },
+  "Home_Stukov_Low": {
+   "parent": "default",
+   "key": [
+    0.336664,
+    0.568136,
+    -0.750919
+   ]
+  },
+  "Home_Stukov_Background": {
+   "parent": "default",
+   "key": [
+    0.419895,
+    0.232082,
+    -0.877397
+   ]
+  },
+  "Home_Stukov_Background_Low": {
+   "parent": "default",
+   "key": [
+    0.336664,
+    0.568136,
+    -0.750919
+   ]
+  },
+  "Home_Ragnaros": {
+   "parent": "default",
+   "key": [
+    -0.512565,
+    0.481163,
+    -0.711168
+   ]
+  },
+  "Home_Ragnaros_Low": {
+   "parent": "default",
+   "key": [
+    -0.512565,
+    0.481163,
+    -0.711168
+   ]
+  },
+  "Storm_Portrait_Tyrael_SeraphimChampion": {},
+  "Storm_Light_Valeera_Base_Home_A": {
+   "parent": "default",
+   "key": [
+    -0.759074,
+    -0.640559,
+    -0.116151
+   ]
+  },
+  "Storm_Light_Valeera_Base_Home_A_Low": {
+   "parent": "default",
+   "key": [
+    0.333637,
+    0.886686,
+    -0.320117
+   ]
+  },
+  "Storm_Light_Valeera_Base_Home_B": {
+   "parent": "default",
+   "key": [
+    -0.604738,
+    -0.796425,
+    0
+   ]
+  },
+  "Storm_Light_Valeera_Base_Home_B_Low": {
+   "parent": "default",
+   "key": [
+    0.542653,
+    0.134997,
+    -0.829038
+   ]
+  },
+  "Home_Varian": {
+   "parent": "default",
+   "key": [
+    -0.804504,
+    0.350142,
+    -0.479764
+   ]
+  },
+  "Home_Varian_Low": {
+   "parent": "default",
+   "key": [
+    -0.795838,
+    0.369416,
+    -0.479764
+   ]
+  },
+  "Home_Zarya": {
+   "parent": "default",
+   "key": [
+    -0.250087,
+    0.478372,
+    -0.841794
+   ]
+  },
+  "Home_Zarya_Low": {
+   "parent": "default",
+   "key": [
+    0.368733,
+    0.558365,
+    -0.743145
+   ]
+  },
+  "Home_Zuljin": {
+   "parent": "default",
+   "key": [
+    0.754127,
+    -0.641813,
+    0.139173
+   ]
+  },
+  "Home_Zuljin_Low": {
+   "parent": "default",
+   "key": [
+    -0.882487,
+    -0.028504,
+    -0.469471
+   ]
+  },
+  "Storm_Light_Zuljin_Base_Home_A": {
+   "parent": "default"
+  },
+  "Storm_Portrait_Zuljin_EmberlordUnnamed": {
+   "parent": "default",
+   "key": [
+    0.316829,
+    0.437039,
+    -0.841794
+   ]
+  },
+  "Storm_Portrait_Zuljin_Fire_Var1Unnamed": {
+   "parent": "default",
+   "key": [
+    0.316829,
+    0.437039,
+    -0.841794
+   ]
+  },
+  "Storm_Portrait_Zuljin_Fire_Var2Unnamed": {
+   "parent": "default",
+   "key": [
+    0.316829,
+    0.437039,
+    -0.841794
+   ]
+  },
+  "Storm_Portrait_Zuljin_Fire_Var3Unnamed": {
+   "parent": "default",
+   "key": [
+    0.316829,
+    0.437039,
+    -0.841794
+   ]
+  },
+  "Storm_Portrait_Zuljin_MasterUnnamed": {
+   "parent": "default",
+   "key": [
+    -0.407461,
+    0.621482,
+    -0.669131
+   ]
+  },
+  "Storm_Portrait_Zuljin_Master_Var1Unnamed": {
+   "parent": "default",
+   "key": [
+    -0.407461,
+    0.621482,
+    -0.669131
+   ]
+  },
+  "Storm_Portrait_Zuljin_Master_Var2Unnamed": {
+   "parent": "default",
+   "key": [
+    -0.407461,
+    0.621482,
+    -0.669131
+   ]
+  },
+  "Storm_Portrait_Zuljin_Master_Var3Unnamed": {
+   "parent": "default",
+   "key": [
+    -0.407461,
+    0.621482,
+    -0.669131
+   ]
+  },
+  "Storm_Portrait_Zuljin_Var3": {
+   "parent": "default",
+   "key": [
+    0.109827,
+    0.538372,
+    -0.83552
+   ]
+  },
+  "Storm_Portrait_Zuljin_Var4": {
+   "parent": "default",
+   "key": [
+    0.109827,
+    0.538372,
+    -0.83552
+   ]
+  }
+ }
+}

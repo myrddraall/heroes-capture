@@ -103,6 +103,14 @@ def main() -> None:
     present = [t for t in tiles if tile_path(t).exists()]
     if not present:
         raise SystemExit(f"no screenshots in {tiles_dir}; run capture.py first")
+    # A screenshot that is entirely black is a failed grab, whatever its marker fit says; it
+    # would be pasted as a black box.
+    black = [t["index"] for t in present if (g := small(t["index"])) is not None and g.max() < 12]
+    if black:
+        log(f"  skipped {len(black)} all-black screenshots: {black}")
+        present = [t for t in present if t["index"] not in black]
+        tiles = [t for t in tiles if t["index"] not in black]
+        by_pos = {(t["row"], t["col"]): t for t in tiles}
     screen_w, screen_h = Image.open(tile_path(present[0])).size
 
     # Usable screenshots: not a failed black grab, not featureless void.

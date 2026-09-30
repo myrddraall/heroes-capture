@@ -19,12 +19,17 @@ const fixed = (n) => (Number.isInteger(n) ? `${n}.0` : n.toFixed(4));
  * @param {{ x: number, y: number }[]} o.tiles Camera targets, in map cells.
  * @param {boolean} o.hideStructures Hide structures (and kept map-mechanic units) too.
  * @param {number} o.distance Camera distance from its target.
+ * @param {number} [o.pitch] Camera pitch in degrees (90 is straight down).
+ * @param {number} [o.refitYaw] Yaw of the lighting-refit look before each tile (towards the
+ *   map's main light).
  * @param {{ fov: number, farClip: number } | null} o.lens Narrow field of view; null to leave the map's.
  * @param {boolean} o.unbound Lift the map's camera bounds so edge tiles are not clamped.
  * @param {boolean} o.keepMechanics Remove only heroes, minions, mercenaries, map creatures and
  *   summons, keeping map-mechanic units; otherwise every unit but structures is removed.
  * @param {boolean} o.freeze Pause model animations, so neighbouring screenshots match.
  * @param {boolean} o.showUi Leave the HUD up (to check what the HUD hiding affects).
+ * @param {boolean} [o.keepIntro] Let the intro cutscene play out instead of skipping it
+ *   (diagnostic: does skipping it leave the map's lighting half changed?).
  * @param {{ dx: number, dy: number }[] | null} o.markers Registration markers, as offsets in map
  *   cells from each tile's camera target: magenta single-digit text tags pinned to those ground
  *   points, shown (with a tile id label at the view's centre) only while that tile is on
@@ -34,11 +39,14 @@ export function captureScript({
   tiles,
   hideStructures,
   distance,
+  pitch = 90,
+  refitYaw = 180,
   lens,
   unbound,
   keepMechanics,
   freeze,
   showUi,
+  keepIntro = false,
   markers,
 }) {
   const n = tiles.length;
@@ -53,8 +61,7 @@ export function captureScript({
     else {
         CameraSetValue(lp_player, c_cameraValueFieldOfView, ${fixed(lens.fov)}, 0.0, -1, 10.0);
     }
-    CameraSetValue(lp_player, c_cameraValueFarClip, ${fixed(lens.farClip)}, 0.0, -1, 10.0);
-    CameraSetValue(lp_player, c_cameraValueYaw, 90.0, 0.0, -1, 10.0);`
+    CameraSetValue(lp_player, c_cameraValueFarClip, ${fixed(lens.farClip)}, 0.0, -1, 10.0);`
     : '';
   const boundsLine = unbound
     ? `
@@ -246,6 +253,7 @@ bool hrsCap_gt_Glyphs_Func (bool testConds, bool runActions) {
 const bool hrsCap_hideStructures = ${hideStructures};
 const fixed hrsCap_distance = ${fixed(distance)};
 fixed hrsCap_zoom = 0.0; // set by chat "zoom <distance>"; 0 means the planned distance
+fixed hrsCap_pitch = ${fixed(pitch)};
 fixed hrsCap_fov = 0.0; // set by chat "fov <degrees>"; 0 means the planned field of view
 const int hrsCap_tileCount = ${n};
 int hrsCap_currentTile = 0;
@@ -255,6 +263,11 @@ trigger hrsCap_gt_Tile;
 trigger hrsCap_gt_Sweep;
 trigger hrsCap_gt_Zoom;
 trigger hrsCap_gt_Quit;
+trigger hrsCap_gt_Freeze;
+trigger hrsCap_gt_Look;
+trigger hrsCap_gt_Normal;
+trigger hrsCap_gt_Clip;
+trigger hrsCap_gt_Pitch;
 trigger hrsCap_gt_Fov;${markerDecl}
 
 void hrsCap_InitTiles () {
@@ -300,7 +313,8 @@ ${removalLines}
 void hrsCap_ApplyCamera (int lp_player) {
     CameraLockInput(lp_player, true);
     CameraUseHeightDisplacement(lp_player, false);
-    CameraSetValue(lp_player, c_cameraValuePitch, 90.0, 0.0, -1, 10.0);
+    CameraSetValue(lp_player, c_cameraValuePitch, hrsCap_pitch, 0.0, -1, 10.0);
+    CameraSetValue(lp_player, c_cameraValueYaw, 90.0, 0.0, -1, 10.0);
     if ((hrsCap_zoom > 0.0)) {
         CameraSetValue(lp_player, c_cameraValueDistance, hrsCap_zoom, 0.0, -1, 10.0);
     }
@@ -309,25 +323,70 @@ void hrsCap_ApplyCamera (int lp_player) {
     }${lensLines}
 }
 
+// A camera like real play (distance 34, fov 45), shallow (pitch 35) and facing the map's main
+// light (yaw ${fixed(refitYaw)}). The game fits its lighting (the region the main light and
+// shadows are computed for) to the last camera it takes as normal and never refits it for the
+// capture camera: the rest of the map was drawn without the main light (a dark, straight-edged
+// area, a different one each match; dark boxes around holes). So every tile shows this camera
+// at its centre for a few frames first, and the game refits around the tile. Only the latest
+// look counts, and only a shallow look towards the light cleared every box (found with
+// --probe-light sweeps: pitch 52 or other yaws left boxes around some holes).
+void hrsCap_NormalCamera (int lp_player) {
+    CameraSetValue(lp_player, c_cameraValuePitch, 35.0, 0.0, -1, 10.0);
+    CameraSetValue(lp_player, c_cameraValueYaw, ${fixed(refitYaw)}, 0.0, -1, 10.0);
+    CameraSetValue(lp_player, c_cameraValueDistance, 34.0, 0.0, -1, 10.0);
+    CameraSetValue(lp_player, c_cameraValueFieldOfView, 45.0, 0.0, -1, 10.0);
+}
+
+
 ${markerFuncs}
 // No fog of war, no unexplored black, no HUD, no messages, a top-down camera.
 void hrsCap_Scene () {
     int lv_p;
     int lv_f;
 
+    // (Not VisEnable(c_visTypeFog, false): with fog of war off the reveal below stops working,
+    // and only the vision around one team's buildings is drawn lit; found with --probe-light.)
     lv_p = 0;
     for ( ; lv_p <= 15 ; lv_p += 1 ) {
         VisExploreArea(lv_p, RegionEntireMap(), true, false);
         VisRevealArea(lv_p, RegionEntireMap(), 0.0, false);
     }
+
     lv_p = 1;
     for ( ; lv_p <= 10 ; lv_p += 1 ) {
         if ((PlayerStatus(lv_p) == c_playerStatusActive)) {
 ${heroUiLines}            hrsCap_ApplyCamera(lv_p);
         }
     }
-${uiLines}${boundsLine}${freezeLines}
+${uiLines}${boundsLine}
     UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
+    // (With --freeze) paused animations, in a thread of its own: if the game rejects it, only
+    // that thread stops. --freeze itself broke the map script on Battlefield of Eternity
+    // (every interface panel showing), so it stays off.${freeze ? `
+    TriggerExecute(hrsCap_gt_Freeze, false, false);` : ''}
+}
+
+// --freeze: pause the animations of everything placed on the map.
+bool hrsCap_gt_Freeze_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }${freezeLines}
+    return true;
+}
+
+// The map's intro cutscene is still running for someone (the sweep stops it, and the game's
+// intro code then takes a moment to restore the camera and interface).
+bool hrsCap_IntroPlaying () {
+    int lv_p;
+
+    lv_p = 1;
+    for ( ; lv_p <= 10 ; lv_p += 1 ) {
+        if ((libMapM_gv_mMIntroCutscene[lv_p] != c_cutsceneNone) && (libMapM_gv_mMIntroCutsceneFinished[lv_p] == false)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool hrsCap_gt_Tile_Func (bool testConds, bool runActions) {
@@ -340,8 +399,21 @@ bool hrsCap_gt_Tile_Func (bool testConds, bool runActions) {
     if (!runActions) {
         return true;
     }
+    // Nothing until the intro is over, so its exit can't undo the scene (the capture keeps
+    // asking until it answers).
+    if (hrsCap_IntroPlaying()) {
+        return true;
+    }
     hrsCap_currentTile = lv_index;
     hrsCap_ClearUnits();
+    // The normal camera at the tile first, a few frames, so the game refits its lighting there
+    // (see hrsCap_NormalCamera); then the scene and the capture camera.
+    CameraPan(EventPlayer(), Point(hrsCap_tileX[lv_index], hrsCap_tileY[lv_index]), 0.0, -1, 10.0, false);
+    hrsCap_NormalCamera(EventPlayer());
+    Wait(0.25, c_timeGame);
+    if ((hrsCap_currentTile != lv_index)) {
+        return true;  // another tile was asked for meanwhile
+    }
     hrsCap_Scene();
     CameraPan(EventPlayer(), Point(hrsCap_tileX[lv_index], hrsCap_tileY[lv_index]), 0.0, -1, 10.0, false);${markerCall}
     return true;
@@ -358,27 +430,46 @@ bool hrsCap_gt_Zoom_Func (bool testConds, bool runActions) {
     return true;
 }
 
-// Skip the map's intro cutscene the way the game's own skip does: stop the cutscene. The
-// intro (libMapM_gf_PlayMapMechanicIntroForPlayer) waits for its cutscene to end and then
-// restores the camera, interface, sound and vision itself, so nothing is left half-done.
-void hrsCap_SkipIntro () {
+// Put back what the capture changed: the game's end-of-match sequence (the camera flying to a
+// core, the explosion) crashed the game the moment it started, with the interface hidden and
+// the camera far out of its normal range. Blizzard's own cinematic exit restores the same
+// things.
+void hrsCap_Restore () {
     int lv_p;
+    int lv_f;
+    camerainfo lv_cam;
 
+    TriggerEnable(hrsCap_gt_Sweep, false);${markers ? `
+    hrsCap_HideMarkers();` : ''}
+    lv_cam = CameraInfoDefault();
     lv_p = 1;
     for ( ; lv_p <= 10 ; lv_p += 1 ) {
-        if ((libMapM_gv_mMIntroCutscene[lv_p] != c_cutsceneNone) && (libMapM_gv_mMIntroCutsceneFinished[lv_p] == false)) {
-            CutsceneStop(libMapM_gv_mMIntroCutscene[lv_p]);
+        if ((PlayerStatus(lv_p) == c_playerStatusActive)) {
+            CameraSetValue(lv_p, c_cameraValuePitch, CameraInfoGetValue(lv_cam, c_cameraValuePitch), 0.0, -1, 10.0);
+            CameraSetValue(lv_p, c_cameraValueDistance, CameraInfoGetValue(lv_cam, c_cameraValueDistance), 0.0, -1, 10.0);
+            CameraSetValue(lv_p, c_cameraValueFieldOfView, CameraInfoGetValue(lv_cam, c_cameraValueFieldOfView), 0.0, -1, 10.0);
+            CameraSetValue(lv_p, c_cameraValueFarClip, CameraInfoGetValue(lv_cam, c_cameraValueFarClip), 0.0, -1, 10.0);
+            CameraSetValue(lv_p, c_cameraValueYaw, CameraInfoGetValue(lv_cam, c_cameraValueYaw), 0.0, -1, 10.0);
+            CameraUseHeightDisplacement(lv_p, true);
+            CameraLockInput(lv_p, false);
         }
+    }
+    UISetMode(PlayerGroupAll(), c_uiModeConsole, c_transitionDurationImmediate);
+    lv_f = c_syncFrameTypeFirst;
+    for ( ; lv_f <= c_syncFrameTypeLast ; lv_f += 1 ) {
+        UISetFrameVisible(PlayerGroupAll(), lv_f, true);
     }
 }
 
 // Chat "quit" ends the match for that player (no dialog, no score screen), back to the menu:
-// the next run's map only loads from there.
+// the next run's map only loads from there. A defeat, the ending real matches have.
 bool hrsCap_gt_Quit_Func (bool testConds, bool runActions) {
     if (!runActions) {
         return true;
     }
-    GameOver(EventPlayer(), c_gameOverTie, false, false);
+    hrsCap_Restore();
+    Wait(0.5, c_timeGame);
+    GameOver(EventPlayer(), c_gameOverDefeat, false, false);
     return true;
 }
 
@@ -405,6 +496,29 @@ void hrsCap_HideLabels () {
         if ((libMapM_gv_jungleCreepCamps[lv_c].lv_campHelperTextTagChaos != c_textTagNone)) {
             TextTagShow(libMapM_gv_jungleCreepCamps[lv_c].lv_campHelperTextTagChaos, PlayerGroupAll(), false);
         }
+        // The camp's name, description and respawn timer ("Bruiser Camp", "Defeat or bribe this
+        // camp", "0:29") are an interface panel per camp, created inside the game's
+        // MercCampPanel and positioned over the camp (the camp's own dialog is only the anchor).
+        if ((libMapM_gv_uIJungleCampPanel.lv_jungleCreepCampsInfoPanel[lv_c] != c_invalidDialogControlId)) {
+            DialogControlSetVisible(libMapM_gv_uIJungleCampPanel.lv_jungleCreepCampsInfoPanel[lv_c], PlayerGroupAll(), false);
+        }
+    }
+    if ((libMapM_gv_uIJungleCampPanel.lv_jungleCreepCampsParentPanel != c_invalidDialogControlId)) {
+        DialogControlSetVisible(libMapM_gv_uIJungleCampPanel.lv_jungleCreepCampsParentPanel, PlayerGroupAll(), false);
+    }
+}
+
+// Skip the map's intro cutscene the way the game's own skip does: stop the cutscene. The
+// intro (libMapM_gf_PlayMapMechanicIntroForPlayer) waits for its cutscene to end and then
+// restores the camera, interface, sound and vision itself, so nothing is left half-done.
+void hrsCap_SkipIntro () {
+    int lv_p;
+
+    lv_p = 1;
+    for ( ; lv_p <= 10 ; lv_p += 1 ) {
+        if ((libMapM_gv_mMIntroCutscene[lv_p] != c_cutsceneNone) && (libMapM_gv_mMIntroCutsceneFinished[lv_p] == false)) {
+            CutsceneStop(libMapM_gv_mMIntroCutscene[lv_p]);
+        }
     }
 }
 
@@ -414,10 +528,67 @@ bool hrsCap_gt_Sweep_Func (bool testConds, bool runActions) {
     if (!runActions) {
         return true;
     }
-    hrsCap_SkipIntro();
-    hrsCap_HideLabels();
+${keepIntro ? '' : '    hrsCap_SkipIntro();\n'}    hrsCap_HideLabels();
     hrsCap_ClearUnits();
     UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
+    return true;
+}
+
+// Chat "look <x> <y>" (lighting probe): point the camera at that map position, nothing else.
+bool hrsCap_gt_Look_Func (bool testConds, bool runActions) {
+    fixed lv_x;
+    fixed lv_y;
+
+    if (!runActions) {
+        return true;
+    }
+    lv_x = StringToFixed(StringWord(EventChatMessage(false), 2));
+    lv_y = StringToFixed(StringWord(EventChatMessage(false), 3));
+    CameraPan(EventPlayer(), Point(lv_x, lv_y), 0.0, -1, 10.0, false);
+    return true;
+}
+
+// Chat "normal [distance [pitch [yaw]]]" (lighting probe): the normal camera, with any of
+// its values overridden; "fov 0" / "zoom 0" go back to the capture camera.
+bool hrsCap_gt_Normal_Func (bool testConds, bool runActions) {
+    fixed lv_v;
+
+    if (!runActions) {
+        return true;
+    }
+    hrsCap_NormalCamera(EventPlayer());
+    lv_v = StringToFixed(StringWord(EventChatMessage(false), 2));
+    if ((lv_v > 0.0)) {
+        CameraSetValue(EventPlayer(), c_cameraValueDistance, lv_v, 0.0, -1, 10.0);
+    }
+    lv_v = StringToFixed(StringWord(EventChatMessage(false), 3));
+    if ((lv_v > 0.0)) {
+        CameraSetValue(EventPlayer(), c_cameraValuePitch, lv_v, 0.0, -1, 10.0);
+    }
+    lv_v = StringToFixed(StringWord(EventChatMessage(false), 4));
+    if ((lv_v > 0.0)) {
+        CameraSetValue(EventPlayer(), c_cameraValueYaw, lv_v, 0.0, -1, 10.0);
+    }
+    return true;
+}
+
+// Chat "pitch <deg>" (lighting probe): the capture camera's pitch (90 is straight down).
+bool hrsCap_gt_Pitch_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    hrsCap_pitch = StringToFixed(StringWord(EventChatMessage(false), 2));
+    hrsCap_ApplyCamera(EventPlayer());
+    return true;
+}
+
+// Chat "clip <near> <far>" (lighting probe): the camera's clip planes.
+bool hrsCap_gt_Clip_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    CameraSetValue(EventPlayer(), c_cameraValueNearClip, StringToFixed(StringWord(EventChatMessage(false), 2)), 0.0, -1, 10.0);
+    CameraSetValue(EventPlayer(), c_cameraValueFarClip, StringToFixed(StringWord(EventChatMessage(false), 3)), 0.0, -1, 10.0);
     return true;
 }
 
@@ -427,6 +598,15 @@ void hrsCap_Init () {
     TriggerAddEventChatMessage(hrsCap_gt_Tile, c_playerAny, "tile", false);
     hrsCap_gt_Zoom = TriggerCreate("hrsCap_gt_Zoom_Func");
     TriggerAddEventChatMessage(hrsCap_gt_Zoom, c_playerAny, "zoom", false);
+    hrsCap_gt_Freeze = TriggerCreate("hrsCap_gt_Freeze_Func");
+    hrsCap_gt_Pitch = TriggerCreate("hrsCap_gt_Pitch_Func");
+    TriggerAddEventChatMessage(hrsCap_gt_Pitch, c_playerAny, "pitch", false);
+    hrsCap_gt_Clip = TriggerCreate("hrsCap_gt_Clip_Func");
+    TriggerAddEventChatMessage(hrsCap_gt_Clip, c_playerAny, "clip", false);
+    hrsCap_gt_Normal = TriggerCreate("hrsCap_gt_Normal_Func");
+    TriggerAddEventChatMessage(hrsCap_gt_Normal, c_playerAny, "normal", false);
+    hrsCap_gt_Look = TriggerCreate("hrsCap_gt_Look_Func");
+    TriggerAddEventChatMessage(hrsCap_gt_Look, c_playerAny, "look", false);
     hrsCap_gt_Quit = TriggerCreate("hrsCap_gt_Quit_Func");
     TriggerAddEventChatMessage(hrsCap_gt_Quit, c_playerAny, "quit", true);
     hrsCap_gt_Fov = TriggerCreate("hrsCap_gt_Fov_Func");

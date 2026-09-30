@@ -43,8 +43,8 @@ The steps it runs:
 # 1. Prepare: downloads the map, injects the capture script, plans the grid.
 node inject.mjs "Towers of Doom" --structures keep --screen 3840x2160
 
-# 2. Capture: launches the map; press Enter when it has loaded, click into the game,
-#    and leave the mouse and keyboard alone.
+# 2. Capture: launches the map, waits for it to load and for the intro to finish; leave the
+#    mouse and keyboard alone.
 python capture.py work/towers-of-doom-structures.json
 
 # 3. Stitch: writes work/towers-of-doom-structures.png, a preview, and the geo file.
@@ -65,6 +65,7 @@ Map names are the file names in
 | `--px-per-cell <n>`            | `48`             | output resolution; a map is ~220 cells wide, so 48 gives ~10,600 px                                                                                                                                              |
 | `--screen <w>x<h>`             | `3840x2160`      | the game's resolution while capturing; match your monitor                                                                                                                                                        |
 | `--fov <deg>`                  | `20`             | field of view; narrower is flatter (less lean on tall objects) but puts the camera further away                                                                                                                  |
+| `--distance <units>`           |                  | camera distance instead of `--fov` (the field of view is then chosen to keep the scale); `render.cmd` uses 214                                                                                                     |
 | `--keep <0..1>`                | `0.6`            | share of each screenshot used, centred; the rest is overlap, used to measure the scale                                                                                                                           |
 | `--no-lens`                    |                  | don't set the field of view, far clip or yaw (see troubleshooting)                                                                                                                                               |
 | `--keep-mechanics`             |                  | keep map-mechanic units such as altars, which may sit over holes in the terrain (experimental)                                                                                                                   |
@@ -98,14 +99,29 @@ cell there is no more detail: that's the game's own texture resolution.
   positions stay inside the map's camera bounds, where the game would otherwise clamp them.
   The map's intro cutscene is skipped the way the game's own skip works: the script stops the
   cutscene, and the game's intro code then restores the camera, interface, sound and vision
-  itself (found by reading Blizzard's `MapMechanicsLib` and `StartingExperienceLib`, fetched
-  from the game's CDN).
-- **capture.py** launches the map through `Support64\HeroesSwitcher_x64.exe` (Heroes must be
+  itself; the script ignores `tile` until that is done. Camp names and respawn timers (an
+  interface panel pinned over each camp) are hidden along with the other labels. Each `tile`
+  first shows a camera like real play at the tile for a few frames, shallow and facing the
+  map's main light: the game fits its lighting to the last such camera and never to the
+  capture camera, so without this the rest of the map was drawn without its main light (a
+  dark, straight-edged area, different each match) and dark boxes stayed around holes; only
+  the latest look counts, and only a shallow look towards the light cleared every box. The
+  light's direction comes from the map's tileset (`t3Terrain.xml`), the tileset's light set
+  and that light set's "Key" light, with the map's own `TerrainData.xml` / `LightData.xml`
+  overriding; tilesets and light sets are in `light-sets.json` (`light-data.mjs` resolves
+  them, `--refit-yaw` overrides). After a game update that adds tilesets, rebuild the table:
+  extract every `mods/**/GameData/TerrainData.xml` and `LightData.xml` from the game's CASC
+  storage into a folder (file names = CASC paths with `__` for the separators) and run
+  `node generate-light-sets.mjs <folder>`.
+- **capture.py** starts Heroes through the Battle.net app if it isn't running (started
+  directly it can't authenticate; `--battlenet` or `HRS_BATTLENET` if the app isn't in the
+  usual place), then launches the map through `Support64\HeroesSwitcher_x64.exe` (Heroes must be
   at the main menu: a running match keeps its map), learns the game font's digits from a
   reference label, and for each tile takes two shots: with the numbered markers (each label is
   just the marker's number, plus one label at the centre with the full tile number, so a stale
-  frame is caught), and after `clean` hides them, the image kept. It only types while the game is in front and pauses
-  whenever it isn't; black frames are retaken; it stops early if the map stops responding, and
+  frame is caught), and after `clean` hides them, the image kept. It only types while the game is in front;
+  if the game loses focus part way through a tile, that tile is dropped and redone from its
+  start once the game is back in front; black frames are retaken; it stops early if the map stops responding, and
   leaves the match at the end (`quit`), ready for the next run.
 - **stitch.py** places each screenshot by what it shows, not by where the camera was sent
   (the game can hold the camera back near the edges, and its zoom can differ from the plan):

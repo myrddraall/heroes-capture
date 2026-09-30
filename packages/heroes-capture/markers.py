@@ -20,8 +20,12 @@ TIGHT_MISMATCH = 6.0
 
 
 def magenta_mask(frame: np.ndarray) -> np.ndarray:
-    r, g, b = frame[:, :, 0], frame[:, :, 1], frame[:, :, 2]
-    return (r > 170) & (b > 170) & (g < 100)
+    """Solid label magenta. Relative, not absolute: a dark map dims the labels too (Tomb of the
+    Spider Queen draws them at about 175, Towers of Doom at 246). Red and blue close together
+    keeps out the maps' purples and pinks; what gets through is checked by reading digits."""
+    f = frame.astype(np.int16)
+    r, g, b = f[:, :, 0], f[:, :, 1], f[:, :, 2]
+    return (np.minimum(r, b) - g > 100) & (np.abs(r - b) < 60)
 
 
 def blobs(frame: np.ndarray) -> list[tuple[float, float, int]]:
@@ -157,10 +161,11 @@ GLYPH_SIZE = (12, 18)  # width, height every digit is normalised to for comparis
 
 
 def _ink(frame: np.ndarray) -> np.ndarray:
-    """Magenta text pixels, including the anti-aliased edges of the strokes."""
-    f = frame.astype(int)
+    """Magenta text pixels, including the anti-aliased edges of the strokes (relative, as in
+    magenta_mask)."""
+    f = frame.astype(np.int16)
     r, g, b = f[:, :, 0], f[:, :, 1], f[:, :, 2]
-    return (np.minimum(r, b) - g > 70) & (r > 110) & (b > 110)
+    return (np.minimum(r, b) - g > 50) & (np.abs(r - b) < 70)
 
 
 def _label_boxes(frame: np.ndarray) -> list[tuple[int, int, int, int]]:
@@ -264,13 +269,19 @@ def fit_numbered(
     """
     identified: dict[int, tuple[float, float]] = {}
     tile_id = None
+    expected = f"{tile_index:0{id_digits}d}"
     for box in _label_boxes(frame):
         glyphs = _glyphs(frame, box)
         reads = [_read(g, digits) for g in glyphs]
-        if not reads or min(score for _, score in reads) < 0.6:
+        if not reads:
             continue
-        if len(reads) == id_digits:
-            tile_id = int("".join(str(d) for d, _ in reads))
+        text, weakest = "".join(str(d) for d, _ in reads), min(score for _, score in reads)
+        # The id only confirms a known number, so it may read weaker (the map shows through
+        # behind the label) as long as every digit's best match is the expected one.
+        if len(reads) == id_digits and (weakest >= 0.6 or (text == expected and weakest >= 0.45)):
+            tile_id = int(text)
+        elif weakest < 0.6:
+            continue
         elif len(reads) == 1 and reads[0][0] < len(markers):
             x0, y0, x1, y1 = box
             identified[reads[0][0]] = ((x0 + x1) / 2, (y0 + y1) / 2)
@@ -310,6 +321,27 @@ def fit_numbered(
     }
 
 
-def count_labels(frame: np.ndarray) -> int:
-    """How many label boxes are on screen (a clean shot should have none)."""
-    return len(_label_boxes(frame))
+def label_height(frame: np.ndarray) -> int | None:
+    """The height of the "0123456789" reference label (the widest label on screen)."""
+    boxes = _label_boxes(frame)
+    if not boxes:
+        return None
+    x0, y0, x1, y1 = max(boxes, key=lambda b: b[2] - b[0])
+    return y1 - y0
+
+
+def count_labels(frame: np.ndarray, digits: dict[int, np.ndarray] | None = None, height: int | None = None) -> int:
+    """How many labels are on screen (a clean shot should have none). Given the learned digits
+    and the reference label's height, only boxes about a label's height whose characters all
+    read as digits count, so the map's own magenta lights don't."""
+    count = 0
+    for box in _label_boxes(frame):
+        if height and not 0.7 * height <= box[3] - box[1] <= 1.4 * height:
+            continue
+        if digits:
+            reads = [_read(g, digits) for g in _glyphs(frame, box)]
+            # Real labels read at 0.8 to 1; thin pinkish map features can pass for a weak "1".
+            if not reads or min(score for _, score in reads) < 0.85:
+                continue
+        count += 1
+    return count
