@@ -1,12 +1,31 @@
 {
  "generated": "2026-09-30",
  "terrains": {
-  "Cyberworld": {},
-  "StormIceWorld": {},
-  "StormTwilightWorld": {},
-  "StormDesertWorld": {},
+  "Cyberworld": {
+   "skybox": "Storm_Doodad_CyberWorld_Skybox",
+   "parallax": "Storm_Doodad_CyberWorld_SkyParallax",
+   "hideLowest": true
+  },
+  "StormIceWorld": {
+   "skybox": "Storm_Doodad_CyberWorld_Skybox",
+   "parallax": "Storm_Doodad_CyberWorld_SkyParallax",
+   "hideLowest": true
+  },
+  "StormTwilightWorld": {
+   "skybox": "Storm_Doodad_CyberWorld_Skybox",
+   "parallax": "Storm_Doodad_CyberWorld_SkyParallax",
+   "hideLowest": true
+  },
+  "StormDesertWorld": {
+   "skybox": "Storm_Doodad_CyberWorld_Skybox",
+   "parallax": "Storm_Doodad_CyberWorld_SkyParallax",
+   "hideLowest": true
+  },
   "StormCyberWorld": {
-   "lighting": "StormCyberworld"
+   "lighting": "StormCyberworld",
+   "skybox": "Storm_Doodad_CyberWorld_Skybox",
+   "parallax": "Storm_Doodad_CyberWorld_SkyParallax",
+   "hideLowest": true
   },
   "CyberworldArathi": {
    "lighting": "Agria"
@@ -14,14 +33,25 @@
   "CyberworldMeinhoff": {
    "lighting": "Meinhoff"
   },
-  "StormEgyptWorld": {},
+  "StormEgyptWorld": {
+   "skybox": "LuxoriaSkybox",
+   "parallax": "LuxoriaSkyParallax",
+   "hideLowest": true
+  },
   "StormTransylvaniaWorld": {
-   "lighting": "StormTransylvania"
+   "lighting": "StormTransylvania",
+   "skybox": "Storm_Doodad_CyberWorld_Skybox",
+   "parallax": "Storm_Doodad_CyberWorld_SkyParallax",
+   "hideLowest": true
   },
   "StormKingsCrestGardens": {
    "lighting": "StormArenaGardens"
   },
-  "StormSnowWorld": {},
+  "StormSnowWorld": {
+   "skybox": "Storm_Doodad_CyberWorld_Skybox",
+   "parallax": "Storm_Doodad_CyberWorld_SkyParallax",
+   "hideLowest": true
+  },
   "StormAshenvale": {},
   "StormKingsCrestRavenCourt": {
    "lighting": "StormRavenCourtFinal"
@@ -39,40 +69,68 @@
    "lighting": "LuxoriaCrypts"
   },
   "StormHeavenAndHellHeaven": {
-   "lighting": "StormHeaven"
+   "lighting": "StormHeaven",
+   "skybox": "HeavenSkybox",
+   "parallax": "HeavenSkyboxParallax",
+   "hideLowest": true
   },
   "StormStitchesWars": {
    "parent": "StormKingsCrestGardens"
   },
   "StormHeavenAndHellHell": {
-   "lighting": "StormHeaven"
+   "lighting": "StormHeaven",
+   "skybox": "HeavenSkybox",
+   "parallax": "HeavenSkyboxParallax",
+   "hideLowest": true
   },
   "StormHeavenAndHellTransition": {
-   "lighting": "StormHeaven"
+   "lighting": "StormHeaven",
+   "skybox": "HeavenSkybox",
+   "parallax": "HeavenSkyboxParallax",
+   "hideLowest": true
   },
   "StormOverwatchHanamura1": {
-   "lighting": "Storm_OWHana"
+   "lighting": "Storm_OWHana",
+   "skybox": "HanamuraSkybox",
+   "parallax": "HanamuraSkyboxParallax"
   },
   "StormOverwatchHanamura2": {
-   "lighting": "Storm_OWHana"
+   "lighting": "Storm_OWHana",
+   "skybox": "HanamuraSkybox",
+   "parallax": "HanamuraSkyboxParallax"
   },
   "StormOverwatchHanamura3": {
-   "lighting": "Storm_OWHana"
+   "lighting": "Storm_OWHana",
+   "skybox": "HanamuraSkybox",
+   "parallax": "HanamuraSkyboxParallax"
   },
   "StormHeavenAndHell2Heaven": {
-   "lighting": "StormHeaven"
+   "lighting": "StormHeaven",
+   "skybox": "HeavenSkybox",
+   "parallax": "HeavenSkyboxParallax",
+   "hideLowest": true
   },
   "StormHeavenAndHell2Transition": {
-   "lighting": "StormHeaven"
+   "lighting": "StormHeaven",
+   "skybox": "HeavenSkybox",
+   "parallax": "HeavenSkyboxParallax",
+   "hideLowest": true
   },
   "StormHeavenAndHell2Hell": {
-   "lighting": "StormHeaven"
+   "lighting": "StormHeaven",
+   "skybox": "HeavenSkybox",
+   "parallax": "HeavenSkyboxParallax",
+   "hideLowest": true
   },
   "Braxis": {
-   "lighting": "StarcraftBraxis"
+   "lighting": "StarcraftBraxis",
+   "skybox": "BraxisSkybox",
+   "hideLowest": true
   },
   "Braxis2": {
-   "lighting": "StarcraftBraxis"
+   "lighting": "StarcraftBraxis",
+   "skybox": "BraxisSkybox",
+   "hideLowest": true
   },
   "StormOWVol": {
    "lighting": "Storm_OWVol"
@@ -81,7 +139,9 @@
    "lighting": "Storm_OWVol"
   },
   "Zion": {
-   "lighting": "StarcraftZion"
+   "lighting": "StarcraftZion",
+   "skybox": "LuxoriaSkybox",
+   "parallax": "LuxoriaSkyParallax"
   },
   "Zion2": {
    "parent": "Zion"

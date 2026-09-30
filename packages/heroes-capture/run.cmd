@@ -2,10 +2,10 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: Battlefield of Eternity rendered with a transparent void: every tile is shot
-rem over a white and a black skybox and the stitch turns the difference into transparency
-rem (PNG with alpha, preview on dark grey). About 10 minutes.
-call "%~dp0render.cmd" "Battlefield of Eternity" keep
+rem Current step: Dragon Shire again, one shot per tile over black (its tileset has no skybox, so
+rem the void is black terrain and the second shot buys nothing); the stitch makes the black void
+rem transparent. About 3 minutes.
+call "%~dp0render.cmd" "Dragon Shire" keep
 
 :copy
 rem Copy this run's output (everything in work\ except the map files) to the results folder,

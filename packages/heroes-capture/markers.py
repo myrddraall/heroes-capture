@@ -258,10 +258,12 @@ def _read(glyph: np.ndarray, digits: dict[int, np.ndarray]) -> tuple[int, float]
 
 
 def fit_numbered(
-    frame: np.ndarray, markers: list[dict], digits: dict[int, np.ndarray], tile_index: int, id_digits: int = 3
+    frame: np.ndarray, markers: list[dict], digits: dict[int, np.ndarray], tile_index: int, id_digits: int | None = 3
 ) -> dict | None:
     """Read every label and fit the mapping from the single-digit marker labels, once the tile id
     label (the full tile number, zero-padded to `id_digits`) confirms this is the right tile.
+    With `id_digits` None the id label is not required (the capture knows the tile another way,
+    from the status strip) and only the single-digit markers are read.
 
     Returns the same shape as fit_markers, plus "tileIdOk" (False when the id label names another
     tile: a stale frame). None when the id label can't be read or fewer than three markers were
@@ -269,7 +271,7 @@ def fit_numbered(
     """
     identified: dict[int, tuple[float, float]] = {}
     tile_id = None
-    expected = f"{tile_index:0{id_digits}d}"
+    expected = f"{tile_index:0{id_digits}d}" if id_digits else None
     for box in _label_boxes(frame):
         glyphs = _glyphs(frame, box)
         reads = [_read(g, digits) for g in glyphs]
@@ -278,17 +280,18 @@ def fit_numbered(
         text, weakest = "".join(str(d) for d, _ in reads), min(score for _, score in reads)
         # The id only confirms a known number, so it may read weaker (the map shows through
         # behind the label) as long as every digit's best match is the expected one.
-        if len(reads) == id_digits and (weakest >= 0.6 or (text == expected and weakest >= 0.45)):
+        if id_digits and len(reads) == id_digits and (weakest >= 0.6 or (text == expected and weakest >= 0.45)):
             tile_id = int(text)
         elif weakest < 0.6:
             continue
         elif len(reads) == 1 and reads[0][0] < len(markers):
             x0, y0, x1, y1 = box
             identified[reads[0][0]] = ((x0 + x1) / 2, (y0 + y1) / 2)
-    if tile_id is None:
-        return None
-    if tile_id != tile_index:
-        return {"found": 0, "tileIdOk": False}
+    if id_digits:
+        if tile_id is None:
+            return None
+        if tile_id != tile_index:
+            return {"found": 0, "tileIdOk": False}
     if len(identified) < 3:
         return None
     ks = sorted(identified)

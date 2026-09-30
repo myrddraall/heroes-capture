@@ -23,16 +23,11 @@
  *                            in low detail: dark squares around holes, dark wedges)
  *   --keep <0..1>            share of each screenshot used, centred           (default 0.6)
  *   --no-lens                leave field of view and far clip to the map
- *   --keep-mechanics         keep map-mechanic units such as altars (experimental)
  *   --freeze                 pause model animations (experimental)
  *   --markers                show registration markers around each screenshot (experimental)
  *   --show-ui                leave the HUD up (diagnostic)
  *   --keep-intro             let the intro cutscene play out instead of skipping it (diagnostic)
  *   --margin <cells>         capture past the camera bounds (lifts them)      (default 0)
- *   --sky                    add solid-colour skyboxes (black, white, magenta, lime, cyan;
- *                            see sky.mjs): the capture shoots each tile over white and over
- *                            black and the stitch turns the difference into transparency
- *   --sky-start <colour>     the skybox the map starts with                  (default white)
  *   --crop-margin <cells>    the stitched image reaches this far past the camera bounds
  *                            (or past each arena area, see below)             (default 12)
  *   --out <dir>              working folder                                   (default work)
@@ -46,7 +41,9 @@ import {
   MPQ_FILE_REPLACEEXISTING,
 } from '@jamiephan/stormlib';
 import { captureScript } from './capture-script.mjs';
-import { SKIES, skyFiles } from './sky.mjs';
+import { SKIES, skyFiles, solidDds } from './sky.mjs';
+import { hasSky } from './light-data.mjs';
+import { STATUS_CELLS, STATUS_CELL_UNITS } from './capture-script.mjs';
 import { mainLight } from './light-data.mjs';
 
 const S2MA_MAPS = 'https://raw.githubusercontent.com/jamiephan/HeroesOfTheStorm_S2MA/main/maps';
@@ -64,14 +61,12 @@ function parseArgs(argv) {
     keep: 0.6,
     lens: true,
     freeze: false,
-    keepMechanics: false,
+    keepMechanics: true,  // map-mechanic units such as altars stay: removing them leaves holes in the terrain
     markers: false,
     showUi: false,
     keepIntro: false,
     margin: 0,
     cropMargin: 12,
-    sky: false,
-    skyStart: 'white',
     out: 'work',
   };
   for (let i = 0; i < argv.length; i++) {
@@ -89,14 +84,11 @@ function parseArgs(argv) {
     else if (a === '--keep') opts.keep = Number(next());
     else if (a === '--no-lens') opts.lens = false;
     else if (a === '--freeze') opts.freeze = true;
-    else if (a === '--keep-mechanics') opts.keepMechanics = true;
     else if (a === '--keep-intro') opts.keepIntro = true;
     else if (a === '--markers') opts.markers = true;
     else if (a === '--show-ui') opts.showUi = true;
     else if (a === '--margin') opts.margin = Number(next());
     else if (a === '--crop-margin') opts.cropMargin = Number(next());
-    else if (a === '--sky') opts.sky = true;
-    else if (a === '--sky-start') opts.skyStart = next();
     else if (a === '--out') opts.out = next();
     else if (!a.startsWith('--') && !opts.map) opts.map = a;
     else throw new Error(`unknown option ${a}`);
@@ -286,6 +278,14 @@ async function main() {
   try {
     const info = readMapInfo(archive.readFile('MapInfo'));
     const refitYaw = opts.refitYaw ?? resolveRefitYaw(archive);
+    // Whether the void shows the sky (the tileset has a skybox): then each tile is shot over
+    // white and over black and the difference is the transparency. Otherwise the void is
+    // terrain drawn black; one shot over black, and the stitch makes that black transparent.
+    const skyMode = hasSky(
+      { t3Terrain: archive.hasFile('t3Terrain.xml') ? archive.readFileAsString('t3Terrain.xml') : '', terrainData: archive.hasFile('Base.StormData\\GameData\\TerrainData.xml') ? archive.readFileAsString('Base.StormData\\GameData\\TerrainData.xml') : null },
+      JSON.parse(readFileSync(new URL('./light-sets.json', import.meta.url), 'utf8')),
+    ) ? 'matte' : 'black';
+    console.error(skyMode === 'matte' ? 'void: sky (each tile shot over white and black)' : 'void: black terrain (one shot over black)');
     let areas = [];
     try {
       areas = parseAreas(archive.readFileAsString('Regions'));
@@ -381,7 +381,8 @@ async function main() {
       showUi: opts.showUi,
       keepIntro: opts.keepIntro,
       markers,
-      sky: opts.sky,
+      sky: true,
+      skyColour: skyMode === 'matte' ? 'white' : 'black',
       hideDoodads,
     }).replace(/\n/g, eol);
     checkDefinitionOrder(script);
@@ -398,19 +399,27 @@ async function main() {
     });
     if (!ok) throw new Error('could not replace MapScript.galaxy');
 
-    if (opts.sky) {
-      if (!SKIES[opts.skyStart]) throw new Error(`--sky-start: unknown colour ${opts.skyStart}; one of ${Object.keys(SKIES).join(', ')}`);
+    // The status strip's cells are a white texture tinted per cell (capture-script.mjs).
+    const white = archive.addBuffer('Assets\\Textures\\HrsWhite.dds', solidDds([255, 255, 255], 64, 64), {
+      flags: MPQ_FILE_REPLACEEXISTING | MPQ_FILE_COMPRESS,
+      compression: MPQ_COMPRESSION_ZLIB,
+    });
+    if (!white) throw new Error('could not add the status strip texture');
+
+    // The solid-colour skyboxes (sky.mjs): the capture shoots each tile over white and over
+    // black, and the stitch turns the difference into transparency.
+    {
       const tileset = (archive.readFileAsString('t3Terrain.xml').match(/\btileSet="([^"]+)"/i) || [])[1];
       if (!tileset) throw new Error('t3Terrain.xml names no tileset; cannot set the skybox');
       const read = (name) => (archive.hasFile(name) ? archive.readFileAsString(name) : null);
-      for (const file of skyFiles(tileset, opts.skyStart, read)) {
+      for (const file of skyFiles(tileset, skyMode === 'matte' ? 'white' : 'black', read)) {
         const added = archive.addBuffer(file.name, file.data, {
           flags: MPQ_FILE_REPLACEEXISTING | MPQ_FILE_COMPRESS,
           compression: MPQ_COMPRESSION_ZLIB,
         });
         if (!added) throw new Error(`could not add ${file.name}`);
       }
-      console.error(`skyboxes: ${Object.keys(SKIES).join(', ')} (tileset ${tileset}, starting ${opts.skyStart})`);
+      console.error(`skyboxes: ${Object.keys(SKIES).join(', ')} (tileset ${tileset})`);
     }
 
     const manifest = {
@@ -438,8 +447,11 @@ async function main() {
       markers,
       pageShare,
       keepIntro: opts.keepIntro,
-      sky: opts.sky ? { start: opts.skyStart, colours: Object.keys(SKIES) } : null,
+      sky: { mode: skyMode, start: skyMode === 'matte' ? 'white' : 'black', colours: Object.keys(SKIES) },
       hideDoodads,
+      // The status strip sits in the top-left corner; this many pixels of each screenshot's left
+      // edge are blanked by the capture and left out by the stitch (status.py, stitch.py).
+      status: { cells: STATUS_CELLS, cellUnits: STATUS_CELL_UNITS, pageLeft: 64 },
     };
     const manifestPath = resolve(opts.out, `${id}.json`);
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));

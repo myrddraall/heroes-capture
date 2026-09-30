@@ -123,27 +123,41 @@ def main() -> None:
         if g is not None and g.std() >= 3:
             usable.add(t["index"])
 
-    # Marker fits from capture.py (markers.py): for each tile, where its screen centre really
-    # was in map cells from the planned target, and its scale. A good fit anchors the tile
-    # absolutely; tiles without one are placed relative to their neighbours by image matching.
+    # Where each screenshot's centre really was, in map cells. From positions.json (capture.py:
+    # the camera target the map script reported through its status strip for every tile) or,
+    # for older runs, from marker fits (markers.py). Either anchors the tile absolutely; tiles
+    # without one are placed relative to their neighbours by image matching.
     planned = manifest["pxPerCell"]
     by_index = {t["index"]: t for t in tiles}
-    markers_path = base / "markers.json"
-    fits = json.loads(markers_path.read_text()) if markers_path.exists() else {}
     anchored: dict[int, tuple[float, float]] = {}  # tile -> its screen centre in map cells
     scales = []
-    for key, fit in fits.items():
-        i = int(key)
-        # Numbered markers are identified by their digits, so three suffice; the pattern
-        # fallback needs five to be sure which marker is which.
-        enough = 3 if fit and fit.get("ids") else 5
-        if fit and fit.get("fit") and fit["found"] >= enough and fit["residual"] <= 3.0 and i in by_index and tile_path(by_index[i]).exists():
-            t = by_index[i]
-            anchored[i] = (t["x"] + fit["centreOffsetCells"][0], t["y"] + fit["centreOffsetCells"][1])
-            scales.append((fit["scale"][0] + fit["scale"][1]) / 2)
+    positions_path = base / "positions.json"
+    markers_path = base / "markers.json"
+    echoed = False
+    if positions_path.exists():
+        echoed = True
+        for key, pos in json.loads(positions_path.read_text()).items():
+            i = int(key)
+            if i in by_index and tile_path(by_index[i]).exists():
+                anchored[i] = (pos["x"], pos["y"])
+        log(f"camera positions: {len(anchored)} of {len(present)} screenshots anchored")
+    elif markers_path.exists():
+        fits = json.loads(markers_path.read_text())
+        for key, fit in fits.items():
+            i = int(key)
+            # Numbered markers are identified by their digits, so three suffice; the pattern
+            # fallback needs five to be sure which marker is which.
+            enough = 3 if fit and fit.get("ids") else 5
+            if fit and fit.get("fit") and fit["found"] >= enough and fit["residual"] <= 3.0 and i in by_index and tile_path(by_index[i]).exists():
+                t = by_index[i]
+                anchored[i] = (t["x"] + fit["centreOffsetCells"][0], t["y"] + fit["centreOffsetCells"][1])
+                scales.append((fit["scale"][0] + fit["scale"][1]) / 2)
+        log(f"markers: {len(anchored)} of {len(fits)} screenshots anchored" + (f", {float(np.median(scales)):.3f} px/cell" if scales else ""))
     anchor_scale = float(np.median(scales)) if scales else None
-    if fits:
-        log(f"markers: {len(anchored)} of {len(fits)} screenshots anchored" + (f", {anchor_scale:.3f} px/cell" if scales else ""))
+
+    def centre(t: dict) -> tuple[float, float]:
+        """The best knowledge of a tile's camera position: echoed if known, else as planned."""
+        return anchored.get(t["index"], (t["x"], t["y"]))
 
     edges = []  # (a, b, dx, dy, weight)
     for t in tiles:
@@ -153,8 +167,9 @@ def main() -> None:
                 continue
             a, b = small(t["index"]), small(n["index"])
             h, w = a.shape
-            exp_dx = (n["x"] - t["x"]) * planned / MATCH_SCALE
-            exp_dy = (t["y"] - n["y"]) * planned / MATCH_SCALE
+            (tx, ty), (nx, ny) = centre(t), centre(n)
+            exp_dx = (nx - tx) * planned / MATCH_SCALE
+            exp_dy = (ty - ny) * planned / MATCH_SCALE
             dy, dx, strength = phase_correlate(a, b)
             dx, dy = unwrap(dx, w, exp_dx), unwrap(dy, h, exp_dy)
             # A real neighbour moves mostly along its own axis.
@@ -165,6 +180,21 @@ def main() -> None:
             if strength < 0.03 or along < -0.05 * size_along or along >= size_along or abs(across) > 0.25 * size_along:
                 continue
             edges.append((t["index"], n["index"], dx * MATCH_SCALE, dy * MATCH_SCALE, strength))
+
+    # The scale (pixels per map cell) from the matches themselves when the positions are
+    # echoed: each matched pair's pixel offset over its camera offset, hundreds of them; the
+    # planned value if too few pairs moved enough to tell.
+    if echoed:
+        estimates = []
+        for a, b, dx, dy, _ in edges:
+            if a in anchored and b in anchored:
+                ex, ey = anchored[b][0] - anchored[a][0], anchored[a][1] - anchored[b][1]
+                if abs(ex) >= 4:
+                    estimates.append(dx / ex)
+                if abs(ey) >= 4:
+                    estimates.append(dy / ey)
+        anchor_scale = float(np.median(estimates)) if len(estimates) >= 6 else float(planned)
+        log(f"  scale {anchor_scale:.3f} px/cell from {len(estimates)} matched offsets (planned {planned})")
 
     # 2. Solve positions over the largest connected group, dropping disagreeing matches.
     groups: dict[int, int] = {}
@@ -235,7 +265,7 @@ def main() -> None:
     log(f"placed {len(placed)} of {len(tiles)} screenshots from {len(kept)} matches ({len(edges)} measured)")
     unplaced = [t["index"] for t in present if t["index"] not in placed]
     if unplaced:
-        log(f"  not placed (no markers, no match): {len(unplaced)} screenshots: {unplaced[:20]}{' ...' if len(unplaced) > 20 else ''}")
+        log(f"  not placed (no position, no match): {len(unplaced)} screenshots: {unplaced[:20]}{' ...' if len(unplaced) > 20 else ''}")
 
     # 3. Map cells -> pixels: fit on screenshots whose camera went where it was sent
     #    (outliers are the ones the game held back at the edges).
@@ -268,7 +298,7 @@ def main() -> None:
         held_back = sum(
             1 for i, (cx, cy) in anchored.items() if np.hypot(cx - by_index[i]["x"], cy - by_index[i]["y"]) > 0.5
         )
-        log(f"scale {scale:.3f} px/cell from the markers (planned {planned}); {held_back} screenshots had the camera held back")
+        log(f"scale {scale:.3f} px/cell from the {'camera positions' if echoed else 'markers'} (planned {planned}); {held_back} screenshots had the camera held back")
     else:
         fit_ids = [i for i in ids if abs(by_index[i]["x"] - mx) <= hx / 2 and abs(by_index[i]["y"] - my) <= hy / 2]
         if len(fit_ids) < 3:
@@ -310,7 +340,7 @@ def main() -> None:
     # that is all map is the same in both; in between (soft edges, glass, glow) the difference
     # is exactly the see-through share. The white level is measured, not assumed (the game
     # renders the white skybox at about 230), from pixels that are black in the black shot.
-    matting = bool(manifest.get("sky")) and any((tiles_dir / f"tile_{t['index']:04d}-black.png").exists() for t in present)
+    matting = any((tiles_dir / f"tile_{t['index']:04d}-black.png").exists() for t in present)
     white_level = [None]
 
     def matte(white: np.ndarray, black: np.ndarray) -> np.ndarray:
@@ -334,21 +364,23 @@ def main() -> None:
         return np.dstack([rgb, alpha * 255]).round().astype(np.uint8)
 
     def load(i: int) -> np.ndarray:
+        """The tile as RGBA: matted from its pair of shots, or opaque (a map whose void is
+        black terrain is shot once, over black; void_terrain_transparent handles the void)."""
         white = np.asarray(Image.open(tiles_dir / f"tile_{i:04d}.png").convert("RGB"))
-        if not matting:
-            return white
         black_path = tiles_dir / f"tile_{i:04d}-black.png"
         if not black_path.exists():
             return np.dstack([white, np.full(white.shape[:2], 255, dtype=np.uint8)])
         return matte(white, np.asarray(Image.open(black_path).convert("RGB")))
 
-    channels = 4 if matting else 3
+    channels = 4
 
     # The page: with markers, only the middle of each screenshot may be used, like a print page
     # with bleed; the markers sit in the bleed, so nothing outside the page ever reaches the
     # output. Without markers the whole screenshot is the page.
     share = manifest.get("pageShare")
     page_x0 = int(round(screen_w / 2 - share * screen_w)) if share else 0
+    # The status strip (blanked by the capture) sits along the left edge: left out of the page.
+    page_x0 = max(page_x0, int((manifest.get("status") or {}).get("pageLeft", 0)))
     page_x1 = int(round(screen_w / 2 + share * screen_w)) if share else screen_w
     page_y0 = int(round(screen_h / 2 - share * screen_h)) if share else 0
     page_y1 = int(round(screen_h / 2 + share * screen_h)) if share else screen_h
@@ -358,7 +390,12 @@ def main() -> None:
     # programming at match scale). Anything off the ground plane (a floating island below the
     # arena, a tall tower) sits at a different place in each screenshot, parallax the marker
     # fit can't remove; a halfway cut through it shows a step, a routed seam goes around it.
+    # Never far from the halfway line, though: the game lights and details the terrain around
+    # each screenshot's centre (the lighting refit reaches about 15 cells; further out a hole
+    # keeps its dark box and trim goes missing), so a seam that wandered to the far side of
+    # the overlap picked up the far screenshot's unlit edge.
     SEAM_STEP = 2  # the seam may move this many (reduced) pixels sideways per pixel along
+    SEAM_BAND = int(4 * manifest["pxPerCell"])  # how far from the halfway line a seam may go, in pixels
 
     def route_seam(cost: np.ndarray) -> np.ndarray:
         """Least-cost top-to-bottom path through `cost` (rows along the seam, columns across):
@@ -426,6 +463,11 @@ def main() -> None:
             ox1 = int(min(xi + page_x1, xj + page_x1) - edge)
             oy0 = int(max(yi + page_y0, yj + page_y0) + edge)
             oy1 = int(min(yi + page_y1, yj + page_y1) - edge)
+            mid = (centres[i] + centres[j]) / 2
+            if kind == "v":
+                ox0, ox1 = max(ox0, int(mid[0] - SEAM_BAND)), min(ox1, int(mid[0] + SEAM_BAND))
+            else:
+                oy0, oy1 = max(oy0, int(mid[1] - SEAM_BAND)), min(oy1, int(mid[1] + SEAM_BAND))
             if ox1 - ox0 < 4 * MATCH_SCALE or oy1 - oy0 < 4 * MATCH_SCALE:
                 continue
             cost = overlap_cost(i, j, ox0, oy0, ox1, oy1)
@@ -448,6 +490,62 @@ def main() -> None:
         (base / "seams.json").write_text(json.dumps(
             {f"{i}-{j}": {"kind": k, "start": st, "path": p.tolist(), "placed": [placed[i].tolist(), placed[j].tolist()]}
              for (i, j), (k, st, p) in seams.items()}))
+
+    def void_terrain_transparent(rgba: np.ndarray) -> np.ndarray:
+        """Some maps (Dragon Shire, Towers of Doom) draw their void as terrain painted black
+        rather than leaving it to the sky, so the matte keeps it. Near-black that is connected
+        to the outside (the image border, or anything the matte already made transparent) is
+        that void; a dark spot inside the map isn't connected and stays. The edge blends out
+        over a short ramp of darkness."""
+        from scipy import ndimage
+
+        rgb, alpha = rgba[:, :, :3], rgba[:, :, 3]
+        peak = rgb.max(axis=2)
+        dark = peak <= 12
+        seed = np.zeros_like(dark)
+        seed[0, :] = seed[-1, :] = seed[:, 0] = seed[:, -1] = True
+        seed |= alpha < 8
+        labels, count = ndimage.label(dark | seed)
+        if not count:
+            return rgba
+        reached = np.zeros(count + 1, dtype=bool)
+        reached[np.unique(labels[seed])] = True
+        reached[0] = False
+        void = reached[labels] & dark
+        if not void.any():
+            return rgba
+        # Void seen through gaps in foliage at the edge is black too but cut off from the
+        # outside by the leaves: any dark pixel within ~40 px of the void counts as void.
+        coarse = void.reshape(void.shape[0] // 4, 4, void.shape[1] // 4, 4).any(axis=(1, 3)) if void.shape[0] % 4 == 0 and void.shape[1] % 4 == 0 else None
+        if coarse is not None:
+            around = ndimage.binary_dilation(coarse, iterations=10)
+            around = np.repeat(np.repeat(around, 4, axis=0), 4, axis=1)
+            void |= dark & around
+        out = rgba.copy()
+        out[void, 3] = 0
+        # The edge: pixels within a few px of the void are blends of the map's colour with the
+        # void's (C = a*F + (1-a)*B). B is the void colour; F comes from the solid pixels a
+        # little further in (the average over a small window); then a and F are separated, so
+        # the edge keeps the map's own colour and its transparency, and composites over black
+        # to what was rendered.
+        near = ndimage.binary_dilation(void, iterations=6) & ~void & (alpha >= 8)
+        if near.any():
+            solid = (~ndimage.binary_dilation(void, iterations=7)) & (alpha >= 8)
+            b = rgb[void].reshape(-1, 3).mean(axis=0).astype(np.float32)
+            weight = ndimage.uniform_filter(solid.astype(np.float32), size=15)
+            f = np.stack([ndimage.uniform_filter(np.where(solid, rgb[:, :, c], 0).astype(np.float32), size=15) for c in range(3)], axis=2)
+            ok = near & (weight > 0.05)
+            f = f[ok] / weight[ok][:, None]
+            c = rgb[ok].astype(np.float32)
+            fb, cb = f - b, c - b
+            a = np.clip((cb * fb).sum(axis=1) / np.maximum((fb * fb).sum(axis=1), 1.0), 0.0, 1.0)
+            recovered = np.clip(b + cb / np.maximum(a, 1 / 255)[:, None], 0, 255)
+            keep = a > 1 / 255
+            idx = np.nonzero(ok)
+            out[idx[0][keep], idx[1][keep], :3] = recovered[keep].astype(np.uint8)
+            out[idx[0], idx[1], 3] = (a * 255).astype(np.uint8)
+        log(f"  void terrain made transparent: {void.mean() * 100:.1f}% of the image")
+        return out
 
     def compose(subset: set[int]) -> np.ndarray:
         """The canvas painted from these screenshots only. Full frames go down first (estimated
@@ -534,11 +632,12 @@ def main() -> None:
         # seams between them.
         area_no = outputs.index((name, bounds)) if name else None
         subset = {i for i in placed if area_no is None or by_index[i].get("area", 0) == area_no}
-        canvas = pyvips.Image.new_from_array(compose(subset), interpretation="srgb")
+        composed = void_terrain_transparent(compose(subset))
+        canvas = pyvips.Image.new_from_array(composed, interpretation="srgb")
         image = canvas.crop(x0, y0, x1 - x0, y1 - y0)
         out_png = base.parent / f"{out_id}.png"
         image.write_to_file(str(out_png), compression=6)
-        preview = image.flatten(background=[48, 48, 48]) if matting else image
+        preview = image.flatten(background=[48, 48, 48])
         preview.thumbnail_image(2048).write_to_file(str(base.parent / f"{out_id}-preview.jpg"), Q=88)
         geo = {
             "map": manifest["map"],
@@ -555,7 +654,7 @@ def main() -> None:
 
         if args.tiles:
             pyramid = base.parent / f"{out_id}-tiles"
-            image.dzsave(str(pyramid), layout="google", suffix=".png" if matting else ".jpg[Q=90]", tile_size=256)
+            image.dzsave(str(pyramid), layout="google", suffix=".png", tile_size=256)
             log(f"tile pyramid -> {pyramid}")
 
 

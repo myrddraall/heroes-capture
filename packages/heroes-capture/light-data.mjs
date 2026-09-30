@@ -6,7 +6,8 @@
  * own TerrainData.xml and LightData.xml.
  */
 
-/** CTerrain entries: id -> { parent?, lighting? }. */
+/** CTerrain entries: id -> { parent?, lighting?, skybox?, parallax?, hideLowest? } (the FixedSkyboxModel,
+ * NonFixedSkyboxModel and HideLowestLevel fields; "" for a skybox cleared). */
 export function parseTerrains(xml, into = {}) {
   for (const { attrs, body } of entries(xml, 'CTerrain')) {
     if (!attrs.id) continue;
@@ -14,6 +15,12 @@ export function parseTerrains(xml, into = {}) {
     if (attrs.parent) t.parent = attrs.parent;
     const l = body.match(/<Lighting value="([^"]*)"/);
     if (l) t.lighting = l[1];
+    const s = body.match(/<FixedSkyboxModel value="([^"]*)"/);
+    if (s) t.skybox = s[1];
+    const p = body.match(/<NonFixedSkyboxModel value="([^"]*)"/);
+    if (p) t.parallax = p[1];
+    const h = body.match(/<HideLowestLevel value="([^"]*)"/);
+    if (h) t.hideLowest = h[1] === '1';
   }
   return into;
 }
@@ -62,6 +69,21 @@ function inherited(table, id, field, seen = new Set()) {
   seen.add(id);
   if (def[field] !== undefined) return def[field];
   return def.parent ? inherited(table, def.parent, field, seen) : undefined;
+}
+
+/**
+ * Whether the map's void shows the sky: its tileset (with the map's own TerrainData.xml
+ * overrides) leaves the lowest terrain level undrawn, or names a skybox (fixed or parallax:
+ * Battlefield of Eternity clears the fixed one and shows its parallax layer). Otherwise the
+ * void is terrain drawn black (Dragon Shire, Towers of Doom, Tomb of the Spider Queen), which
+ * no skybox can show through.
+ */
+export function hasSky(mapFiles, table) {
+  const tileset = (mapFiles.t3Terrain.match(/\btileSet="([^"]+)"/i) || [])[1] || null;
+  if (!tileset) return false;
+  const terrains = structuredClone(table.terrains);
+  if (mapFiles.terrainData) parseTerrains(mapFiles.terrainData, terrains);
+  return Boolean(inherited(terrains, tileset, 'hideLowest') || inherited(terrains, tileset, 'skybox') || inherited(terrains, tileset, 'parallax'));
 }
 
 /**

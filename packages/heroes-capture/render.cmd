@@ -9,7 +9,7 @@ rem     --show-ui      diagnostic: leave the HUD up, launch the map and stop
 rem     --probe-zoom   diagnostic: find how far the camera can be before markers stop drawing
 rem     --probe-fov    diagnostic: find the narrowest field of view that still draws markers
 rem     --probe-light  diagnostic: screenshots from several camera distances and positions
-rem     --probe-sky    diagnostic: one edge tile over each solid-colour skybox (adds them)
+rem     --probe-sky    diagnostic: one edge tile over each solid-colour skybox
 rem
 rem Start Heroes from Battle.net first (so it is logged in), in Windowed (Fullscreen).
 setlocal
@@ -26,10 +26,9 @@ rem little at the seams. (The dark areas seen at far distances were the game's l
 rem to an old camera; the map script now refits it at every tile, so the distance is free.)
 set "DISTANCE=214"
 set "KEEP=0.4"
-rem Keep objective units such as altars (removing them leaves black holes in the terrain), show
-rem registration markers, which place every screenshot exactly, and add the white and black
-rem skyboxes each tile is shot over, which make the void transparent.
-set "EXTRA=--keep-mechanics --markers --sky"
+rem (Screenshots are placed by the camera positions the map script reports; --markers adds the
+rem older registration labels, which the stitch can also place by.)
+set "EXTRA="
 set "GAME=D:\Games\Heroes of the Storm"
 
 rem Options after the map and structures go to inject.mjs as they are.

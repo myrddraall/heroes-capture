@@ -136,10 +136,11 @@ export function skyFiles(tileset, start, read) {
     data: Buffer.from(appendToCatalog(read('Base.StormData\\GameData\\ModelData.xml'), models), 'utf8'),
   });
   // (FixedSkyboxModel here never took effect; the script sets the sky with GameSetBackground.
-  // HideLowestLevel is left as the tileset has it: on a map without a sky the lowest terrain
-  // level may be real ground.)
+  // HideLowestLevel: the lowest terrain level isn't drawn, so the sky shows there; on a map
+  // without a sky of its own the void is that level, drawn black, and would stay opaque.)
   const terrain = [
     `    <CTerrain id="${tileset}">`,
+    `        <HideLowestLevel value="1"/>`,
     `        <FixedSkyboxModel value="${modelId(start)}"/>`,
     `        <NonFixedSkyboxModel value=""/>`,
     `        <FogEnabled value="0"/>`,

@@ -68,16 +68,13 @@ Map names are the file names in
 | `--distance <units>`           |                  | camera distance instead of `--fov` (the field of view is then chosen to keep the scale); `render.cmd` uses 214                                                                                                     |
 | `--keep <0..1>`                | `0.6`            | share of each screenshot used, centred; the rest is overlap, used to measure the scale                                                                                                                           |
 | `--no-lens`                    |                  | don't set the field of view, far clip or yaw (see troubleshooting)                                                                                                                                               |
-| `--keep-mechanics`             |                  | keep map-mechanic units such as altars, which may sit over holes in the terrain (experimental)                                                                                                                   |
 | `--freeze`                     |                  | pause model animations (experimental)                                                                                                                                                                            |
 | `--markers`                    | on in render.cmd | numbered registration markers and two shots per tile: one with the markers (calibration: exact camera geometry, and proof the view is the right tile) and one without, which is the image kept. See `markers.py` |
 | `--show-ui`                    |                  | diagnostic: leave the HUD up, launch the map and stop                                                                                                                                                            |
 | `--probe-zoom` / `--probe-fov` |                  | diagnostic: with `--markers`, measure at which camera distance / field of view the markers still draw; writes `work\<what>-probe.txt`                                                                            |
 | `--margin <cells>`             | `0`              | also capture beyond the map's camera bounds (lifts them)                                                                                                                                                         |
 | `--crop-margin <cells>`        | `12`             | the stitched image reaches this far past the camera bounds (or past each arena's area)                                                                                                                         |
-| `--sky`                        | off              | add solid-colour skyboxes (black, white, magenta, lime, cyan; `sky.mjs`), for chroma keying and difference matting; chat `sky <colour>` swaps them at run time (experimental)                                  |
-| `--sky-start <colour>`         | `black`          | the skybox the map starts with                                                                                                                                                                                 |
-| `--probe-sky`                  |                  | diagnostic: with `--sky`, one edge tile over each skybox; the sky part of each shot is measured (mean colour, spread)                                                                                          |
+| `--probe-sky`                  |                  | diagnostic: one edge tile over each skybox; the sky part of each shot is measured (mean colour, spread)                                                                                          |
 
 Higher `--px-per-cell` means more screenshots and a closer camera. Past about 64–128 px per
 cell there is no more detail: that's the game's own texture resolution.
@@ -86,7 +83,7 @@ cell there is no more detail: that's the game's own texture resolution.
 
 - `<id>.png`: the full image, cropped to the camera bounds plus `--crop-margin` cells (a map of
   several arenas: `<id>-m1.png`, `<id>-m2.png`, ..., one per arena, each cropped to its area).
-  With `--sky` (the default in render.cmd) it has an alpha channel: the void is transparent
+  It has an alpha channel: the void is transparent
 - `<id>-preview.jpg`: 2048 px wide (transparency shown over dark grey)
 - `<id>.geo.json`: pixels per map cell and the image origin in map cells, to place replay
   positions: `px = (x - originCell.x) * pxPerCell`, `py = (originCell.y - y) * pxPerCell`
@@ -123,7 +120,11 @@ cell there is no more detail: that's the game's own texture resolution.
   extract every `mods/**/GameData/TerrainData.xml` and `LightData.xml` from the game's CASC
   storage into a folder (file names = CASC paths with `__` for the separators) and run
   `node generate-light-sets.mjs <folder>`.
-- **Transparent void (`--sky`, `sky.mjs`).** The void around and below a map is the skybox. The
+- **Near clip.** The capture camera sets its near clip plane to 5 (the game's default is tiny).
+  Depth precision goes with the far/near ratio; at the capture distance, flat decals lying on
+  surfaces (road trim, lava cracks, low decorations) were z-fighting the ground and going
+  missing in patches. Found with `--probe-light` and the chat `clip <near> <far>` command.
+- **Transparent void (`sky.mjs`).** The void around and below a map is the skybox. The
   map gets five solid-colour skyboxes: a skybox is a model on a stock mesh whose textures are
   referenced by path, and a file in the map at that path replaces the game's, so each colour is
   a stock mesh (the Braxis bowl and the "parallax" bowls; the big heaven/Luxoria bowl won't swap
@@ -134,18 +135,35 @@ cell there is no more detail: that's the game's own texture resolution.
   shot over white and over black, and the stitch turns the pair into colour and transparency
   (difference matting: the difference between the shots is exactly the see-through share; the
   white level is measured from the shots, the game renders it at about 230; pixels that changed
-  between the shots other than by the sky, an animated glow, stay opaque). `--probe-sky` shows
+  between the shots other than by the sky, an animated glow, stay opaque). Whether a map's
+  void shows the sky is read from its tileset (`light-sets.json`, with the map's own overrides:
+  the lowest terrain level undrawn, or a skybox). Without that (Dragon Shire, Towers of Doom,
+  Tomb of the Spider Queen) the void is terrain drawn black, which no skybox shows through:
+  one shot per tile, over black, and the stitch makes the near-black that is connected to the
+  outside transparent. `--probe-sky` shows
   each colour on one edge tile (`HRS_SKY_SEQUENCE` scripts the swaps).
+- **The status strip (`status.py`).** How the capture knows a command has been carried out:
+  the map script draws a dialog in the top-left corner, one column of 48 black-or-white cells,
+  redrawn at the end of every chat command and every sweep: a locator, the sequence number of
+  the last command carried out (the capture appends one to each command it sends), the tile,
+  the camera's actual target (so clamping at the map's edge is known, and the camera bounds
+  are measured by sending the camera to two corners), markers shown, which sky is up, a tick,
+  and a parity bit. Reading it is a few pixel averages, so the capture polls it fifty times a
+  second and shoots the moment the acknowledgement appears, instead of waiting fixed times,
+  reading labels and resending. The strip's column is blanked in the kept shots and left out
+  of the stitch (`status.pageLeft`). The echoed camera position (to 1/64 cell) is what places
+  each screenshot; the scale (pixels per cell) comes from the image matches between
+  neighbours. Nothing is read from the picture as text any more; `--markers` still adds the
+  older registration labels, which the stitch can place by instead.
 - **capture.py** starts Heroes through the Battle.net app if it isn't running (started
   directly it can't authenticate; `--battlenet` or `HRS_BATTLENET` if the app isn't in the
   usual place), then launches the map through `Support64\HeroesSwitcher_x64.exe` (Heroes must be
-  at the main menu: a running match keeps its map), learns the game font's digits from a
-  reference label, asks the map script for the camera bounds the game really applies (an
-  arena's are far tighter than its map file says; the script sends the camera to the four
-  corners, reads where it stopped and shows the answer as a 12-digit label), re-plans the
-  grid from them, sends each tile with its position (`tile <n> <x> <y>`), and for each tile takes two shots: with the numbered markers (each label is
-  just the marker's number, plus one label at the centre with the full tile number, so a stale
-  frame is caught), and after `clean` hides them, the image kept. It only types while the game is in front;
+  at the main menu: a running match keeps its map), waits for the status strip, measures the
+  camera bounds the game really applies (an arena's are far tighter than its map file says)
+  from where the camera stops when sent to two corners, re-plans the grid from them, sends
+  each tile with its position (`tile <n> <x> <y>`), records where the camera really went
+  (`positions.json`), and for each tile takes the image kept after `clean`, then after `black`
+  the same view over the black skybox. It only types while the game is in front;
   if the game loses focus part way through a tile, that tile is dropped and redone from its
   start once the game is back in front; black frames are retaken; it stops early if the map stops responding, and
   leaves the match at the end (`quit`), ready for the next run.

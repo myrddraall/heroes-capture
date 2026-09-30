@@ -31,7 +31,7 @@ import numpy as np
 import pydirectinput
 from PIL import Image
 
-from markers import count_labels, describe, fit_markers, fit_numbered, label_height, learn_digits, read_label
+from status import Status, StatusStrip
 
 DEFAULT_GAME = r"D:\Games\Heroes of the Storm"
 
@@ -166,6 +166,7 @@ def bring_game_to_front() -> bool:
     user32.SwitchToThisWindow(found[0], True)  # what Alt+Tab does; SetForegroundWindow alone is often refused
     user32.SetForegroundWindow(found[0])
     time.sleep(0.5)
+    park_cursor()
     return foreground_is_game()
 
 
@@ -540,7 +541,7 @@ def step(action, what: str):
         try:
             return action()
         except FocusLost:
-            print(f"  focus lost during {what}; redoing it from the start", flush=True)
+            print(f"  focus lost during {what} (in front: {foreground_program()}); redoing it from the start", flush=True)
             wait_for_game()
             if _chat_open:
                 # A half-typed line may be in the chat box: empty it and close it (Enter on an
@@ -551,6 +552,16 @@ def step(action, what: str):
                 hold_key("enter")
                 _chat_open = False
                 time.sleep(0.3)
+
+
+def park_cursor() -> None:
+    """The mouse to the middle of the game window: at a screen edge it scrolls the camera (the
+    map script also locks camera input, but not before it runs)."""
+    try:
+        region = game_region()
+        ctypes.windll.user32.SetCursorPos(region["left"] + region["width"] // 2, region["top"] + region["height"] // 2)
+    except Exception:
+        pass  # no window yet; nothing to park over
 
 
 def require_focus() -> None:
@@ -568,6 +579,7 @@ def wait_for_game() -> None:
         if not game_running():
             sys.exit("\nStopped: the game isn't running any more (did it crash?). Start it again and rerun.")
         time.sleep(0.5)
+    park_cursor()
     time.sleep(1.0)
 
 
@@ -663,7 +675,13 @@ def _leave_and_wait_for_menu() -> None:
 
 
 def settle(seconds: float) -> None:
-    """Wait with the game in front the whole time; raises FocusLost if it isn't (see step)."""
+    """Wait with the game in front the whole time; raises FocusLost if it isn't (see step). A
+    long wait (over 5 s: a probe's idle time) only needs the game in front at its end: nothing
+    is typed or grabbed meanwhile, and a window flashing up would otherwise restart the step."""
+    if seconds > 5:
+        time.sleep(seconds)
+        wait_for_game()
+        return
     end = time.time() + seconds
     while True:
         require_focus()
@@ -790,9 +808,11 @@ def main() -> None:
     global _LOG_PATH
     _LOG_PATH = args.manifest.parent / manifest["id"] / "log.txt"
     log(f"capture {manifest['id']}: {len(tiles)} tiles, screen {manifest['screen']['w']}x{manifest['screen']['h']}, fov {manifest.get('fov')}, {manifest['pxPerCell']} px/cell")
-    # Marker fits per tile (see markers.py), for stitch.py; kept across a resumed run.
-    markers_path = args.manifest.parent / manifest["id"] / "markers.json"
-    marker_fits: dict = json.loads(markers_path.read_text()) if args.start and markers_path.exists() else {}
+    # Where the camera really was for each tile (the status strip's echo), for stitch.py; kept
+    # across a resumed run.
+    positions_path = args.manifest.parent / manifest["id"] / "positions.json"
+    positions: dict = json.loads(positions_path.read_text()) if args.start and positions_path.exists() else {}
+    strip_mode = bool(manifest.get("status"))
 
     if not args.no_launch:
         switcher = Path(args.game) / "Support64" / "HeroesSwitcher_x64.exe"
@@ -833,7 +853,7 @@ def main() -> None:
     elif args.probe_sky:
         print(f"Skybox probe on {manifest['map']}: one edge tile, a scripted sequence of skybox swaps, a shot after each.")
     else:
-        shots = "three shots each (markers, clean over white, clean over black)" if manifest.get("sky") else "two shots each (markers, then clean)"
+        shots = "two shots each (over white, over black)" if (manifest.get("sky") or {}).get("mode") == "matte" else "one shot each (over black; the void is black terrain)"
         print(f"Capturing {manifest['map']}: {len(tiles) - args.start} tiles, {shots}. Leave the keyboard and mouse alone.")
     wait_for_map_load(not args.no_launch)
     time.sleep(3)
@@ -851,126 +871,108 @@ def main() -> None:
                 f"warning: that is not the {expected[0]}x{expected[1]} the grid was planned for; "
                 "the stitch will still work, at a different scale"
             )
+        # The status strip (status.py): the map script's readout in the top-left corner, read
+        # from every raw frame; kept shots have its column blanked (the stitch leaves it out).
+        strip = StatusStrip()
+        strip_width = int((manifest.get("status") or {}).get("pageLeft", 0))
+
+        def raw_grab() -> np.ndarray:
+            # The grab copies whatever is on screen there, so the game must be in front
+            # before and after it; otherwise it may have caught another window.
+            require_focus()
+            frame = screen.grab()
+            require_focus()
+            return frame
+
+        def blank(frame: np.ndarray) -> np.ndarray:
+            return strip.blank(frame, strip_width) if strip.located and strip_width else frame
+
         def grab(dark_ok: bool = False) -> np.ndarray | None:
-            """One frame as RGB, retaken while it comes back black; None if it stays black.
-            `dark_ok` takes a dark, flat frame as it is: with markers, a shot at a map's edge
-            can be all void (pure black on Tomb of the Spider Queen); the labels (calibration)
-            and the comparison with the calibration shot (clean, see whole_frame) judge it."""
+            """One frame as RGB (strip blanked), retaken while it comes back black; None if it
+            stays black. `dark_ok` takes a dark, flat frame as it is: a shot at a map's edge
+            can be all void (pure black on Tomb of the Spider Queen)."""
             tries = 0
             while tries < 10:
-                # The grab copies whatever is on screen there, so the game must be in front
-                # before and after it; otherwise it may have caught another window.
-                require_focus()
-                frame = screen.grab()
-                require_focus()
+                frame = blank(raw_grab())
                 if dark_ok or not looks_black(frame):
                     return frame
                 tries += 1
                 time.sleep(0.3)
             return None
 
-        # The map script skips the intro cutscene and ignores `tile` until the intro's exit has
-        # restored the camera and interface. With markers, the capture is ready once the "0123456789" reference label
-        # reads: it only appears after a `tile` was accepted. So: ask, look, and ask again.
-        # The start-up check (and the digits) at the middle tile: a tile at the map's corner has
-        # its labels outside the map, where text tags aren't drawn (Punisher Arena).
-        # (On a map of several arenas: the middle of the first arena, not the sky between them.)
+        seq_counter = [0]
+
+        def send(command: str, timeout: float = 2.0, sends: int = 4) -> tuple[Status, np.ndarray] | None:
+            """A chat command with a sequence number appended, then the strip polled until it
+            shows that number: the command has been carried out and the frame rendered. Returns
+            the status and that raw frame; None when the map never answered (sent `sends`
+            times, `timeout` seconds each)."""
+            for _ in range(sends):
+                seq_counter[0] = seq_counter[0] % 255 + 1  # 1..255; 0 is what the strip shows before any command
+                seq = seq_counter[0]
+                send_chat(f"{command} {seq}")
+                deadline = time.time() + timeout
+                while time.time() < deadline:
+                    raw = raw_grab()
+                    status = strip.read(raw)
+                    if status is not None and status.seq == seq:
+                        return status, raw
+                    time.sleep(0.02)
+            return None
+
+        # Start-up. The first command goes to the middle tile (of the first arena, on a map of
+        # several): a corner tile can be clamped far from where it was sent.
         first_area = [t for t in tiles if t.get("area", 0) == 0]
         centre_x = (min(t["x"] for t in first_area) + max(t["x"] for t in first_area)) / 2
         centre_y = (min(t["y"] for t in first_area) + max(t["y"] for t in first_area)) / 2
         first_tile = min(first_area, key=lambda t: abs(t["x"] - centre_x) + abs(t["y"] - centre_y))
-        digits = None
-        ref_height = None
         if manifest.get("keepIntro"):
             # Diagnostic: the intro plays out. Nothing is typed meanwhile, in case keys count
             # as skipping it.
             log("letting the intro cutscene play out (nothing typed for 60 s) ...")
             step(lambda: settle(60.0), "the wait for the intro")
-        def describe_labels(frame: np.ndarray, digits: dict) -> str:
-            """What the label reader sees: each label's digits and character count."""
-            from markers import _glyphs, _label_boxes, _read
 
-            seen = []
-            for box in _label_boxes(frame):
-                glyphs = _glyphs(frame, box)
-                seen.append("".join(str(_read(g, digits)[0]) for g in glyphs) + f"({len(glyphs)})")
-            return " ".join(seen) if seen else "none"
-
-        if manifest.get("markers"):
-            log("waiting for the intro cutscene to finish ...")
+        if strip_mode:
+            # 1. The status strip: drawn by the map script from its start, but the interface is
+            #    hidden while the intro cutscene plays. Nothing is typed until it shows.
             deadline = time.time() + 180
-            attempts = 0
-            ref = None
-            def attempt() -> np.ndarray | None:
-                send_chat(tile_command(first_tile))
-                settle(1.0)
-                send_chat("glyphs")
-                settle(1.0)
-                return grab(dark_ok=True)
-
-            previous_ref, responded_tries = None, 0
-            while True:
-                ref = step(attempt, "the start-up check")
-                digits = learn_digits(ref) if ref is not None else None
-                attempts += 1
-                if digits or time.time() > deadline:
-                    break
-                # While an intro or a selection phase is running, `tile` is ignored and the
-                # screen barely changes between tries: keep asking (up to the 3-minute
-                # deadline). Once the screen answers a `tile` (a big change) the labels should
-                # be there too; several answered tries without them, and it's time to stop.
-                if ref is not None and previous_ref is not None and changed_share(ref, previous_ref) > 0.3:
-                    responded_tries += 1
-                previous_ref = ref
-                log(f"  start-up: try {attempts}, no readable labels yet" + (" (the map is answering)" if responded_tries else ""))
-                if responded_tries >= 5:
-                    if ref is not None:
-                        Image.fromarray(np.ascontiguousarray(ref)).save(out.parent / "glyphs.png", compress_level=1)
+            log("waiting for the map's status strip ...")
+            while not step(lambda: strip.locate(raw_grab()), "finding the status strip"):
+                if time.time() > deadline:
                     quit_match()
                     sys.exit(
-                        "\nStopped: the map answers the commands but the reference label never appeared. What the\n"
-                        f"capture saw is in {out.parent / 'glyphs.png'}. If every interface panel is visible in the\n"
-                        "game, the map's script failed to compile; if the view isn't flat and far, the map is\n"
-                        "overriding the camera."
+                        "\nStopped: the map's status strip never appeared. If every interface panel is visible\n"
+                        "in the game, the map's script failed to compile."
                     )
-                time.sleep(2.0)
-            if ref is not None:
-                Image.fromarray(np.ascontiguousarray(ref)).save(out.parent / "glyphs.png", compress_level=1)
-                ref_height = label_height(ref) if digits else None
-            log("digits learned from the reference label" if digits else
-                "could not learn the digits (see glyphs.png); falling back to the marker pattern")
-            if digits and not manifest.get("unbound"):
-                # The camera bounds the game really applies (an arena's are far tighter than
-                # its map file says): the script measures them and shows them as a 12-digit
-                # label. A grid planned for the wrong bounds spends most tiles on sky. (Not
-                # when the script lifts the bounds: the grid then comes from the map file, or
-                # from its arena areas.)
-                # One command, then several looks a while apart (the label stays up): the
-                # first look at a Punisher Arena run showed two 12-digit texts drawn on top of
-                # each other, unreadable; a later look may be clean. The command is repeated
-                # once if no two looks agree.
-                bounds, reads, look_no = None, [], 0
-                for attempt_no in range(2):
-                    send_chat("bounds")
-                    settle(2.5)
-                    for _look in range(3):
-                        shot = grab(dark_ok=True)
-                        text = read_label(shot, digits, 12) if shot is not None else None
-                        if shot is not None:
-                            # Kept for diagnosis, with what the reader saw.
-                            Image.fromarray(np.ascontiguousarray(shot)).save(out.parent / f"bounds-{look_no}.png", compress_level=1)
-                            log(f"  bounds look {look_no + 1}: labels on screen {describe_labels(shot, digits)}" + (f", read {text}" if text else ", no 12-digit label read"))
-                        look_no += 1
-                        if text:
-                            reads.append(text)
-                            if reads.count(text) >= 2:  # the same twelve digits twice: a clean read
-                                l, b, r, t = (int(text[i : i + 3]) for i in (0, 3, 6, 9))
-                                if l < r and b < t:
-                                    bounds = {"left": l, "bottom": b, "right": r, "top": t}
-                                break
-                        settle(1.5)
-                    if bounds is not None:
-                        break
+                time.sleep(0.5)
+            log(f"  status strip: {strip.cell} px cells at {strip.origin}")
+            if strip_width and strip.cell + strip.origin[0] > strip_width:
+                log(f"  warning: the strip ({strip.cell + strip.origin[0]} px) is wider than the {strip_width} px blanked; lower the interface scale or raise pageLeft")
+            # 2. The first tile, until the map takes it: `tile` is ignored while the intro's
+            #    exit is still restoring the camera and interface.
+            while True:
+                answer = step(lambda: send(tile_command(first_tile), timeout=2.0, sends=1), "the start-up")
+                if answer:
+                    break
+                if time.time() > deadline:
+                    quit_match()
+                    sys.exit("\nStopped: the map never carried out a command (the strip shows, so the script runs; is a selection phase holding it?)")
+                log("  start-up: the map hasn't taken a command yet (intro or selection phase)")
+                time.sleep(1.0)
+            # 3. The camera bounds the game really applies (an arena's are far tighter than its
+            #    map file says): the camera is sent to the map's corners and the strip reports
+            #    where it stopped. A grid planned for the wrong bounds spends most tiles on
+            #    sky. (Not when the script lifts the bounds: the grid then comes from the map
+            #    file, or from its arena areas.)
+            if not manifest.get("unbound"):
+                size = manifest["mapSize"]
+                low = step(lambda: send("tile 0 0 0", timeout=3.0), "the bounds check")
+                high = step(lambda: send(f"tile 0 {size['width']} {size['height']}", timeout=3.0), "the bounds check")
+                bounds = None
+                if low and high:
+                    bounds = {"left": low[0].camera_x, "bottom": low[0].camera_y, "right": high[0].camera_x, "top": high[0].camera_y}
+                    if not (bounds["left"] < bounds["right"] and bounds["bottom"] < bounds["top"]):
+                        bounds = None
                 if bounds is None:
                     log("  couldn't measure the camera bounds in the game; using the map file's")
                 else:
@@ -982,6 +984,19 @@ def main() -> None:
                         log(f"camera bounds in the game: {bounds} (map file: {planned}); grid re-planned: {manifest['cols']}x{manifest['rows']} = {len(tiles)} tiles")
                     else:
                         log(f"camera bounds in the game match the map file: {bounds}")
+            # The game's intro exit pans the camera to the player's start position a moment after
+            # the map starts taking commands; the first tile must not be shot into that. The
+            # view has to hold still for a second before the tiles start.
+            def hold_still() -> None:
+                before = grab(dark_ok=True)
+                for _ in range(20):
+                    settle(1.0)
+                    now = grab(dark_ok=True)
+                    if before is not None and now is not None and same_view(now, before):
+                        return
+                    before = now
+
+            step(hold_still, "waiting for the camera to hold still")
         else:
 
             def start() -> None:
@@ -1023,30 +1038,64 @@ def main() -> None:
                 for n, (x, y) in enumerate(points, start=1):
                     send_chat(f"look {x:.1f} {y:.1f}")
                     settle(1.0)
+                    if os.environ.get("HRS_PROBE_TILE_PATH"):
+                        # The render's own path at this spot: "tile" (scene set-up and all) or
+                        # "move" (the same camera moves, no scene set-up), acknowledged through
+                        # the strip, then `clean`, a wait, a shot. Entries "cmd:settle;...", each
+                        # after a jump 100 cells away so the spot is arrived at afresh.
+                        # Entries "cmd,cmd,...:settle": the commands in order ("tile" and "move"
+                        # get the spot appended; "black", "sky white" etc. as they are), then
+                        # `clean`, the wait, a shot.
+                        for k, entry in enumerate(os.environ["HRS_PROBE_TILE_PATH"].split(";")):
+                            cmds, wait = entry.rsplit(":", 1)
+                            if "@" not in cmds:
+                                send_chat(f"look {x + 100:.1f} {y:.1f}")  # arrive afresh
+                                settle(1.0)
+                            acked = True
+                            for cmd in cmds.split(","):
+                                # "tile@x,y" / "move@x,y": that spot instead of the point (a
+                                # neighbouring tile, to arrive the way the render does).
+                                if cmd.startswith(("tile@", "move@")):
+                                    name, at = cmd.split("@")
+                                    full = f"{name} 0 {at.replace(':', ' ')}"
+                                elif cmd in ("tile", "move"):
+                                    full = f"{cmd} 0 {x:.2f} {y:.2f}"
+                                else:
+                                    full = cmd
+                                acked = send(full, timeout=3.0) is not None and acked
+                            if float(wait) > 5:
+                                log(f"  waiting {float(wait):g} s of match time before the next shot ...")
+                            settle(float(wait))
+                            send("clean")
+                            label = cmds.replace(",", "+").replace(" ", "").replace(":", "_") if len(cmds) < 40 else f"{cmds.count(',') + 1}cmds-{cmds.split(',')[0].replace(' ', '')}"
+                            shot(f"point{n}-{k:02d}-{label}-s{wait}" + ("" if acked else "-noack"))
+                        continue
                     if os.environ.get("HRS_PROBE_REFIT_SCAN"):
                         # Where must the normal camera look for its refit to reach this spot?
                         # Each entry "dx,dy,distance": the normal camera at that offset from the
                         # spot and that distance, then the capture camera at the spot, one shot.
                         # Entries separated by ";": a sequence of looks separated by "|", each
-                        # "dx,dy,distance[,pitch,yaw,dwell]", then the capture camera and a shot.
+                        # "dx,dy,distance[,pitch,yaw,dwell[,settle]]", then the capture camera,
+                        # `settle` seconds (the last look's; default 2), and a shot.
                         for k, entry in enumerate(os.environ["HRS_PROBE_REFIT_SCAN"].split(";")):
                             names = []
+                            final_settle = 2.0
                             for look in entry.split("|"):
                                 vals = [float(v) for v in look.split(",")]
-                                vals += [0, 0, 1.5][len(vals) - 3 :]  # defaults for pitch, yaw, dwell
-                                dx, dy, dist, npitch, nyaw, dwell = vals
+                                vals += [0, 0, 1.5, 2.0][len(vals) - 3 :]  # defaults for pitch, yaw, dwell, settle
+                                dx, dy, dist, npitch, nyaw, dwell, final_settle = vals
                                 send_chat(f"look {x + dx:.1f} {y + dy:.1f}")
                                 settle(0.3)
                                 send_chat(f"normal {dist:g} {npitch:g} {nyaw:g}")
                                 settle(dwell)
-                                names.append(f"d{dist:g}p{npitch:g}y{nyaw:g}")
+                                names.append(f"d{dist:g}p{npitch:g}y{nyaw:g}w{dwell:g}")
                             send_chat(f"look {x:.1f} {y:.1f}")
                             settle(0.3)
                             send_chat("fov 0")
                             settle(0.3)
                             send_chat("zoom 0")
-                            settle(2.0)
-                            shot(f"point{n}-{k:02d}-refit-" + "_".join(names))
+                            settle(final_settle)
+                            shot(f"point{n}-{k:02d}-refit-" + "_".join(names) + f"-s{final_settle:g}")
                         continue
                     if os.environ.get("HRS_PROBE_CLIP"):
                         # The capture camera at the current clip planes, then shorter far clips
@@ -1132,8 +1181,6 @@ def main() -> None:
             # Do our solid-colour skyboxes show, and are they flat? An edge tile (left edge,
             # middle row: half map, half sky) over each colour in turn; the sky part of each
             # shot is measured (mean colour and spread) and the shots are kept.
-            if not manifest.get("sky"):
-                sys.exit("--probe-sky needs a map prepared with inject.mjs --sky")
             probe_dir = out.parent / f"probe-sky-{time.strftime('%H%M%S')}"
             probe_dir.mkdir(exist_ok=True)
             edge = min(tiles, key=lambda t: t["col"] * 1000 + abs(t["y"] - (manifest["area"]["top"] + manifest["area"]["bottom"]) / 2))
@@ -1177,113 +1224,36 @@ def main() -> None:
             print(f"\nprobe screenshots in {probe_dir}")
             return
 
-        def labels_on(frame: np.ndarray) -> int:
-            """Our labels on screen, not counting the map's own magenta lights."""
-            return count_labels(frame, digits, ref_height)
+        last_calibration: list[np.ndarray] = []  # the frame the strip acknowledged `tile` in: the reference view
+        calibration_mismatch = [False]  # set by whole_frame: the kept shot isn't the reference view
 
-        # The tile id label is zero-padded like this (capture-script.mjs).
-        id_digits = max(3, len(str(len(manifest["tiles"]) - 1)))
-
-        last_calibration: list[np.ndarray] = []  # the latest calibration shot, kept if it fails
-
-        def calibrate(tile: dict) -> tuple[dict | None, int]:
-            """Calibration shot: (fit, labels on screen). Dark frames are fine: at a map's edge
-            the view can be all void but for the labels, and the labels decide."""
-            frame = grab(dark_ok=True)
-            last_calibration[:] = [frame] if frame is not None else []
-            if frame is None:
-                return None, 0
-            if digits:
-                fit = fit_numbered(frame, manifest["markers"], digits, tile["index"], id_digits)
-            else:
-                fit = fit_markers(frame, manifest["markers"], manifest["screen"], manifest["pxPerCell"])
-            return fit, labels_on(frame)
-
-        # After a command: a first shot shortly after, one retake a little later, and if neither
-        # shows the command's effect, the command is sent again (it may have been missed).
-        FIRST_SHOT, RETAKE, SENDS = 0.1, 0.15, 4
-        calibration_mismatch = [False]  # set by whole_frame: the kept shot isn't the calibrated view
-
-        def same_fit(a: dict | None, b: dict | None) -> bool:
-            """Two marker fits put the camera in the same place, to within a pixel."""
-            if not (a and a.get("fit") and b and b.get("fit")):
-                return False
-            return abs(a["fit"][2] - b["fit"][2]) < 1.0 and abs(a["fit"][5] - b["fit"][5]) < 1.0
-
-        def command_calibration(tile: dict) -> tuple[dict | None, int, float]:
-            """`tile N`, until two calibration shots in a row show this tile's id and the same
-            marker fit: (fit, labels on screen, time of the last send). One isn't enough: the
-            labels can move to the new tile a frame before the camera does, and that shot
-            measures the camera still at the previous tile. If the shots don't settle, the
-            command is sent again."""
-            fit, labels = None, 0
-            for _ in range(SENDS):
-                send_chat(tile_command(tile))
-                moved = time.time()
-                before = None
-                for wait in (FIRST_SHOT, RETAKE, 0.05, 0.05):
-                    settle(wait)
-                    fit, labels = calibrate(tile)
-                    if same_fit(before, fit):
-                        return fit, labels, moved
-                    before = fit
-            return fit, labels, moved
-
-        def command_clean(moved: float) -> np.ndarray | None:
-            """`clean`, until a shot has no labels left; then the kept shot, a moment later: the
-            chat box may still be closing and the "clean" message still showing (the script
-            clears messages at once and four times a second). Not before --settle seconds from
-            the move, for the textures to finish loading."""
-            calibration_mismatch[0] = False
-            wait = moved + args.settle - time.time()
-            if wait > 0:
-                settle(wait)
-            frame = None
-            for _ in range(SENDS):
-                send_chat("clean")
-                for wait in (FIRST_SHOT, RETAKE):
-                    settle(wait)
-                    frame = grab(dark_ok=True)
-                    if frame is None:
-                        return None
-                    if labels_on(frame) == 0:
-                        settle(0.3)
-                        return whole_frame(grab(dark_ok=True))
-            return frame
-
-        def command_black(white: np.ndarray) -> np.ndarray | None:
-            """`black`: the same view over the black skybox, for the matte. The sky is not
-            picked out (bright flat grey also describes the heaven marble): the share of black
-            pixels jumps when the sky turns black and then holds still, and that is what is
-            waited for. A view whose black share doesn't move within two grabs has no sky in
-            it and is taken as it is. The command is sent again if nothing settles."""
+        def black_settled(first: np.ndarray, white: np.ndarray) -> np.ndarray:
+            """The shot over black, once the skybox swap has finished rendering: the share of
+            black pixels jumps and then holds still between two grabs (no sky in view: the
+            first frame as it is)."""
 
             def black_share(frame: np.ndarray) -> float:
                 return float((frame[::4, ::4].max(axis=2) <= 6).mean())
 
-            before_swap = black_share(white)
-            for _ in range(SENDS):
-                send_chat("black")
-                previous = None
-                for k, wait in enumerate((FIRST_SHOT, RETAKE, 0.1, 0.1, 0.1)):
-                    settle(wait)
-                    frame = grab(dark_ok=True)
-                    if frame is None:
-                        return None
-                    share = black_share(frame)
-                    if share - before_swap > 0.005:
-                        if previous is not None and abs(share - previous) < 0.002:
-                            return frame  # swapped, and holding still
-                        previous = share
-                    elif k == 1 and previous is None:
-                        return frame  # no sky in view; the shot only completes the pair
-            return None
+            before, frame, share = black_share(white), first, black_share(first)
+            for _ in range(8):
+                if share - before <= 0.005:
+                    return frame  # no sky in view, or the swap not rendered yet: look once more below
+                settle(0.05)
+                again = grab(dark_ok=True)
+                if again is None:
+                    return frame
+                next_share = black_share(again)
+                if abs(next_share - share) < 0.002:
+                    return again
+                frame, share = again, next_share
+            return frame
 
         def whole_frame(frame: np.ndarray | None) -> np.ndarray | None:
-            """The kept shot, retaken while it disagrees with this tile's calibration shot (same
+            """The kept shot, retaken while it disagrees with this tile's reference frame (same
             view) and with the retake before it: a half-drawn frame. Two retakes that agree
-            with each other are accepted, in case the calibration shot was the bad one; then
-            calibration_mismatch is set, since its marker fit doesn't describe this shot."""
+            with each other are accepted, in case the reference was the bad one; then
+            calibration_mismatch is set."""
             calibration_mismatch[0] = False
             reference = last_calibration[0] if last_calibration else None
             # Same view as the calibration shot (no shift), however much animates (an animated
@@ -1314,63 +1284,70 @@ def main() -> None:
 
         previous = None
         failures = 0  # consecutive tiles that stayed black
-        silent = 0  # consecutive tiles whose calibration shot showed no labels at all
         started = time.time()
-        matting = bool(manifest.get("sky"))
+        matting = (manifest.get("sky") or {}).get("mode") == "matte"
 
-        def shoot(tile: dict) -> tuple[dict | None, int, np.ndarray | None, bool, np.ndarray | None]:
-            """One tile, start to finish, as one step: (fit, labels on the calibration shot,
-            kept shot, whether the kept shot matched its calibration shot, the same view over
-            the black skybox when matting)."""
-            if not manifest.get("markers"):
+        def shoot(tile: dict) -> tuple[Status | None, np.ndarray | None, np.ndarray | None]:
+            """One tile, start to finish, as one step: (the strip's status at the tile: where
+            the camera really is; the kept shot; the same view over the black skybox when
+            matting). A tile whose kept shot isn't the view it was acknowledged in (something
+            moved the camera in between) is done again, once."""
+            if not strip_mode:
                 send_chat(tile_command(tile))
                 settle(max(args.settle, 1.0))
-                return None, 0, grab(), False, None
-            # Shot 1 of 2, calibration: the numbered markers give the exact camera geometry,
-            # and the tile id label proves the view is this tile. Without learned digits there
-            # is no id to check: one send and a fixed wait instead.
-            if digits:
-                fit, labels, moved = command_calibration(tile)
-            else:
-                send_chat(tile_command(tile))
-                moved = time.time()
-                settle(1.0)
-                fit, labels = calibrate(tile)
-            # Shot 2, clean: markers hidden, camera unmoved, over the white skybox. This is the
-            # image kept. Shot 3 (matting): the same over black; the stitch turns the pair into
-            # colour and transparency.
-            frame = command_clean(moved)
-            black = command_black(frame) if matting and frame is not None else None
-            return fit, labels, frame, calibration_mismatch[0], black
+                return None, grab(), None
+            result = shoot_once(tile)
+            if calibration_mismatch[0] and result[1] is not None:
+                log(f"    tile {tile['index']}: the view changed under it; doing it again")
+                result = shoot_once(tile)
+            return result
+
+        def shoot_once(tile: dict) -> tuple[Status | None, np.ndarray | None, np.ndarray | None]:
+            calibration_mismatch[0] = False
+            # `tile`, acknowledged once the camera has moved and been clamped: the status says
+            # where the camera really is, and the acknowledged frame is the reference view.
+            answer = send(tile_command(tile), timeout=3.0)
+            if answer is None:
+                return None, None, None
+            moved = time.time()
+            status = answer[0]
+            last_calibration[:] = [blank(answer[1])]
+            # Shot 1, clean: camera unmoved, over the white skybox, not before --settle seconds
+            # from the move (textures still loading). This is the image kept.
+            wait = moved + args.settle - time.time()
+            if wait > 0:
+                settle(wait)
+            answer = send("clean")
+            if answer is None:
+                return status, None, None
+            frame = whole_frame(blank(answer[1]))
+            # Shot 2 (matting): the same over black; the stitch turns the pair into colour and
+            # transparency.
+            black = None
+            if matting and frame is not None:
+                answer = send("black")
+                if answer is not None:
+                    black = black_settled(blank(answer[1]), frame)
+            return status, frame, black
 
         for tile in tiles[args.start :]:
             note = ""
-            fit, labels, frame, mismatch, black = step(lambda: shoot(tile), f"tile {tile['index']}")
-            if manifest.get("markers"):
-                # Tiles whose labels all fall outside the map (a corner of wide camera bounds,
-                # as on the arena maps) show none; the script is known to work since the
-                # digits were learned, so only a long run of label-less tiles means trouble.
-                silent = silent + 1 if labels == 0 else 0
-                if silent and silent % 25 == 0:
-                    log(f"  no labels on screen for {silent} tiles in a row (sky beyond the map, or the map's script has stopped responding)")
-                if not (fit and fit.get("fit")) and last_calibration:
-                    # Kept for diagnosis: what the reader saw when it found no usable fit.
-                    failed = out.parent / "failed-calibration"
-                    failed.mkdir(exist_ok=True)
-                    shot = Image.fromarray(np.ascontiguousarray(last_calibration[0]))
-                    saver.submit(shot.save, failed / f"tile_{tile['index']:04d}.png", compress_level=1)
-                if fit and not fit.get("fit"):
-                    fit = None  # the id label named another tile: a stale frame, no usable fit
-                note = "  " + describe(fit)
-                if frame is not None and labels_on(frame) > 0:
-                    note += "  (labels still visible in the clean shot)"
-                if fit and mismatch:
-                    # The kept shot isn't the view the markers measured; a wrong anchor would put
-                    # it in the wrong place, so the stitch places it by image matching instead.
-                    fit = None
-                    note += "  (kept shot doesn't match its calibration; placed by image matching)"
-                marker_fits[str(tile["index"])] = fit
-                markers_path.write_text(json.dumps(marker_fits))
+            status, frame, black = step(lambda: shoot(tile), f"tile {tile['index']}")
+            if strip_mode and status is not None:
+                # Where the camera really is, for the stitch. Near the edges the game holds it
+                # back, which is worth a note.
+                positions[str(tile["index"])] = {"x": status.camera_x, "y": status.camera_y}
+                positions_path.write_text(json.dumps(positions))
+                off_x, off_y = status.camera_x - tile["x"], status.camera_y - tile["y"]
+                if abs(off_x) > 0.5 or abs(off_y) > 0.5:
+                    parts = []
+                    if abs(off_x) > 0.5:
+                        parts.append(f"{abs(off_x):.1f} cells {'east' if off_x > 0 else 'west'}")
+                    if abs(off_y) > 0.5:
+                        parts.append(f"{abs(off_y):.1f} cells {'north' if off_y > 0 else 'south'}")
+                    note += "  camera " + " and ".join(parts) + " of plan"
+                if calibration_mismatch[0]:
+                    note += "  (kept shot doesn't match the view the tile was acknowledged in)"
             # Near the edges the game holds the camera back, so neighbouring tiles can really
             # show the same view; keep it either way (the stitch places duplicates on top of each
             # other). Only black frames are failures.
@@ -1379,12 +1356,12 @@ def main() -> None:
 
             if frame is None:
                 failures += 1
-                log(f"    tile {tile['index']} failed (black); not saved")
+                log(f"    tile {tile['index']} failed (no answer from the map, or black frames); not saved")
                 if failures >= 3:
                     quit_match()
                     first_bad = tile["index"] - failures + 1
                     sys.exit(
-                        f"\nStopped: the game stopped responding at tile {first_bad} (black frames).\n"
+                        f"\nStopped: the game stopped responding at tile {first_bad} (no answers, or black frames).\n"
                         f"Check what the game shows, then resume from there in a fresh game:\n"
                         f"  py capture.py {args.manifest} --game \"{args.game}\" --start {first_bad}"
                     )
@@ -1405,9 +1382,8 @@ def main() -> None:
         saver.shutdown(wait=True)
 
     quit_match()
-    if manifest.get("markers"):
-        good = sum(1 for f in marker_fits.values() if f)
-        log(f"markers found in {good} of {len(marker_fits)} screenshots")
+    if strip_mode:
+        log(f"camera positions recorded for {len(positions)} screenshots")
     print(f"\n{len(tiles) - args.start} screenshots in {out}\nnext: python stitch.py {args.manifest}")
 
 
