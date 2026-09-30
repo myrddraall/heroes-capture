@@ -9,6 +9,7 @@ rem     --show-ui      diagnostic: leave the HUD up, launch the map and stop
 rem     --probe-zoom   diagnostic: find how far the camera can be before markers stop drawing
 rem     --probe-fov    diagnostic: find the narrowest field of view that still draws markers
 rem     --probe-light  diagnostic: screenshots from several camera distances and positions
+rem     --probe-sky    diagnostic: one edge tile over each solid-colour skybox (adds them)
 rem
 rem Start Heroes from Battle.net first (so it is logged in), in Windowed (Fullscreen).
 setlocal
@@ -25,9 +26,10 @@ rem little at the seams. (The dark areas seen at far distances were the game's l
 rem to an old camera; the map script now refits it at every tile, so the distance is free.)
 set "DISTANCE=214"
 set "KEEP=0.4"
-rem Keep objective units such as altars (removing them leaves black holes in the terrain), and
-rem show registration markers, which place every screenshot exactly.
-set "EXTRA=--keep-mechanics --markers"
+rem Keep objective units such as altars (removing them leaves black holes in the terrain), show
+rem registration markers, which place every screenshot exactly, and add the white and black
+rem skyboxes each tile is shot over, which make the void transparent.
+set "EXTRA=--keep-mechanics --markers --sky"
 set "GAME=D:\Games\Heroes of the Storm"
 
 rem Options after the map and structures go to inject.mjs as they are.
@@ -44,9 +46,11 @@ set "PROBE="
 echo %ARGS% | find "--probe-zoom" >nul && set "PROBE=--probe-zoom"
 echo %ARGS% | find "--probe-fov" >nul && set "PROBE=--probe-fov"
 echo %ARGS% | find "--probe-light" >nul && set "PROBE=--probe-light"
+echo %ARGS% | find "--probe-sky" >nul && set "PROBE=--probe-sky"
 if defined PROBE set "ARGS=%ARGS:--probe-zoom=%"
 if defined PROBE set "ARGS=%ARGS:--probe-fov=%"
 if defined PROBE set "ARGS=%ARGS:--probe-light=%"
+if defined PROBE set "ARGS=%ARGS:--probe-sky=%"
 set "SHOWUI="
 echo %ARGS% | find "--show-ui" >nul && set "SHOWUI=1"
 

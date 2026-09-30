@@ -777,6 +777,7 @@ def main() -> None:
     ap.add_argument("--probe-zoom", action="store_true", help="find the camera distance beyond which the markers stop drawing")
     ap.add_argument("--probe-fov", action="store_true", help="find the narrowest field of view at which the markers still draw")
     ap.add_argument("--probe-light", action="store_true", help="screenshots of chosen points (HRS_PROBE_POINTS) from several camera distances, to diagnose uneven lighting")
+    ap.add_argument("--probe-sky", action="store_true", help="one edge tile over each solid-colour skybox (inject.mjs --sky), to check the colour shows and is uniform")
     ap.add_argument("--settle", type=float, default=0.5, help="least seconds from a move to the kept screenshot (default 0.5)")
     ap.add_argument("--start", type=int, default=0, help="first tile, to resume a run (default 0)")
     ap.add_argument("--monitor", type=int, help="capture this mss monitor number instead of the game window")
@@ -829,8 +830,11 @@ def main() -> None:
 
     if args.probe_light:
         print(f"Lighting probe on {manifest['map']}: screenshots at chosen spots and cameras.")
+    elif args.probe_sky:
+        print(f"Skybox probe on {manifest['map']}: one edge tile, a scripted sequence of skybox swaps, a shot after each.")
     else:
-        print(f"Capturing {manifest['map']}: {len(tiles) - args.start} tiles, two shots each (markers, then clean). Leave the keyboard and mouse alone.")
+        shots = "three shots each (markers, clean over white, clean over black)" if manifest.get("sky") else "two shots each (markers, then clean)"
+        print(f"Capturing {manifest['map']}: {len(tiles) - args.start} tiles, {shots}. Leave the keyboard and mouse alone.")
     wait_for_map_load(not args.no_launch)
     time.sleep(3)
 
@@ -1124,6 +1128,55 @@ def main() -> None:
             print(f"\nprobe screenshots in {probe_dir}")
             return
 
+        if args.probe_sky:
+            # Do our solid-colour skyboxes show, and are they flat? An edge tile (left edge,
+            # middle row: half map, half sky) over each colour in turn; the sky part of each
+            # shot is measured (mean colour and spread) and the shots are kept.
+            if not manifest.get("sky"):
+                sys.exit("--probe-sky needs a map prepared with inject.mjs --sky")
+            probe_dir = out.parent / f"probe-sky-{time.strftime('%H%M%S')}"
+            probe_dir.mkdir(exist_ok=True)
+            edge = min(tiles, key=lambda t: t["col"] * 1000 + abs(t["y"] - (manifest["area"]["top"] + manifest["area"]["bottom"]) / 2))
+
+            def run_sky_probe() -> None:
+                send_chat(tile_command(edge))
+                settle(2.0)
+                send_chat("clean")
+                settle(0.5)
+
+                def shot(name: str) -> None:
+                    frame = grab(dark_ok=True)
+                    if frame is None:
+                        log(f"  {name}: no frame")
+                        return
+                    Image.fromarray(np.ascontiguousarray(frame)).save(probe_dir / f"{name}.png", compress_level=1)
+                    # The left fifth (sky, if the tile sits on the edge) and a patch of open
+                    # sky further in.
+                    h, w = frame.shape[:2]
+                    parts = []
+                    for what, part in (("left fifth", frame[:, : w // 5]), ("sky patch", frame[: h // 3, w // 4 : w // 4 + w // 8])):
+                        px = part.reshape(-1, 3).astype(np.float32)
+                        parts.append(f"{what} {tuple(int(v) for v in px.mean(axis=0))} ±{tuple(round(float(v), 1) for v in px.std(axis=0))}")
+                    log(f"  {name}: " + "; ".join(parts))
+
+                # A scripted sequence: what each command shows, in order. Layer 0 is the
+                # camera-fixed skybox; layer 1 the terrain-relative parallax layer. The same
+                # command twice a while apart tells a slow transition from a failed swap.
+                sequence = os.environ.get("HRS_SKY_SEQUENCE") or "start:0|black 0:2.5|white 0:2.5|magenta 0:2.5|lime 0:2.5|cyan 0:2.5|none 0:2.5"
+                previous = None
+                for k, item in enumerate(sequence.split("|")):
+                    command, wait = item.rsplit(":", 1)
+                    if command not in ("start", previous):  # the same command again: only wait longer, don't resend
+                        send_chat(f"sky {command}")
+                    settle(float(wait))
+                    shot(f"{k:02d}-{command.replace(' ', '-layer')}-{wait}s")
+                    previous = command
+
+            step(run_sky_probe, "the skybox probe")
+            quit_match()
+            print(f"\nprobe screenshots in {probe_dir}")
+            return
+
         def labels_on(frame: np.ndarray) -> int:
             """Our labels on screen, not counting the map's own magenta lights."""
             return count_labels(frame, digits, ref_height)
@@ -1198,6 +1251,34 @@ def main() -> None:
                         return whole_frame(grab(dark_ok=True))
             return frame
 
+        def command_black(white: np.ndarray) -> np.ndarray | None:
+            """`black`: the same view over the black skybox, for the matte. The sky is not
+            picked out (bright flat grey also describes the heaven marble): the share of black
+            pixels jumps when the sky turns black and then holds still, and that is what is
+            waited for. A view whose black share doesn't move within two grabs has no sky in
+            it and is taken as it is. The command is sent again if nothing settles."""
+
+            def black_share(frame: np.ndarray) -> float:
+                return float((frame[::4, ::4].max(axis=2) <= 6).mean())
+
+            before_swap = black_share(white)
+            for _ in range(SENDS):
+                send_chat("black")
+                previous = None
+                for k, wait in enumerate((FIRST_SHOT, RETAKE, 0.1, 0.1, 0.1)):
+                    settle(wait)
+                    frame = grab(dark_ok=True)
+                    if frame is None:
+                        return None
+                    share = black_share(frame)
+                    if share - before_swap > 0.005:
+                        if previous is not None and abs(share - previous) < 0.002:
+                            return frame  # swapped, and holding still
+                        previous = share
+                    elif k == 1 and previous is None:
+                        return frame  # no sky in view; the shot only completes the pair
+            return None
+
         def whole_frame(frame: np.ndarray | None) -> np.ndarray | None:
             """The kept shot, retaken while it disagrees with this tile's calibration shot (same
             view) and with the retake before it: a half-drawn frame. Two retakes that agree
@@ -1235,13 +1316,16 @@ def main() -> None:
         failures = 0  # consecutive tiles that stayed black
         silent = 0  # consecutive tiles whose calibration shot showed no labels at all
         started = time.time()
-        def shoot(tile: dict) -> tuple[dict | None, int, np.ndarray | None, bool]:
+        matting = bool(manifest.get("sky"))
+
+        def shoot(tile: dict) -> tuple[dict | None, int, np.ndarray | None, bool, np.ndarray | None]:
             """One tile, start to finish, as one step: (fit, labels on the calibration shot,
-            kept shot, whether the kept shot matched its calibration shot)."""
+            kept shot, whether the kept shot matched its calibration shot, the same view over
+            the black skybox when matting)."""
             if not manifest.get("markers"):
                 send_chat(tile_command(tile))
                 settle(max(args.settle, 1.0))
-                return None, 0, grab(), False
+                return None, 0, grab(), False, None
             # Shot 1 of 2, calibration: the numbered markers give the exact camera geometry,
             # and the tile id label proves the view is this tile. Without learned digits there
             # is no id to check: one send and a fixed wait instead.
@@ -1252,13 +1336,16 @@ def main() -> None:
                 moved = time.time()
                 settle(1.0)
                 fit, labels = calibrate(tile)
-            # Shot 2 of 2, clean: markers hidden, camera unmoved. This is the image kept.
+            # Shot 2, clean: markers hidden, camera unmoved, over the white skybox. This is the
+            # image kept. Shot 3 (matting): the same over black; the stitch turns the pair into
+            # colour and transparency.
             frame = command_clean(moved)
-            return fit, labels, frame, calibration_mismatch[0]
+            black = command_black(frame) if matting and frame is not None else None
+            return fit, labels, frame, calibration_mismatch[0], black
 
         for tile in tiles[args.start :]:
             note = ""
-            fit, labels, frame, mismatch = step(lambda: shoot(tile), f"tile {tile['index']}")
+            fit, labels, frame, mismatch, black = step(lambda: shoot(tile), f"tile {tile['index']}")
             if manifest.get("markers"):
                 # Tiles whose labels all fall outside the map (a corner of wide camera bounds,
                 # as on the arena maps) show none; the script is known to work since the
@@ -1306,6 +1393,11 @@ def main() -> None:
             previous = frame
             path = out / f"tile_{tile['index']:04d}.png"
             saver.submit(Image.fromarray(np.ascontiguousarray(frame)).save, path, compress_level=1)
+            if matting:
+                if black is not None:
+                    saver.submit(Image.fromarray(np.ascontiguousarray(black)).save, out / f"tile_{tile['index']:04d}-black.png", compress_level=1)
+                else:
+                    note += "  (no shot over black; kept opaque)"
             done = tile["index"] - args.start + 1
             eta = (time.time() - started) / done * (len(tiles) - args.start - done)
             log(f"  tile {tile['index'] + 1}/{len(tiles)}  (row {tile['row']}, col {tile['col']})  ~{eta:.0f}s left{note}")

@@ -74,7 +74,10 @@ Map names are the file names in
 | `--show-ui`                    |                  | diagnostic: leave the HUD up, launch the map and stop                                                                                                                                                            |
 | `--probe-zoom` / `--probe-fov` |                  | diagnostic: with `--markers`, measure at which camera distance / field of view the markers still draw; writes `work\<what>-probe.txt`                                                                            |
 | `--margin <cells>`             | `0`              | also capture beyond the map's camera bounds (lifts them)                                                                                                                                                         |
-| `--crop-margin <cells>`        | `12`             | the stitched image reaches this far past the camera bounds (or past each arena's area, but at most halfway to the next arena)                                                                                    |
+| `--crop-margin <cells>`        | `12`             | the stitched image reaches this far past the camera bounds (or past each arena's area)                                                                                                                         |
+| `--sky`                        | off              | add solid-colour skyboxes (black, white, magenta, lime, cyan; `sky.mjs`), for chroma keying and difference matting; chat `sky <colour>` swaps them at run time (experimental)                                  |
+| `--sky-start <colour>`         | `black`          | the skybox the map starts with                                                                                                                                                                                 |
+| `--probe-sky`                  |                  | diagnostic: with `--sky`, one edge tile over each skybox; the sky part of each shot is measured (mean colour, spread)                                                                                          |
 
 Higher `--px-per-cell` means more screenshots and a closer camera. Past about 64–128 px per
 cell there is no more detail: that's the game's own texture resolution.
@@ -82,8 +85,9 @@ cell there is no more detail: that's the game's own texture resolution.
 ### Outputs
 
 - `<id>.png`: the full image, cropped to the camera bounds plus `--crop-margin` cells (a map of
-  several arenas: `<id>-m1.png`, `<id>-m2.png`, ..., one per arena, each cropped to its area)
-- `<id>-preview.jpg`: 2048 px wide
+  several arenas: `<id>-m1.png`, `<id>-m2.png`, ..., one per arena, each cropped to its area).
+  With `--sky` (the default in render.cmd) it has an alpha channel: the void is transparent
+- `<id>-preview.jpg`: 2048 px wide (transparency shown over dark grey)
 - `<id>.geo.json`: pixels per map cell and the image origin in map cells, to place replay
   positions: `px = (x - originCell.x) * pxPerCell`, `py = (originCell.y - y) * pxPerCell`
 - `<id>-tiles/` (with `--tiles`): a Google Maps style pyramid, `{z}/{y}/{x}.jpg`, 256 px tiles
@@ -119,6 +123,19 @@ cell there is no more detail: that's the game's own texture resolution.
   extract every `mods/**/GameData/TerrainData.xml` and `LightData.xml` from the game's CASC
   storage into a folder (file names = CASC paths with `__` for the separators) and run
   `node generate-light-sets.mjs <folder>`.
+- **Transparent void (`--sky`, `sky.mjs`).** The void around and below a map is the skybox. The
+  map gets five solid-colour skyboxes: a skybox is a model on a stock mesh whose textures are
+  referenced by path, and a file in the map at that path replaces the game's, so each colour is
+  a stock mesh (the Braxis bowl and the "parallax" bowls; the big heaven/Luxoria bowl won't swap
+  at run time) plus solid-colour DDS textures, with the mesh's cloud layers made transparent.
+  The script sets the camera-fixed skybox (`GameSetBackground` layer 0) white at every tile and
+  black on `black`; the tileset's parallax layer and fog are turned off; cloud layers placed in
+  the map as doodads (Battlefield of Eternity, Punisher Arena) are hidden by type. Each tile is
+  shot over white and over black, and the stitch turns the pair into colour and transparency
+  (difference matting: the difference between the shots is exactly the see-through share; the
+  white level is measured from the shots, the game renders it at about 230; pixels that changed
+  between the shots other than by the sky, an animated glow, stay opaque). `--probe-sky` shows
+  each colour on one edge tile (`HRS_SKY_SEQUENCE` scripts the swaps).
 - **capture.py** starts Heroes through the Battle.net app if it isn't running (started
   directly it can't authenticate; `--battlenet` or `HRS_BATTLENET` if the app isn't in the
   usual place), then launches the map through `Support64\HeroesSwitcher_x64.exe` (Heroes must be

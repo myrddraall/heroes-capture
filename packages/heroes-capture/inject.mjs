@@ -29,6 +29,10 @@
  *   --show-ui                leave the HUD up (diagnostic)
  *   --keep-intro             let the intro cutscene play out instead of skipping it (diagnostic)
  *   --margin <cells>         capture past the camera bounds (lifts them)      (default 0)
+ *   --sky                    add solid-colour skyboxes (black, white, magenta, lime, cyan;
+ *                            see sky.mjs): the capture shoots each tile over white and over
+ *                            black and the stitch turns the difference into transparency
+ *   --sky-start <colour>     the skybox the map starts with                  (default white)
  *   --crop-margin <cells>    the stitched image reaches this far past the camera bounds
  *                            (or past each arena area, see below)             (default 12)
  *   --out <dir>              working folder                                   (default work)
@@ -42,6 +46,7 @@ import {
   MPQ_FILE_REPLACEEXISTING,
 } from '@jamiephan/stormlib';
 import { captureScript } from './capture-script.mjs';
+import { SKIES, skyFiles } from './sky.mjs';
 import { mainLight } from './light-data.mjs';
 
 const S2MA_MAPS = 'https://raw.githubusercontent.com/jamiephan/HeroesOfTheStorm_S2MA/main/maps';
@@ -65,6 +70,8 @@ function parseArgs(argv) {
     keepIntro: false,
     margin: 0,
     cropMargin: 12,
+    sky: false,
+    skyStart: 'white',
     out: 'work',
   };
   for (let i = 0; i < argv.length; i++) {
@@ -88,6 +95,8 @@ function parseArgs(argv) {
     else if (a === '--show-ui') opts.showUi = true;
     else if (a === '--margin') opts.margin = Number(next());
     else if (a === '--crop-margin') opts.cropMargin = Number(next());
+    else if (a === '--sky') opts.sky = true;
+    else if (a === '--sky-start') opts.skyStart = next();
     else if (a === '--out') opts.out = next();
     else if (!a.startsWith('--') && !opts.map) opts.map = a;
     else throw new Error(`unknown option ${a}`);
@@ -344,6 +353,16 @@ async function main() {
     // shot has no markers in it.
     const pageShare = null;
 
+    // Cloud layers are doodads placed in the map (Battlefield of Eternity: 20 Storm_Doodad_Heaven_Clouds);
+    // the script hides every doodad type with "cloud" in its name.
+    let hideDoodads = [];
+    try {
+      hideDoodads = [...new Set([...archive.readFileAsString('Objects').matchAll(/<ObjectDoodad [^>]*Type="([^"]*[Cc]loud[^"]*)"/g)].map((m) => m[1]))];
+    } catch {
+      // no Objects file
+    }
+    if (hideDoodads.length) console.error(`cloud doodads hidden: ${hideDoodads.join(', ')}`);
+
     const original = archive.readFileAsString('MapScript.galaxy');
     const init = original.lastIndexOf('void InitMap () {');
     if (init < 0) throw new Error('MapScript.galaxy has no InitMap; not a battleground script?');
@@ -362,6 +381,8 @@ async function main() {
       showUi: opts.showUi,
       keepIntro: opts.keepIntro,
       markers,
+      sky: opts.sky,
+      hideDoodads,
     }).replace(/\n/g, eol);
     checkDefinitionOrder(script);
     // Galaxy is single-pass: the capture functions go before InitMap, the call at its end.
@@ -376,6 +397,21 @@ async function main() {
       compression: MPQ_COMPRESSION_ZLIB,
     });
     if (!ok) throw new Error('could not replace MapScript.galaxy');
+
+    if (opts.sky) {
+      if (!SKIES[opts.skyStart]) throw new Error(`--sky-start: unknown colour ${opts.skyStart}; one of ${Object.keys(SKIES).join(', ')}`);
+      const tileset = (archive.readFileAsString('t3Terrain.xml').match(/\btileSet="([^"]+)"/i) || [])[1];
+      if (!tileset) throw new Error('t3Terrain.xml names no tileset; cannot set the skybox');
+      const read = (name) => (archive.hasFile(name) ? archive.readFileAsString(name) : null);
+      for (const file of skyFiles(tileset, opts.skyStart, read)) {
+        const added = archive.addBuffer(file.name, file.data, {
+          flags: MPQ_FILE_REPLACEEXISTING | MPQ_FILE_COMPRESS,
+          compression: MPQ_COMPRESSION_ZLIB,
+        });
+        if (!added) throw new Error(`could not add ${file.name}`);
+      }
+      console.error(`skyboxes: ${Object.keys(SKIES).join(', ')} (tileset ${tileset}, starting ${opts.skyStart})`);
+    }
 
     const manifest = {
       map: source.name,
@@ -402,6 +438,8 @@ async function main() {
       markers,
       pageShare,
       keepIntro: opts.keepIntro,
+      sky: opts.sky ? { start: opts.skyStart, colours: Object.keys(SKIES) } : null,
+      hideDoodads,
     };
     const manifestPath = resolve(opts.out, `${id}.json`);
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));

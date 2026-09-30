@@ -13,7 +13,8 @@ The map-to-pixel conversion (for replay overlays) is fitted afterwards from the 
 whose camera went where it was sent.
 
 Writes, next to the tiles folder:
-  <id>.png          the full image
+  <id>.png          the full image (with transparency where the map lets the sky through,
+                    when each tile was shot over a white and a black skybox)
   <id>-preview.jpg  a 2048 px wide preview
   <id>.geo.json     scale and origin, to convert map cells to image pixels (for replay overlays)
                     (a map of several arenas, e.g. Punisher Arena: <id>-<area>.png etc., one per arena)
@@ -23,6 +24,7 @@ Writes, next to the tiles folder:
 import argparse
 import functools
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -293,10 +295,7 @@ def main() -> None:
             if t["index"] not in placed and small(t["index"]) is not None and small(t["index"]).max() >= 12:
                 placed[t["index"]] = np.array([scale * t["x"] + ax - screen_w / 2, -scale * t["y"] + ay - screen_h / 2])
 
-    # 4. Compose. Canvas covers every placed screenshot. Full frames go down first (estimated
-    #    ones, then matched ones outermost first), so there are no gaps; then each matched
-    #    screenshot's nearest-centre region goes on top, blended over FEATHER pixels either side
-    #    of each seam so small lighting differences between screenshots don't show as steps.
+    # 4. Compose (see compose below). The canvas covers every placed screenshot.
     min_xy = np.min([p for p in placed.values()], axis=0)
     shift = -np.floor(min_xy)
     for i in placed:
@@ -306,8 +305,44 @@ def main() -> None:
     centres = {i: placed[i] + (screen_w / 2, screen_h / 2) for i in placed}
     mid = np.mean(list(centres.values()), axis=0)
 
+    # Transparency by difference matting: each tile shot over a white and a black skybox
+    # (capture.py, sky.mjs). A pixel that is sky in both differs by the whole white level; one
+    # that is all map is the same in both; in between (soft edges, glass, glow) the difference
+    # is exactly the see-through share. The white level is measured, not assumed (the game
+    # renders the white skybox at about 230), from pixels that are black in the black shot.
+    matting = bool(manifest.get("sky")) and any((tiles_dir / f"tile_{t['index']:04d}-black.png").exists() for t in present)
+    white_level = [None]
+
+    def matte(white: np.ndarray, black: np.ndarray) -> np.ndarray:
+        """RGBA from the two shots: colour from the black shot (the map's own light, nothing of
+        the sky in it), un-premultiplied; alpha from the difference."""
+        w = white.astype(np.float32)
+        b = black.astype(np.float32)
+        d = w - b
+        if white_level[0] is None:
+            sky = (b.max(axis=2) <= 4) & (w.min(axis=2) >= 120) & (w.max(axis=2) - w.min(axis=2) <= 8)
+            if sky.sum() >= 2000:
+                white_level[0] = float(np.median(w[sky].mean(axis=1)))
+                log(f"  white skybox level {white_level[0]:.1f}")
+        level = white_level[0] or 230.0
+        see_through = np.clip(d.mean(axis=2) / level, 0, 1)
+        # Not grey: something changed between the shots (an animated glow), no matte there.
+        animated = (d.max(axis=2) - d.min(axis=2)) > 24
+        alpha = np.where(animated, 1.0, 1.0 - see_through)
+        alpha = np.where(d.mean(axis=2) < -8, 1.0, alpha)
+        rgb = np.where(alpha[:, :, None] > 1 / 255, np.clip(b / np.maximum(alpha, 1 / 255)[:, :, None], 0, 255), 0)
+        return np.dstack([rgb, alpha * 255]).round().astype(np.uint8)
+
     def load(i: int) -> np.ndarray:
-        return np.asarray(Image.open(tiles_dir / f"tile_{i:04d}.png").convert("RGB"))
+        white = np.asarray(Image.open(tiles_dir / f"tile_{i:04d}.png").convert("RGB"))
+        if not matting:
+            return white
+        black_path = tiles_dir / f"tile_{i:04d}-black.png"
+        if not black_path.exists():
+            return np.dstack([white, np.full(white.shape[:2], 255, dtype=np.uint8)])
+        return matte(white, np.asarray(Image.open(black_path).convert("RGB")))
+
+    channels = 4 if matting else 3
 
     # The page: with markers, only the middle of each screenshot may be used, like a print page
     # with bleed; the markers sit in the bleed, so nothing outside the page ever reaches the
@@ -318,90 +353,193 @@ def main() -> None:
     page_y0 = int(round(screen_h / 2 - share * screen_h)) if share else 0
     page_y1 = int(round(screen_h / 2 + share * screen_h)) if share else screen_h
 
-    canvas = np.zeros((height, width, 3), dtype=np.uint8)
+    # Seams between neighbouring screenshots. Not the halfway line between their centres: the
+    # path through their overlap where the two agree best (least difference, dynamic
+    # programming at match scale). Anything off the ground plane (a floating island below the
+    # arena, a tall tower) sits at a different place in each screenshot, parallax the marker
+    # fit can't remove; a halfway cut through it shows a step, a routed seam goes around it.
+    SEAM_STEP = 2  # the seam may move this many (reduced) pixels sideways per pixel along
 
-    def paste(img: np.ndarray, x: int, y: int) -> None:
-        h, w = img.shape[:2]
-        canvas[y : y + h, x : x + w] = img
+    def route_seam(cost: np.ndarray) -> np.ndarray:
+        """Least-cost top-to-bottom path through `cost` (rows along the seam, columns across):
+        the column for each row."""
+        rows, cols = cost.shape
+        total = cost.copy()
+        back = np.zeros((rows, cols), dtype=np.int16)
+        offsets = range(-SEAM_STEP, SEAM_STEP + 1)
+        for r in range(1, rows):
+            best = np.full(cols, np.inf, dtype=np.float32)
+            for d in offsets:
+                shifted = np.full(cols, np.inf, dtype=np.float32)
+                if d >= 0:
+                    shifted[d:] = total[r - 1, : cols - d] if d else total[r - 1]
+                else:
+                    shifted[:d] = total[r - 1, -d:]
+                better = shifted < best
+                best[better] = shifted[better]
+                back[r][better] = d
+            total[r] = cost[r] + best
+        path = np.zeros(rows, dtype=np.int32)
+        path[-1] = int(np.argmin(total[-1]))
+        for r in range(rows - 1, 0, -1):
+            path[r - 1] = path[r] - back[r, path[r]]
+        return path
 
-    estimated = [i for i in placed if i not in matched]
-    for i in estimated + sorted(matched, key=lambda i: -np.hypot(*(centres[i] - mid))):
-        x, y = placed[i]
-        paste(load(i)[page_y0:page_y1, page_x0:page_x1], int(round(x)) + page_x0, int(round(y)) + page_y0)
+    def overlap_cost(i: int, j: int, x0: int, y0: int, x1: int, y1: int) -> np.ndarray:
+        """|difference| of screenshots i and j over the canvas rectangle, at match scale."""
+        a, b = small(i), small(j)
+        pi, pj = placed[i], placed[j]
+        ys = (np.arange(y0, y1, MATCH_SCALE) + MATCH_SCALE / 2)
+        xs = (np.arange(x0, x1, MATCH_SCALE) + MATCH_SCALE / 2)
 
-    def ramp(coord: np.ndarray, start: float, end: float) -> np.ndarray:
-        """0 at `start`, 1 at `end`, clamped (start > end ramps the other way)."""
-        return np.clip((coord - start) / (end - start), 0, 1)
+        def sample(img: np.ndarray, p: np.ndarray) -> np.ndarray:
+            r = np.clip(((ys - p[1]) / MATCH_SCALE).astype(int), 0, img.shape[0] - 1)
+            c = np.clip(((xs - p[0]) / MATCH_SCALE).astype(int), 0, img.shape[1] - 1)
+            return img[np.ix_(r, c)]
 
+        diff = np.abs(sample(a, pi) - sample(b, pj))
+        # Smoothed a little, so the seam prefers quiet areas over lucky single pixels.
+        k = 3
+        pad = np.pad(diff, k // 2, mode="edge")
+        out = np.zeros_like(diff)
+        for dy in range(k):
+            for dx in range(k):
+                out += pad[dy : dy + diff.shape[0], dx : dx + diff.shape[1]]
+        return out / (k * k)
+
+    # seams[(i, j)]: between i and its right neighbour j, the seam x for each canvas row
+    # (a 'v' seam); between i and its lower neighbour j, the seam y for each canvas column.
+    seams: dict[tuple[int, int], tuple[str, int, np.ndarray]] = {}
     for i in matched:
         t = by_index[i]
-        c = centres[i]
-        px, py = int(round(placed[i][0])), int(round(placed[i][1]))
-        # Seams (nearest-centre boundaries) with each matched neighbour, in this screenshot's pixels.
-        seams = {"left": None, "right": None, "top": None, "bottom": None}
-        for (dr, dc), side in (((0, -1), "left"), ((0, 1), "right"), ((-1, 0), "top"), ((1, 0), "bottom")):
+        for (dr, dc), kind in (((0, 1), "v"), ((1, 0), "h")):
             n = by_pos.get((t["row"] + dr, t["col"] + dc))
-            if n is not None and n["index"] in matched:
-                m = (c + centres[n["index"]]) / 2
-                seams[side] = m[0] - px if side in ("left", "right") else m[1] - py
-        # The region this screenshot supplies: reaching FEATHER past each seam, never past the page.
-        x0 = page_x0 if seams["left"] is None else max(page_x0, int(seams["left"] - FEATHER))
-        x1 = page_x1 if seams["right"] is None else min(page_x1, int(np.ceil(seams["right"] + FEATHER)))
-        y0 = page_y0 if seams["top"] is None else max(page_y0, int(seams["top"] - FEATHER))
-        y1 = page_y1 if seams["bottom"] is None else min(page_y1, int(np.ceil(seams["bottom"] + FEATHER)))
-        if x1 <= x0 or y1 <= y0:
-            continue
-        gx = np.arange(x0, x1, dtype=np.float32)[None, :]
-        gy = np.arange(y0, y1, dtype=np.float32)[:, None]
-        alpha = np.ones((y1 - y0, x1 - x0), dtype=np.float32)
-        if seams["left"] is not None:
-            alpha = np.minimum(alpha, ramp(gx, seams["left"] - FEATHER, seams["left"] + FEATHER))
-        if seams["right"] is not None:
-            alpha = np.minimum(alpha, ramp(gx, seams["right"] + FEATHER, seams["right"] - FEATHER))
-        if seams["top"] is not None:
-            alpha = np.minimum(alpha, ramp(gy, seams["top"] - FEATHER, seams["top"] + FEATHER))
-        if seams["bottom"] is not None:
-            alpha = np.minimum(alpha, ramp(gy, seams["bottom"] + FEATHER, seams["bottom"] - FEATHER))
-        region = canvas[py + y0 : py + y1, px + x0 : px + x1]
-        tile = load(i)[y0:y1, x0:x1].astype(np.float32)
-        a = alpha[:, :, None]
-        region[:] = (tile * a + region.astype(np.float32) * (1 - a) + 0.5).astype(np.uint8)
+            if n is None or n["index"] not in matched:
+                continue
+            j = n["index"]
+            xi, yi = placed[i]
+            xj, yj = placed[j]
+            # Their overlap on the canvas, within both pages, a strip from each edge left out
+            # so the seam never runs along the very edge of a screenshot.
+            edge = 2 * FEATHER
+            ox0 = int(max(xi + page_x0, xj + page_x0) + edge)
+            ox1 = int(min(xi + page_x1, xj + page_x1) - edge)
+            oy0 = int(max(yi + page_y0, yj + page_y0) + edge)
+            oy1 = int(min(yi + page_y1, yj + page_y1) - edge)
+            if ox1 - ox0 < 4 * MATCH_SCALE or oy1 - oy0 < 4 * MATCH_SCALE:
+                continue
+            cost = overlap_cost(i, j, ox0, oy0, ox1, oy1)
+            if kind == "v":
+                path = route_seam(cost)  # rows = canvas rows, columns across the overlap
+                seams[(i, j)] = ("v", oy0, ox0 + path * MATCH_SCALE + MATCH_SCALE / 2)
+            else:
+                path = route_seam(cost.T)  # rows = canvas columns
+                seams[(i, j)] = ("h", ox0, oy0 + path * MATCH_SCALE + MATCH_SCALE / 2)
 
-    canvas = pyvips.Image.new_from_array(canvas, interpretation="srgb")
+    def seam_at(seam: tuple[str, int, np.ndarray], along: np.ndarray) -> np.ndarray:
+        """The seam's crossing coordinate at each canvas row (a 'v' seam) or column ('h'),
+        the ends extended straight on."""
+        _, start, path = seam
+        idx = np.clip(((along - start) / MATCH_SCALE).astype(int), 0, len(path) - 1)
+        return path[idx]
+
+    log(f"  seams routed between {len(seams)} pairs of neighbours")
+    if os.environ.get("HRS_STITCH_DEBUG"):
+        (base / "seams.json").write_text(json.dumps(
+            {f"{i}-{j}": {"kind": k, "start": st, "path": p.tolist(), "placed": [placed[i].tolist(), placed[j].tolist()]}
+             for (i, j), (k, st, p) in seams.items()}))
+
+    def compose(subset: set[int]) -> np.ndarray:
+        """The canvas painted from these screenshots only. Full frames go down first (estimated
+        ones, then matched ones outermost first), so there are no gaps; then each matched
+        screenshot's own region, bounded by its seams, goes on top, blended over FEATHER
+        pixels either side of each seam so small lighting differences don't show as steps."""
+        canvas = np.zeros((height, width, channels), dtype=np.uint8)
+
+        def paste(img: np.ndarray, x: int, y: int) -> None:
+            h, w = img.shape[:2]
+            canvas[y : y + h, x : x + w] = img
+
+        estimated = [i for i in placed if i not in matched and i in subset]
+        chosen = [i for i in matched if i in subset]
+        for i in estimated + sorted(chosen, key=lambda i: -np.hypot(*(centres[i] - mid))):
+            x, y = placed[i]
+            paste(load(i)[page_y0:page_y1, page_x0:page_x1], int(round(x)) + page_x0, int(round(y)) + page_y0)
+
+        for i in chosen:
+            t = by_index[i]
+            px, py = int(round(placed[i][0])), int(round(placed[i][1]))
+            # The region this screenshot supplies: its page, less what lies beyond a seam with a
+            # neighbour (feathered over FEATHER px either side of the seam).
+            x0, x1, y0, y1 = page_x0, page_x1, page_y0, page_y1
+            gx = np.arange(x0, x1, dtype=np.float32)[None, :] + px  # canvas coordinates
+            gy = np.arange(y0, y1, dtype=np.float32)[:, None] + py
+            alpha = np.ones((y1 - y0, x1 - x0), dtype=np.float32)
+            for (dr, dc), mine in (((0, 1), True), ((0, -1), False), ((1, 0), True), ((-1, 0), False)):
+                n = by_pos.get((t["row"] + dr, t["col"] + dc))
+                if n is None:
+                    continue
+                key = (i, n["index"]) if mine else (n["index"], i)
+                seam = seams.get(key)
+                if seam is None:
+                    if n["index"] in matched:
+                        # Matched neighbour, no seam routed (overlap too small): the halfway line.
+                        m = (centres[i] + centres[n["index"]]) / 2
+                        if dc:
+                            edge_x = m[0]
+                            alpha *= np.clip((edge_x - gx) / (2 * FEATHER) + 0.5, 0, 1) if dc > 0 else np.clip((gx - edge_x) / (2 * FEATHER) + 0.5, 0, 1)
+                        else:
+                            edge_y = m[1]
+                            alpha *= np.clip((edge_y - gy) / (2 * FEATHER) + 0.5, 0, 1) if dr > 0 else np.clip((gy - edge_y) / (2 * FEATHER) + 0.5, 0, 1)
+                    continue
+                if seam[0] == "v":
+                    sx = seam_at(seam, gy[:, 0])[:, None]  # seam x per row
+                    alpha *= np.clip((sx - gx) / (2 * FEATHER) + 0.5, 0, 1) if dc > 0 else np.clip((gx - sx) / (2 * FEATHER) + 0.5, 0, 1)
+                else:
+                    sy = seam_at(seam, gx[0, :])[None, :]  # seam y per column
+                    alpha *= np.clip((sy - gy) / (2 * FEATHER) + 0.5, 0, 1) if dr > 0 else np.clip((gy - sy) / (2 * FEATHER) + 0.5, 0, 1)
+            # Only the part of the page where this screenshot has any say.
+            rows_on = np.nonzero(alpha.max(axis=1) > 0)[0]
+            cols_on = np.nonzero(alpha.max(axis=0) > 0)[0]
+            if not len(rows_on) or not len(cols_on):
+                continue
+            ry0, ry1 = rows_on[0], rows_on[-1] + 1
+            cx0, cx1 = cols_on[0], cols_on[-1] + 1
+            region = canvas[py + y0 + ry0 : py + y0 + ry1, px + x0 + cx0 : px + x0 + cx1]
+            tile = load(i)[y0 + ry0 : y0 + ry1, x0 + cx0 : x0 + cx1].astype(np.float32)
+            a = alpha[ry0:ry1, cx0:cx1, None]
+            region[:] = (tile * a + region.astype(np.float32) * (1 - a) + 0.5).astype(np.uint8)
+        return canvas
+
     ax, ay = ax + shift[0], ay + shift[1]
 
     # 5. Output: the image cropped to the camera bounds plus a margin (the screenshots reach
     #    half a screen further out: sky, or on a map of several arenas the next arena's
-    #    stands). Several arenas: one image each, <id>-<area>.png; they sit close together,
-    #    so towards a neighbour the margin stops halfway between them.
+    #    stands). Several arenas: one image each, <id>-<area>.png. They sit close together and
+    #    their stands interleave, so the full margin is kept towards a neighbour too (its
+    #    stands' tips at the edge) rather than cutting into this arena's own.
     margin = manifest.get("cropMargin", 12)
     outputs = [(a["name"], a["bounds"]) for a in manifest.get("areas") or []] or [(None, manifest["cameraBounds"])]
     for name, bounds in outputs:
-        # The margin on each side, but never past halfway to a neighbouring arena.
-        reach = {side: margin for side in ("left", "right", "bottom", "top")}
-        for other_name, other in outputs:
-            if other is bounds:
-                continue
-            if other["top"] <= bounds["bottom"]:
-                reach["bottom"] = min(reach["bottom"], (bounds["bottom"] - other["top"]) / 2)
-            if other["bottom"] >= bounds["top"]:
-                reach["top"] = min(reach["top"], (other["bottom"] - bounds["top"]) / 2)
-            if other["right"] <= bounds["left"]:
-                reach["left"] = min(reach["left"], (bounds["left"] - other["right"]) / 2)
-            if other["left"] >= bounds["right"]:
-                reach["right"] = min(reach["right"], (other["left"] - bounds["right"]) / 2)
-        x0 = max(0, int(np.floor(scale * (bounds["left"] - reach["left"]) + ax)))
-        x1 = min(width, int(np.ceil(scale * (bounds["right"] + reach["right"]) + ax)))
-        y0 = max(0, int(np.floor(-scale * (bounds["top"] + reach["top"]) + ay)))
-        y1 = min(height, int(np.ceil(-scale * (bounds["bottom"] - reach["bottom"]) + ay)))
+        x0 = max(0, int(np.floor(scale * (bounds["left"] - margin) + ax)))
+        x1 = min(width, int(np.ceil(scale * (bounds["right"] + margin) + ax)))
+        y0 = max(0, int(np.floor(-scale * (bounds["top"] + margin) + ay)))
+        y1 = min(height, int(np.ceil(-scale * (bounds["bottom"] - margin) + ay)))
         if x1 - x0 < 16 or y1 - y0 < 16:
             log(f"  {name or manifest['id']}: nothing placed inside its bounds; skipped")
             continue
         out_id = f"{manifest['id']}-{name.lower()}" if name else manifest["id"]
+        # Each arena's image from its own screenshots only: the next arena's rows overlap
+        # this one's edge, from other camera positions (parallax), and the two areas have no
+        # seams between them.
+        area_no = outputs.index((name, bounds)) if name else None
+        subset = {i for i in placed if area_no is None or by_index[i].get("area", 0) == area_no}
+        canvas = pyvips.Image.new_from_array(compose(subset), interpretation="srgb")
         image = canvas.crop(x0, y0, x1 - x0, y1 - y0)
         out_png = base.parent / f"{out_id}.png"
         image.write_to_file(str(out_png), compression=6)
-        image.thumbnail_image(2048).write_to_file(str(base.parent / f"{out_id}-preview.jpg"), Q=88)
+        preview = image.flatten(background=[48, 48, 48]) if matting else image
+        preview.thumbnail_image(2048).write_to_file(str(base.parent / f"{out_id}-preview.jpg"), Q=88)
         geo = {
             "map": manifest["map"],
             "area": name,
@@ -417,7 +555,7 @@ def main() -> None:
 
         if args.tiles:
             pyramid = base.parent / f"{out_id}-tiles"
-            image.dzsave(str(pyramid), layout="google", suffix=".jpg[Q=90]", tile_size=256)
+            image.dzsave(str(pyramid), layout="google", suffix=".png" if matting else ".jpg[Q=90]", tile_size=256)
             log(f"tile pyramid -> {pyramid}")
 
 

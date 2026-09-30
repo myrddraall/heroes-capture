@@ -30,6 +30,8 @@ const fixed = (n) => (Number.isInteger(n) ? `${n}.0` : n.toFixed(4));
  *   summons, keeping map-mechanic units; otherwise every unit but structures is removed.
  * @param {boolean} o.freeze Pause model animations, so neighbouring screenshots match.
  * @param {boolean} o.showUi Leave the HUD up (to check what the HUD hiding affects).
+ * @param {boolean} o.sky Solid-colour skyboxes are in the map (sky.mjs): chat "sky <colour>" swaps.
+ * @param {string[]} o.hideDoodads Doodad types to hide (cloud layers placed in the map as doodads).
  * @param {boolean} [o.keepIntro] Let the intro cutscene play out instead of skipping it
  *   (diagnostic: does skipping it leave the map's lighting half changed?).
  * @param {{ dx: number, dy: number }[] | null} o.markers Registration markers, as offsets in map
@@ -48,6 +50,8 @@ export function captureScript({
   keepMechanics,
   freeze,
   showUi,
+  sky = false,
+  hideDoodads = [],
   keepIntro = false,
   markers,
 }) {
@@ -234,6 +238,9 @@ bool hrsCap_gt_Clean_Func (bool testConds, bool runActions) {
         return true;
     }
     hrsCap_HideMarkers();
+    // A transmission (an Immortal's voice line) puts a subtitle and its backdrop on screen,
+    // outside the frames hidden by the scene; cleared right before the shot.
+    TransmissionClearGroup(PlayerGroupAll());
     UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
     return true;
 }
@@ -292,6 +299,8 @@ trigger hrsCap_gt_Look;
 trigger hrsCap_gt_Normal;
 trigger hrsCap_gt_Clip;
 trigger hrsCap_gt_Pitch;
+trigger hrsCap_gt_Sky;
+trigger hrsCap_gt_Black;
 trigger hrsCap_gt_Bounds;
 trigger hrsCap_gt_Fov;${markerDecl}
 
@@ -384,7 +393,9 @@ void hrsCap_Scene () {
 ${heroUiLines}            hrsCap_ApplyCamera(lv_p);
         }
     }
-${uiLines}${boundsLine}
+${uiLines}${boundsLine}${sky ? `
+    GameSetBackground(0, "HrsSkyWhite", 100.0);  // the camera-fixed skybox: white for the calibration and first clean shot (sky.mjs)` : ''}${hideDoodads.map((type) => `
+    libNtve_gf_ShowHideDoodadsInRegion(false, RegionEntireMap(), "${type}");  // a cloud layer, placed as doodads`).join('')}
     UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
     // (With --freeze) paused animations, in a thread of its own: if the game rejects it, only
     // that thread stops. --freeze itself broke the map script on Battlefield of Eternity
@@ -568,6 +579,7 @@ bool hrsCap_gt_Sweep_Func (bool testConds, bool runActions) {
     }
 ${keepIntro ? '' : '    hrsCap_SkipIntro();\n'}    hrsCap_HideLabels();
     hrsCap_ClearUnits();
+    TransmissionClearGroup(PlayerGroupAll());
     UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
     return true;
 }
@@ -680,6 +692,46 @@ bool hrsCap_gt_Bounds_Func (bool testConds, bool runActions) {
     return true;
 }
 
+// Chat "sky <colour> [<layer>]": the solid-colour skybox of that name (sky.mjs) on layer 0 (the
+// camera-fixed skybox, the default) or 1 (c_backgroundTerrain, the terrain-relative parallax
+// layer, which Blizzard's arenas swap). "none" clears the layer, "heaven" is the map's own
+// HeavenSkybox (probe reference).
+bool hrsCap_gt_Sky_Func (bool testConds, bool runActions) {
+    string lv_colour;
+    string lv_model;
+    int lv_layer;
+
+    if (!runActions) {
+        return true;
+    }
+    lv_colour = StringWord(EventChatMessage(false), 2);
+    lv_layer = StringToInt(StringWord(EventChatMessage(false), 3));
+    if ((lv_colour == "none")) {
+        lv_model = "";
+    }
+    else if ((lv_colour == "heaven")) {
+        lv_model = "HeavenSkybox";
+    }
+    else {
+        lv_model = ("HrsSky" + StringCase(StringSub(lv_colour, 1, 1), true) + StringSub(lv_colour, 2, StringLength(lv_colour)));
+    }
+    GameSetBackground(lv_layer, lv_model, 100.0);
+    UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
+    return true;
+}
+
+// Chat "black": the black skybox, for the second clean shot (difference matting: the same view
+// over white and over black gives each pixel's transparency). "tile" puts white back (Scene).
+bool hrsCap_gt_Black_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    GameSetBackground(0, "HrsSkyBlack", 100.0);
+    TransmissionClearGroup(PlayerGroupAll());
+    UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
+    return true;
+}
+
 // Chat "pitch <deg>" (lighting probe): the capture camera's pitch (90 is straight down).
 bool hrsCap_gt_Pitch_Func (bool testConds, bool runActions) {
     if (!runActions) {
@@ -710,7 +762,11 @@ void hrsCap_Init () {
     hrsCap_gt_Bounds = TriggerCreate("hrsCap_gt_Bounds_Func");
     TriggerAddEventChatMessage(hrsCap_gt_Bounds, c_playerAny, "bounds", true);
     hrsCap_gt_Pitch = TriggerCreate("hrsCap_gt_Pitch_Func");
-    TriggerAddEventChatMessage(hrsCap_gt_Pitch, c_playerAny, "pitch", false);
+    TriggerAddEventChatMessage(hrsCap_gt_Pitch, c_playerAny, "pitch", false);${sky ? `
+    hrsCap_gt_Sky = TriggerCreate("hrsCap_gt_Sky_Func");
+    TriggerAddEventChatMessage(hrsCap_gt_Sky, c_playerAny, "sky", false);
+    hrsCap_gt_Black = TriggerCreate("hrsCap_gt_Black_Func");
+    TriggerAddEventChatMessage(hrsCap_gt_Black, c_playerAny, "black", true);` : ''}
     hrsCap_gt_Clip = TriggerCreate("hrsCap_gt_Clip_Func");
     TriggerAddEventChatMessage(hrsCap_gt_Clip, c_playerAny, "clip", false);
     hrsCap_gt_Normal = TriggerCreate("hrsCap_gt_Normal_Func");
