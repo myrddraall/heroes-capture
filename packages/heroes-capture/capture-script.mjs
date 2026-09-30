@@ -23,7 +23,9 @@ const fixed = (n) => (Number.isInteger(n) ? `${n}.0` : n.toFixed(4));
  * @param {number} [o.refitYaw] Yaw of the lighting-refit look before each tile (towards the
  *   map's main light).
  * @param {{ fov: number, farClip: number } | null} o.lens Narrow field of view; null to leave the map's.
- * @param {boolean} o.unbound Lift the map's camera bounds so edge tiles are not clamped.
+ * @param {boolean} o.unbound Lift the map's camera bounds so edge tiles are not clamped (and, on a
+ *   map that is several arenas in one, so the camera can reach every arena). Lifted before each
+ *   tile's first pan, since the map may put its own bounds back at any time.
  * @param {boolean} o.keepMechanics Remove only heroes, minions, mercenaries, map creatures and
  *   summons, keeping map-mechanic units; otherwise every unit but structures is removed.
  * @param {boolean} o.freeze Pause model animations, so neighbouring screenshots match.
@@ -441,7 +443,7 @@ bool hrsCap_gt_Tile_Func (bool testConds, bool runActions) {
         hrsCap_curX = hrsCap_tileX[lv_index];
         hrsCap_curY = hrsCap_tileY[lv_index];
     }
-    hrsCap_ClearUnits();
+    hrsCap_ClearUnits();${boundsLine}
     // The normal camera at the tile first, a few frames, so the game refits its lighting there
     // (see hrsCap_NormalCamera); then the scene and the capture camera.
     CameraPan(EventPlayer(), Point(hrsCap_curX, hrsCap_curY), 0.0, -1, 10.0, false);

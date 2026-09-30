@@ -74,13 +74,15 @@ Map names are the file names in
 | `--show-ui`                    |                  | diagnostic: leave the HUD up, launch the map and stop                                                                                                                                                            |
 | `--probe-zoom` / `--probe-fov` |                  | diagnostic: with `--markers`, measure at which camera distance / field of view the markers still draw; writes `work\<what>-probe.txt`                                                                            |
 | `--margin <cells>`             | `0`              | also capture beyond the map's camera bounds (lifts them)                                                                                                                                                         |
+| `--crop-margin <cells>`        | `12`             | the stitched image reaches this far past the camera bounds (or past each arena's area, but at most halfway to the next arena)                                                                                    |
 
 Higher `--px-per-cell` means more screenshots and a closer camera. Past about 64–128 px per
 cell there is no more detail: that's the game's own texture resolution.
 
 ### Outputs
 
-- `<id>.png`: the full image
+- `<id>.png`: the full image, cropped to the camera bounds plus `--crop-margin` cells (a map of
+  several arenas: `<id>-m1.png`, `<id>-m2.png`, ..., one per arena, each cropped to its area)
 - `<id>-preview.jpg`: 2048 px wide
 - `<id>.geo.json`: pixels per map cell and the image origin in map cells, to place replay
   positions: `px = (x - originCell.x) * pxPerCell`, `py = (originCell.y - y) * pxPerCell`
@@ -91,7 +93,11 @@ cell there is no more detail: that's the game's own texture resolution.
 - **inject.mjs** copies the `.stormmap` (an MPQ archive), reads the map size and camera bounds
   from its `MapInfo`, plans a grid of camera positions, and appends the capture script
   (`capture-script.mjs`) to `MapScript.galaxy`, called at the end of `InitMap`. Nothing else in
-  the map changes.
+  the map changes. A map that is several arenas in one (Punisher Arena: one arena per round,
+  stacked on the map, the camera bounds moved to the round's arena at run time) marks each
+  with a region named `..._MapBounds` in its `Regions` file; with two or more, each gets its
+  own grid, the script lifts the camera bounds so the camera can reach them all, and the
+  stitch writes one image per arena (`<id>-m1.png`, ...).
 - **The capture script** reveals the whole map, removes every unit except structures (and
   keeps removing them as they spawn), hides health bars, keeps or hides structures, hides the
   HUD, and sets a straight-down camera. Typing `tile <n>` in chat moves the camera to tile n.

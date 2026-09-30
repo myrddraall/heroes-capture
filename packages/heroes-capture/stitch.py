@@ -16,6 +16,7 @@ Writes, next to the tiles folder:
   <id>.png          the full image
   <id>-preview.jpg  a 2048 px wide preview
   <id>.geo.json     scale and origin, to convert map cells to image pixels (for replay overlays)
+                    (a map of several arenas, e.g. Punisher Arena: <id>-<area>.png etc., one per arena)
   <id>-tiles/       with --tiles: a Google Maps style pyramid ({z}/{y}/{x}.jpg, 256 px)
 """
 
@@ -367,28 +368,57 @@ def main() -> None:
         region[:] = (tile * a + region.astype(np.float32) * (1 - a) + 0.5).astype(np.uint8)
 
     canvas = pyvips.Image.new_from_array(canvas, interpretation="srgb")
-
-    out_png = base.with_suffix(".png")
-    canvas.write_to_file(str(out_png), compression=6)
-    canvas.thumbnail_image(2048).write_to_file(str(base.parent / f"{manifest['id']}-preview.jpg"), Q=88)
-
     ax, ay = ax + shift[0], ay + shift[1]
-    geo = {
-        "map": manifest["map"],
-        "image": out_png.name,
-        "width": width,
-        "height": height,
-        "pxPerCell": scale,
-        "originCell": {"x": -ax / scale, "y": ay / scale},
-        "toPixel": "px = (x - originCell.x) * pxPerCell; py = (originCell.y - y) * pxPerCell",
-    }
-    (base.parent / f"{manifest['id']}.geo.json").write_text(json.dumps(geo, indent=2))
-    log(f"{width}x{height} px -> {out_png}")
 
-    if args.tiles:
-        pyramid = base.parent / f"{manifest['id']}-tiles"
-        canvas.dzsave(str(pyramid), layout="google", suffix=".jpg[Q=90]", tile_size=256)
-        log(f"tile pyramid -> {pyramid}")
+    # 5. Output: the image cropped to the camera bounds plus a margin (the screenshots reach
+    #    half a screen further out: sky, or on a map of several arenas the next arena's
+    #    stands). Several arenas: one image each, <id>-<area>.png; they sit close together,
+    #    so towards a neighbour the margin stops halfway between them.
+    margin = manifest.get("cropMargin", 12)
+    outputs = [(a["name"], a["bounds"]) for a in manifest.get("areas") or []] or [(None, manifest["cameraBounds"])]
+    for name, bounds in outputs:
+        # The margin on each side, but never past halfway to a neighbouring arena.
+        reach = {side: margin for side in ("left", "right", "bottom", "top")}
+        for other_name, other in outputs:
+            if other is bounds:
+                continue
+            if other["top"] <= bounds["bottom"]:
+                reach["bottom"] = min(reach["bottom"], (bounds["bottom"] - other["top"]) / 2)
+            if other["bottom"] >= bounds["top"]:
+                reach["top"] = min(reach["top"], (other["bottom"] - bounds["top"]) / 2)
+            if other["right"] <= bounds["left"]:
+                reach["left"] = min(reach["left"], (bounds["left"] - other["right"]) / 2)
+            if other["left"] >= bounds["right"]:
+                reach["right"] = min(reach["right"], (other["left"] - bounds["right"]) / 2)
+        x0 = max(0, int(np.floor(scale * (bounds["left"] - reach["left"]) + ax)))
+        x1 = min(width, int(np.ceil(scale * (bounds["right"] + reach["right"]) + ax)))
+        y0 = max(0, int(np.floor(-scale * (bounds["top"] + reach["top"]) + ay)))
+        y1 = min(height, int(np.ceil(-scale * (bounds["bottom"] - reach["bottom"]) + ay)))
+        if x1 - x0 < 16 or y1 - y0 < 16:
+            log(f"  {name or manifest['id']}: nothing placed inside its bounds; skipped")
+            continue
+        out_id = f"{manifest['id']}-{name.lower()}" if name else manifest["id"]
+        image = canvas.crop(x0, y0, x1 - x0, y1 - y0)
+        out_png = base.parent / f"{out_id}.png"
+        image.write_to_file(str(out_png), compression=6)
+        image.thumbnail_image(2048).write_to_file(str(base.parent / f"{out_id}-preview.jpg"), Q=88)
+        geo = {
+            "map": manifest["map"],
+            "area": name,
+            "image": out_png.name,
+            "width": x1 - x0,
+            "height": y1 - y0,
+            "pxPerCell": scale,
+            "originCell": {"x": -(ax - x0) / scale, "y": (ay - y0) / scale},
+            "toPixel": "px = (x - originCell.x) * pxPerCell; py = (originCell.y - y) * pxPerCell",
+        }
+        (base.parent / f"{out_id}.geo.json").write_text(json.dumps(geo, indent=2))
+        log(f"{x1 - x0}x{y1 - y0} px -> {out_png}")
+
+        if args.tiles:
+            pyramid = base.parent / f"{out_id}-tiles"
+            image.dzsave(str(pyramid), layout="google", suffix=".jpg[Q=90]", tile_size=256)
+            log(f"tile pyramid -> {pyramid}")
 
 
 if __name__ == "__main__":

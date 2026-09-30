@@ -870,7 +870,11 @@ def main() -> None:
         # reads: it only appears after a `tile` was accepted. So: ask, look, and ask again.
         # The start-up check (and the digits) at the middle tile: a tile at the map's corner has
         # its labels outside the map, where text tags aren't drawn (Punisher Arena).
-        first_tile = min(tiles, key=lambda t: abs(t["row"] - manifest["rows"] / 2) + abs(t["col"] - manifest["cols"] / 2))
+        # (On a map of several arenas: the middle of the first arena, not the sky between them.)
+        first_area = [t for t in tiles if t.get("area", 0) == 0]
+        centre_x = (min(t["x"] for t in first_area) + max(t["x"] for t in first_area)) / 2
+        centre_y = (min(t["y"] for t in first_area) + max(t["y"] for t in first_area)) / 2
+        first_tile = min(first_area, key=lambda t: abs(t["x"] - centre_x) + abs(t["y"] - centre_y))
         digits = None
         ref_height = None
         if manifest.get("keepIntro"):
@@ -931,10 +935,12 @@ def main() -> None:
                 ref_height = label_height(ref) if digits else None
             log("digits learned from the reference label" if digits else
                 "could not learn the digits (see glyphs.png); falling back to the marker pattern")
-            if digits:
+            if digits and not manifest.get("unbound"):
                 # The camera bounds the game really applies (an arena's are far tighter than
                 # its map file says): the script measures them and shows them as a 12-digit
-                # label. A grid planned for the wrong bounds spends most tiles on sky.
+                # label. A grid planned for the wrong bounds spends most tiles on sky. (Not
+                # when the script lifts the bounds: the grid then comes from the map file, or
+                # from its arena areas.)
                 # One command, then several looks a while apart (the label stays up): the
                 # first look at a Punisher Arena run showed two 12-digit texts drawn on top of
                 # each other, unreadable; a later look may be clean. The command is repeated
@@ -963,9 +969,6 @@ def main() -> None:
                         break
                 if bounds is None:
                     log("  couldn't measure the camera bounds in the game; using the map file's")
-                    if os.environ.get("HRS_STOP_IF_NO_BOUNDS"):
-                        quit_match()
-                        sys.exit("\nStopped: the camera bounds couldn't be measured (HRS_STOP_IF_NO_BOUNDS is set); see bounds-*.png")
                 else:
                     planned = manifest["cameraBounds"]
                     if any(abs(bounds[k] - planned[k]) > 2 for k in bounds):

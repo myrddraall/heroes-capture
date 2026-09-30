@@ -29,6 +29,8 @@
  *   --show-ui                leave the HUD up (diagnostic)
  *   --keep-intro             let the intro cutscene play out instead of skipping it (diagnostic)
  *   --margin <cells>         capture past the camera bounds (lifts them)      (default 0)
+ *   --crop-margin <cells>    the stitched image reaches this far past the camera bounds
+ *                            (or past each arena area, see below)             (default 12)
  *   --out <dir>              working folder                                   (default work)
  */
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -62,6 +64,7 @@ function parseArgs(argv) {
     showUi: false,
     keepIntro: false,
     margin: 0,
+    cropMargin: 12,
     out: 'work',
   };
   for (let i = 0; i < argv.length; i++) {
@@ -84,6 +87,7 @@ function parseArgs(argv) {
     else if (a === '--markers') opts.markers = true;
     else if (a === '--show-ui') opts.showUi = true;
     else if (a === '--margin') opts.margin = Number(next());
+    else if (a === '--crop-margin') opts.cropMargin = Number(next());
     else if (a === '--out') opts.out = next();
     else if (!a.startsWith('--') && !opts.map) opts.map = a;
     else throw new Error(`unknown option ${a}`);
@@ -165,6 +169,26 @@ function readMapInfo(buf) {
     }
   }
   return { width: w, height: h, bounds: { left: 0, bottom: 0, right: w, top: h } };
+}
+
+/**
+ * A map that is several arenas in one (Punisher Arena: one arena per round, stacked on the
+ * map, the camera bounds moved to the round's arena at run time) marks each arena with a
+ * region named "..._MapBounds" in its Regions file. Two or more of them: capture areas, each
+ * rendered to its own image. `<quad value="left,bottom,right,top"/>`.
+ */
+function parseAreas(regionsXml) {
+  const areas = [];
+  for (const m of regionsXml.matchAll(/<region\b[\s\S]*?<\/region>/g)) {
+    const name = m[0].match(/<name value="([^"]*)"/)?.[1];
+    const quad = m[0].match(/<shape type="rect">[\s\S]*?<quad value="([^"]*)"/)?.[1];
+    if (!name || !quad || !/MapBounds$/i.test(name)) continue;
+    const [left, bottom, right, top] = quad.split(',').map(Number);
+    if ([left, bottom, right, top].some(Number.isNaN) || left >= right || bottom >= top) continue;
+    areas.push({ name: name.replace(/_?MapBounds$/i, ''), bounds: { left, bottom, right, top } });
+  }
+  areas.sort((a, b) => a.name.localeCompare(b.name));
+  return areas.length >= 2 ? areas : [];
 }
 
 /**
@@ -253,7 +277,47 @@ async function main() {
   try {
     const info = readMapInfo(archive.readFile('MapInfo'));
     const refitYaw = opts.refitYaw ?? resolveRefitYaw(archive);
-    const grid = planGrid(opts, info);
+    let areas = [];
+    try {
+      areas = parseAreas(archive.readFileAsString('Regions'));
+    } catch {
+      // no Regions file: one area, the camera bounds
+    }
+    let grid;
+    if (areas.length) {
+      // One grid per area, rows numbered on from the last area's with a gap row between, so
+      // the stitch never takes the last row of one area for a neighbour of the first of the
+      // next; the camera bounds are lifted (unbound) so the camera can reach every area.
+      grid = null;
+      let rowBase = 0;
+      for (const area of areas) {
+        const g = planGrid(opts, { ...info, bounds: area.bounds });
+        for (const t of g.tiles) {
+          t.index += grid?.tiles.length ?? 0;
+          t.row += rowBase;
+          t.area = areas.indexOf(area);
+        }
+        Object.assign(area, { cols: g.cols, rows: g.rows, firstTile: grid?.tiles.length ?? 0, tileCount: g.tiles.length });
+        rowBase += g.rows + 1;
+        grid = grid
+          ? {
+              ...grid,
+              tiles: grid.tiles.concat(g.tiles),
+              cols: Math.max(grid.cols, g.cols),
+              rows: rowBase - 1,
+              area: {
+                left: Math.min(grid.area.left, g.area.left),
+                bottom: Math.min(grid.area.bottom, g.area.bottom),
+                right: Math.max(grid.area.right, g.area.right),
+                top: Math.max(grid.area.top, g.area.top),
+              },
+            }
+          : g;
+      }
+    } else {
+      grid = planGrid(opts, info);
+    }
+    const unbound = opts.margin > 0 || areas.length > 0;
     // Far clip well past the camera, with a floor so the chat "zoom" command can pull back freely.
     const lens = opts.lens
       ? { fov: opts.fov, farClip: Math.max(800, Math.ceil(grid.distance * 3)) }
@@ -292,7 +356,7 @@ async function main() {
       pitch: opts.pitch,
       refitYaw,
       lens,
-      unbound: opts.margin > 0,
+      unbound,
       keepMechanics: opts.keepMechanics,
       freeze: opts.freeze,
       showUi: opts.showUi,
@@ -327,6 +391,9 @@ async function main() {
       refitYaw,
       mapSize: { width: info.width, height: info.height },
       cameraBounds: info.bounds,
+      areas: areas.length ? areas : null,
+      unbound,
+      cropMargin: opts.cropMargin,
       area: grid.area,
       step: grid.step,
       cols: grid.cols,
@@ -340,6 +407,9 @@ async function main() {
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
 
     console.error(`${source.name}: ${info.width}x${info.height} cells, camera bounds`, info.bounds);
+    for (const a of areas) {
+      console.error(`  area ${a.name}: ${a.cols}x${a.rows} tiles, cells ${a.bounds.left}-${a.bounds.right} x ${a.bounds.bottom}-${a.bounds.top}`);
+    }
     console.error(
       `camera distance ${grid.distance.toFixed(1)}, ${grid.cols}x${grid.rows} = ${grid.tiles.length} tiles, ` +
         `output about ${Math.round(grid.cols * grid.step.x * opts.pxPerCell)}x` +

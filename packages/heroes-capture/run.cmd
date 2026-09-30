@@ -2,9 +2,8 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: Punisher Arena (brawl) render, with the run stopping early if the camera
-rem bounds can't be measured (their shots come back for diagnosis). About 8 minutes if it works.
-set "HRS_STOP_IF_NO_BOUNDS=1"
+rem Current step: Punisher Arena, all three arenas (one per round, stacked on the map) in one
+rem launch, each to its own image (-m1, -m2, -m3), cropped to the arena. About 12 minutes.
 call "%~dp0render.cmd" "Punisher Arena" keep
 
 :copy
