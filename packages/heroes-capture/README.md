@@ -85,6 +85,7 @@ cell there is no more detail: that's the game's own texture resolution.
   several arenas: `<id>-m1.png`, `<id>-m2.png`, ..., one per arena, each cropped to its area).
   It has an alpha channel: the void is transparent
 - `<id>-preview.jpg`: 2048 px wide (transparency shown over dark grey)
+- `<id>-on-white.jpg`: the full image flattened over white, for looking at
 - `<id>.geo.json`: pixels per map cell and the image origin in map cells, to place replay
   positions: `px = (x - originCell.x) * pxPerCell`, `py = (originCell.y - y) * pxPerCell`
 - `<id>-tiles/` (with `--tiles`): a Google Maps style pyramid, `{z}/{y}/{x}.jpg`, 256 px tiles

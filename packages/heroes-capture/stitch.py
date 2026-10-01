@@ -16,6 +16,7 @@ Writes, next to the tiles folder:
   <id>.png          the full image (with transparency where the map lets the sky through,
                     when each tile was shot over a white and a black skybox)
   <id>-preview.jpg  a 2048 px wide preview
+  <id>-on-white.jpg the full image flattened over white (easier to look at than the alpha)
   <id>.geo.json     scale and origin, to convert map cells to image pixels (for replay overlays)
                     (a map of several arenas, e.g. Punisher Arena: <id>-<area>.png etc., one per arena)
   <id>-tiles/       with --tiles: a Google Maps style pyramid ({z}/{y}/{x}.jpg, 256 px)
@@ -340,7 +341,9 @@ def main() -> None:
     # that is all map is the same in both; in between (soft edges, glass, glow) the difference
     # is exactly the see-through share. The white level is measured, not assumed (the game
     # renders the white skybox at about 230), from pixels that are black in the black shot.
-    matting = any((tiles_dir / f"tile_{t['index']:04d}-black.png").exists() for t in present)
+    # Only when this map is shot over white and black (manifest sky mode): a results folder can
+    # hold -black shots left from an earlier run of a map that has since been shot once per tile.
+    matting = (manifest.get("sky") or {}).get("mode") == "matte"
     white_level = [None]
 
     def matte(white: np.ndarray, black: np.ndarray) -> np.ndarray:
@@ -368,7 +371,7 @@ def main() -> None:
         black terrain is shot once, over black; void_terrain_transparent handles the void)."""
         white = np.asarray(Image.open(tiles_dir / f"tile_{i:04d}.png").convert("RGB"))
         black_path = tiles_dir / f"tile_{i:04d}-black.png"
-        if not black_path.exists():
+        if not matting or not black_path.exists():
             return np.dstack([white, np.full(white.shape[:2], 255, dtype=np.uint8)])
         return matte(white, np.asarray(Image.open(black_path).convert("RGB")))
 
@@ -501,7 +504,7 @@ def main() -> None:
 
         rgb, alpha = rgba[:, :, :3], rgba[:, :, 3]
         peak = rgb.max(axis=2)
-        dark = peak <= 12
+        dark = peak <= 20
         seed = np.zeros_like(dark)
         seed[0, :] = seed[-1, :] = seed[:, 0] = seed[:, -1] = True
         seed |= alpha < 8
@@ -516,34 +519,57 @@ def main() -> None:
             return rgba
         # Void seen through gaps in foliage at the edge is black too but cut off from the
         # outside by the leaves: any dark pixel within ~40 px of the void counts as void.
-        coarse = void.reshape(void.shape[0] // 4, 4, void.shape[1] // 4, 4).any(axis=(1, 3)) if void.shape[0] % 4 == 0 and void.shape[1] % 4 == 0 else None
-        if coarse is not None:
-            around = ndimage.binary_dilation(coarse, iterations=10)
-            around = np.repeat(np.repeat(around, 4, axis=0), 4, axis=1)
-            void |= dark & around
+        h, w = void.shape
+        padded = np.zeros((-(-h // 4) * 4, -(-w // 4) * 4), dtype=bool)
+        padded[:h, :w] = void
+        coarse = padded.reshape(padded.shape[0] // 4, 4, padded.shape[1] // 4, 4).any(axis=(1, 3))
+        around = np.repeat(np.repeat(ndimage.binary_dilation(coarse, iterations=10), 4, axis=0), 4, axis=1)[:h, :w]
+        void |= dark & around
+        # (coarse is kept as the void seen at quarter resolution, for the distances below.)
+        padded[:h, :w] = void
+        coarse = padded.reshape(padded.shape[0] // 4, 4, padded.shape[1] // 4, 4).any(axis=(1, 3))
         out = rgba.copy()
         out[void, 3] = 0
-        # The edge: pixels within a few px of the void are blends of the map's colour with the
-        # void's (C = a*F + (1-a)*B). B is the void colour; F comes from the solid pixels a
-        # little further in (the average over a small window); then a and F are separated, so
-        # the edge keeps the map's own colour and its transparency, and composites over black
-        # to what was rendered.
-        near = ndimage.binary_dilation(void, iterations=6) & ~void & (alpha >= 8)
-        if near.any():
-            solid = (~ndimage.binary_dilation(void, iterations=7)) & (alpha >= 8)
-            b = rgb[void].reshape(-1, 3).mean(axis=0).astype(np.float32)
-            weight = ndimage.uniform_filter(solid.astype(np.float32), size=15)
-            f = np.stack([ndimage.uniform_filter(np.where(solid, rgb[:, :, c], 0).astype(np.float32), size=15) for c in range(3)], axis=2)
-            ok = near & (weight > 0.05)
-            f = f[ok] / weight[ok][:, None]
-            c = rgb[ok].astype(np.float32)
-            fb, cb = f - b, c - b
-            a = np.clip((cb * fb).sum(axis=1) / np.maximum((fb * fb).sum(axis=1), 1.0), 0.0, 1.0)
-            recovered = np.clip(b + cb / np.maximum(a, 1 / 255)[:, None], 0, 255)
-            keep = a > 1 / 255
-            idx = np.nonzero(ok)
-            out[idx[0][keep], idx[1][keep], :3] = recovered[keep].astype(np.uint8)
-            out[idx[0], idx[1], 3] = (a * 255).astype(np.uint8)
+        # The game blends the void's black into the ground over about a cell from the edge (a
+        # texture blend, the same along the whole boundary), so the brightness there is a
+        # function of the distance to the void. Measured, not assumed: the median brightness
+        # at each distance against the median further in gives the blend factor k(d); the
+        # pixels' transparency is k(d) and their colour C / k(d). Objects standing in the band
+        # are lifted with it, which over black composites back to what was rendered.
+        band = int(round(1.25 * manifest["pxPerCell"]))
+        coarse_dist = ndimage.distance_transform_edt(~coarse) * 4.0
+        dist = ndimage.zoom(coarse_dist, 4, order=1)[:h, :w]
+        in_band = (dist > 0) & (dist <= band) & ~void & (alpha >= 8)
+        beyond = (dist > band) & (dist <= 2 * band) & (alpha >= 8)
+        if in_band.any() and beyond.sum() > 1000:
+            luma = rgb.mean(axis=2)
+            reference = float(np.median(luma[beyond]))
+            d_band = dist[in_band]
+            l_band = luma[in_band]
+            bins = np.clip((d_band / 2).astype(int), 0, band // 2)  # 2 px steps
+            k = np.ones(band // 2 + 1, dtype=np.float32)
+            for i in range(band // 2 + 1):
+                sel = bins == i
+                if sel.sum() > 200:
+                    k[i] = min(1.0, float(np.median(l_band[sel])) / max(reference, 1.0))
+            k = np.maximum.accumulate(k)  # the blend only gets lighter further in
+            if k[0] < 0.6:  # a real ramp; otherwise there is nothing to correct
+                k_px = np.clip(k[bins], 0.02, 1.0)
+                ys, xs = np.nonzero(in_band)
+                out[ys, xs, :3] = np.clip(rgb[ys, xs].astype(np.float32) / k_px[:, None], 0, 255).astype(np.uint8)
+                out[ys, xs, 3] = (k_px * 255).astype(np.uint8)
+                log(f"  edge blend corrected over {band} px: k from {k[0]:.2f} at the void to 1.0")
+        # The game draws the terrain's edge against the void without anti-aliasing (a hard,
+        # stepped line). In a narrow band along the edge, colour (premultiplied) and alpha are
+        # blurred together and the colour un-premultiplied again: the steps smooth out along
+        # the edge and the crossing softens by about a pixel.
+        rim = ndimage.binary_dilation(void, iterations=3) & ~ndimage.binary_erosion(void, iterations=3)
+        a_f = out[:, :, 3].astype(np.float32) / 255.0
+        a_soft = ndimage.gaussian_filter(a_f, sigma=1.5)
+        for ch in range(3):
+            pm = ndimage.gaussian_filter(out[:, :, ch].astype(np.float32) * a_f, sigma=1.5)
+            out[rim, ch] = np.clip(pm[rim] / np.maximum(a_soft[rim], 1 / 255), 0, 255).astype(np.uint8)
+        out[rim, 3] = (a_soft[rim] * 255).round().astype(np.uint8)
         log(f"  void terrain made transparent: {void.mean() * 100:.1f}% of the image")
         return out
 
@@ -639,6 +665,8 @@ def main() -> None:
         image.write_to_file(str(out_png), compression=6)
         preview = image.flatten(background=[48, 48, 48])
         preview.thumbnail_image(2048).write_to_file(str(base.parent / f"{out_id}-preview.jpg"), Q=88)
+        # The full image over white, for looking at: transparency is hard to judge by eye.
+        image.flatten(background=[255, 255, 255]).write_to_file(str(base.parent / f"{out_id}-on-white.jpg"), Q=90)
         geo = {
             "map": manifest["map"],
             "area": name,

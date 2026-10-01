@@ -383,6 +383,8 @@ async function main() {
       markers,
       sky: true,
       skyColour: skyMode === 'matte' ? 'white' : 'black',
+      mapWidth: info.width,
+      mapHeight: info.height,
       hideDoodads,
     }).replace(/\n/g, eol);
     checkDefinitionOrder(script);

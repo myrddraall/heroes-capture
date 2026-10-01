@@ -35,6 +35,8 @@ export const STATUS_CELL_UNITS = 20;
  * @param {boolean} o.showUi Leave the HUD up (to check what the HUD hiding affects).
  * @param {boolean} o.sky Solid-colour skyboxes are in the map (sky.mjs): chat "sky <colour>" swaps.
  * @param {string} o.skyColour The sky each tile starts under: white (then "black" for the matte's second shot) or black.
+ * @param {number} o.mapWidth Map size in cells (MapInfo), for the reveal: RegionEntireMap() is only the playable area.
+ * @param {number} o.mapHeight
  * @param {string[]} o.hideDoodads Doodad types to hide (cloud layers placed in the map as doodads).
  * @param {boolean} [o.keepIntro] Let the intro cutscene play out instead of skipping it
  *   (diagnostic: does skipping it leave the map's lighting half changed?).
@@ -56,6 +58,8 @@ export function captureScript({
   showUi,
   sky = false,
   skyColour = 'white',
+  mapWidth = 256,
+  mapHeight = 256,
   hideDoodads = [],
   keepIntro = false,
   markers,
@@ -93,11 +97,13 @@ export function captureScript({
   const remainingFilter = keepMechanics
     ? 'UnitFilter(0, 0, (1 << c_targetFilterMissile), 0)'
     : 'UnitFilter((1 << c_targetFilterStructure), 0, 0, 0)';
+  // Pausing every animation on the map, the way Blizzard's own maps do at game over (Trial
+  // Grounds: one actor message to the whole-map region, no filter). The earlier form with
+  // "Doodad"/"Unit"/"Model" filter terms broke the map's script.
+  const mapRegion = `RegionRect(-16.0, -16.0, ${fixed(mapWidth + 16)}, ${fixed(mapHeight + 16)})`;
   const freezeLines = freeze
     ? `
-    ActorRegionSend(RegionEntireMap(), c_actorIntersectAgainstRadiusContact, "AnimSetPausedAll 1", "Doodad", "");
-    ActorRegionSend(RegionEntireMap(), c_actorIntersectAgainstRadiusContact, "AnimSetPausedAll 1", "Unit", "");
-    ActorRegionSend(RegionEntireMap(), c_actorIntersectAgainstRadiusContact, "AnimSetPausedAll 1", "Model", "");`
+    libNtve_gf_SendActorMessageToGameRegion(${mapRegion}, "AnimSetPausedAll");`
     : '';
 
   const heroUiLines = showUi
@@ -289,6 +295,7 @@ trigger hrsCap_gt_Look;
 trigger hrsCap_gt_Normal;
 trigger hrsCap_gt_Clip;
 trigger hrsCap_gt_Pitch;
+trigger hrsCap_gt_Pause;
 trigger hrsCap_gt_Sky;
 trigger hrsCap_gt_Black;
 trigger hrsCap_gt_Bounds;
@@ -507,10 +514,13 @@ void hrsCap_Scene () {
 
     // (Not VisEnable(c_visTypeFog, false): with fog of war off the reveal below stops working,
     // and only the vision around one team's buildings is drawn lit; found with --probe-light.)
+    // The whole map, not RegionEntireMap() (the playable area): terrain outside the playable
+    // bounds is otherwise left unexplored, under the black fog-of-war mask and its gradient
+    // at the boundary, which darkened the outer walls and trees of Dragon Shire to half.
     lv_p = 0;
     for ( ; lv_p <= 15 ; lv_p += 1 ) {
-        VisExploreArea(lv_p, RegionEntireMap(), true, false);
-        VisRevealArea(lv_p, RegionEntireMap(), 0.0, false);
+        VisExploreArea(lv_p, ${mapRegion}, true, false);
+        VisRevealArea(lv_p, ${mapRegion}, 0.0, false);
     }
 
     lv_p = 1;
@@ -555,6 +565,27 @@ bool hrsCap_IntroPlaying () {
 // Chat "tile <n> [<x> <y>]": tile n, at the given map position or the planned one. The capture
 // gives the position: its grid is planned from the camera bounds the game applies at run time
 // (an arena's are far tighter than its map file says), which it measures with "bounds".
+// Until the camera has stopped moving (a pan eases over several frames, the longer the further;
+// a clamp at the bounds is applied at the next update): the status strip's echo of the
+// camera's target is only right after this. At most 1.5 s.
+void hrsCap_WaitCameraStill () {
+    point lv_prev;
+    point lv_now;
+    int lv_n;
+
+    lv_prev = CameraGetTarget(hrsCap_statusPlayer);
+    lv_n = 0;
+    while ((lv_n < 24)) {
+        Wait(0.0625, c_timeReal);
+        lv_now = CameraGetTarget(hrsCap_statusPlayer);
+        if ((DistanceBetweenPoints(lv_now, lv_prev) < 0.02)) {
+            return;
+        }
+        lv_prev = lv_now;
+        lv_n += 1;
+    }
+}
+
 bool hrsCap_gt_Tile_Func (bool testConds, bool runActions) {
     int lv_index;
     string lv_xs;
@@ -592,10 +623,10 @@ bool hrsCap_gt_Tile_Func (bool testConds, bool runActions) {
     }
     hrsCap_Scene();
     CameraPan(EventPlayer(), Point(hrsCap_curX, hrsCap_curY), 0.0, -1, 10.0, false);${markerCall}
-    // A moment before acknowledging: the camera is clamped to its bounds at the next update,
-    // and the strip reports where the camera really is (read straight after the pan, it
-    // reported the target as asked, and the bounds check saw no clamping at all).
-    Wait(0.125, c_timeReal);
+    // Acknowledged once the camera has stopped (eased pan, clamp at the bounds): the strip then
+    // reports where the camera really is.
+    hrsCap_statusPlayer = EventPlayer();
+    hrsCap_WaitCameraStill();
     if ((hrsCap_currentTile != lv_index)) {
         return true;
     }
@@ -620,7 +651,8 @@ bool hrsCap_gt_Move_Func (bool testConds, bool runActions) {
     Wait(0.25, c_timeReal);
     hrsCap_ApplyCamera(EventPlayer());
     CameraPan(EventPlayer(), Point(hrsCap_curX, hrsCap_curY), 0.0, -1, 10.0, false);
-    Wait(0.125, c_timeReal);
+    hrsCap_statusPlayer = EventPlayer();
+    hrsCap_WaitCameraStill();
     hrsCap_Ack();
     return true;
 }
@@ -920,6 +952,22 @@ bool hrsCap_gt_Black_Func (bool testConds, bool runActions) {
     return true;
 }
 
+// Chat "pause [0]": pause (or resume) every animation on the map, the way Blizzard's maps do
+// at game over: one actor message to the whole-map region.
+bool hrsCap_gt_Pause_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    if ((StringWord(EventChatMessage(false), 2) == "0")) {
+        libNtve_gf_SendActorMessageToGameRegion(${mapRegion}, "AnimSetPausedAll 0");
+    }
+    else {
+        libNtve_gf_SendActorMessageToGameRegion(${mapRegion}, "AnimSetPausedAll");
+    }
+    hrsCap_Ack();
+    return true;
+}
+
 // Chat "pitch <deg>" (lighting probe): the capture camera's pitch (90 is straight down).
 bool hrsCap_gt_Pitch_Func (bool testConds, bool runActions) {
     if (!runActions) {
@@ -957,7 +1005,9 @@ void hrsCap_Init () {
     hrsCap_gt_Bounds = TriggerCreate("hrsCap_gt_Bounds_Func");
     TriggerAddEventChatMessage(hrsCap_gt_Bounds, c_playerAny, "bounds", false);
     hrsCap_gt_Pitch = TriggerCreate("hrsCap_gt_Pitch_Func");
-    TriggerAddEventChatMessage(hrsCap_gt_Pitch, c_playerAny, "pitch", false);${sky ? `
+    TriggerAddEventChatMessage(hrsCap_gt_Pitch, c_playerAny, "pitch", false);
+    hrsCap_gt_Pause = TriggerCreate("hrsCap_gt_Pause_Func");
+    TriggerAddEventChatMessage(hrsCap_gt_Pause, c_playerAny, "pause", false);${sky ? `
     hrsCap_gt_Sky = TriggerCreate("hrsCap_gt_Sky_Func");
     TriggerAddEventChatMessage(hrsCap_gt_Sky, c_playerAny, "sky", false);
     hrsCap_gt_Black = TriggerCreate("hrsCap_gt_Black_Func");

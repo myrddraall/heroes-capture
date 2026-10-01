@@ -2,10 +2,15 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: Dragon Shire again, one shot per tile over black (its tileset has no skybox, so
-rem the void is black terrain and the second shot buys nothing); the stitch makes the black void
-rem transparent. About 3 minutes.
-call "%~dp0render.cmd" "Dragon Shire" keep
+rem Current step: animation-pause probe on Dragon Shire, at a tile with water and glows (the
+rem river by the left base). Each entry: the tile, then a command, then two shots 0.5 s apart
+rem with the share of pixels that moved between them logged: nothing (control); "pause" (the
+rem whole-map AnimSetPausedAll message Blizzard's maps use at game over); the control again;
+rem "pause 0" (resume); then pause followed by the black-sky swap, to see the swap still works
+rem while paused. About 3 minutes.
+set "HRS_PROBE_POINTS=40,92"
+set "HRS_PROBE_TILE_PATH=tile:1;tile,pause:1;tile:1;tile,pause 0:1;tile,pause,black:1"
+call "%~dp0render.cmd" "Dragon Shire" keep --probe-light
 
 :copy
 rem Copy this run's output (everything in work\ except the map files) to the results folder,

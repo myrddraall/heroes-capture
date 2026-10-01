@@ -937,7 +937,23 @@ def main() -> None:
             #    hidden while the intro cutscene plays. Nothing is typed until it shows.
             deadline = time.time() + 180
             log("waiting for the map's status strip ...")
-            while not step(lambda: strip.locate(raw_grab()), "finding the status strip"):
+            black_since = None
+            while True:
+                frame = step(raw_grab, "finding the status strip")
+                if strip.locate(frame):
+                    break
+                # A dialog ("Unable to open map.") is a black panel across the screen; neither
+                # the menu, the loading screen nor a match looks like that for long.
+                if float((frame[::8, ::8].max(axis=2) <= 12).mean()) > 0.6:
+                    black_since = black_since or time.time()
+                    if time.time() - black_since > 8:
+                        hold_key("enter")  # OK
+                        sys.exit(
+                            "\nStopped: the game shows a dialog instead of the map (a black panel for 8 s: probably\n"
+                            "'Unable to open map'). The prepared map doesn't load; check inject.mjs's latest change."
+                        )
+                else:
+                    black_since = None
                 if time.time() > deadline:
                     quit_match()
                     sys.exit(
@@ -1018,10 +1034,17 @@ def main() -> None:
             probe_dir.mkdir(exist_ok=True)
 
             def shot(name: str) -> None:
+                """One shot, and a second a moment later: how much of the view moved between
+                them (animation), as a share of pixels that changed."""
                 frame = grab(dark_ok=True)
                 if frame is not None:
                     Image.fromarray(np.ascontiguousarray(frame)).save(probe_dir / f"{name}.png", compress_level=1)
-                log(f"  probe: {name}" + ("" if frame is not None else " (no frame)"))
+                    settle(0.5)
+                    again = grab(dark_ok=True)
+                    moving = changed_share(frame, again) if again is not None else None
+                    log(f"  probe: {name}" + (f"  moving between two shots 0.5 s apart: {moving * 100:.2f}% of pixels" if moving is not None else ""))
+                else:
+                    log(f"  probe: {name} (no frame)")
 
             def at(row: int, col: int) -> dict:
                 return min(tiles, key=lambda t: abs(t["row"] - row) + abs(t["col"] - col))
