@@ -805,6 +805,9 @@ def main() -> None:
     tiles = manifest["tiles"]
     out = args.manifest.parent / manifest["id"] / "tiles"
     out.mkdir(parents=True, exist_ok=True)
+    if not args.start:
+        for old in out.glob("tile_*.png"):  # an earlier run's shots would mix into this one
+            old.unlink()
     global _LOG_PATH
     _LOG_PATH = args.manifest.parent / manifest["id"] / "log.txt"
     log(f"capture {manifest['id']}: {len(tiles)} tiles, screen {manifest['screen']['w']}x{manifest['screen']['h']}, fov {manifest.get('fov')}, {manifest['pxPerCell']} px/cell")
@@ -937,7 +940,23 @@ def main() -> None:
             #    hidden while the intro cutscene plays. Nothing is typed until it shows.
             deadline = time.time() + 180
             log("waiting for the map's status strip ...")
-            while not step(lambda: strip.locate(raw_grab()), "finding the status strip"):
+            black_since = None
+            while True:
+                frame = step(raw_grab, "finding the status strip")
+                if strip.locate(frame):
+                    break
+                # A dialog ("Unable to open map.") is a black panel across the screen; neither
+                # the menu, the loading screen nor a match looks like that for long.
+                if float((frame[::8, ::8].max(axis=2) <= 12).mean()) > 0.6:
+                    black_since = black_since or time.time()
+                    if time.time() - black_since > 8:
+                        hold_key("enter")  # OK
+                        sys.exit(
+                            "\nStopped: the game shows a dialog instead of the map (a black panel for 8 s: probably\n"
+                            "'Unable to open map'). The prepared map doesn't load; check inject.mjs's latest change."
+                        )
+                else:
+                    black_since = None
                 if time.time() > deadline:
                     quit_match()
                     sys.exit(

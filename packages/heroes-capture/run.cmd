@@ -2,9 +2,9 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: Dragon Shire again, one shot per tile over black (its tileset has no skybox, so
-rem the void is black terrain and the second shot buys nothing); the stitch makes the black void
-rem transparent. About 3 minutes.
+rem Current step: Dragon Shire render, whole map revealed (the outer walls were under the fog
+rem mask), tile acknowledgements now wait for the camera to stop (the last run measured the
+rem bounds mid-pan and rendered 16 tiles). About 4 minutes.
 call "%~dp0render.cmd" "Dragon Shire" keep
 
 :copy
