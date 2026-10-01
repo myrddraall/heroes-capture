@@ -166,11 +166,12 @@ function readMapInfo(buf) {
     if (buf[o - 1] !== 0) continue;
     const [l, b, r, t] = [0, 4, 8, 12].map((k) => buf.readUInt32LE(o + k));
     if (l < r && r <= w && b < t && t <= h && r - l >= w / 3 && t - b >= h / 3) {
-      return { width: w, height: h, bounds: { left: l, bottom: b, right: r, top: t } };
+      return { width: w, height: h, bounds: { left: l, bottom: b, right: r, top: t }, boundsOffset: o };
     }
   }
-  return { width: w, height: h, bounds: { left: 0, bottom: 0, right: w, top: h } };
+  return { width: w, height: h, bounds: { left: 0, bottom: 0, right: w, top: h }, boundsOffset: null };
 }
+
 
 /**
  * A map that is several arenas in one (Punisher Arena: one arena per round, stacked on the
@@ -276,6 +277,8 @@ async function main() {
 
   const archive = Archive.open(target);
   try {
+    // (Widening the playable bounds in MapInfo, to move the game's boundary fade off the outer
+    // walls, made the map unopenable: "Unable to open map".)
     const info = readMapInfo(archive.readFile('MapInfo'));
     const refitYaw = opts.refitYaw ?? resolveRefitYaw(archive);
     // Whether the void shows the sky (the tileset has a skybox): then each tile is shot over

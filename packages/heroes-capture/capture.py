@@ -805,6 +805,9 @@ def main() -> None:
     tiles = manifest["tiles"]
     out = args.manifest.parent / manifest["id"] / "tiles"
     out.mkdir(parents=True, exist_ok=True)
+    if not args.start:
+        for old in out.glob("tile_*.png"):  # an earlier run's shots would mix into this one
+            old.unlink()
     global _LOG_PATH
     _LOG_PATH = args.manifest.parent / manifest["id"] / "log.txt"
     log(f"capture {manifest['id']}: {len(tiles)} tiles, screen {manifest['screen']['w']}x{manifest['screen']['h']}, fov {manifest.get('fov')}, {manifest['pxPerCell']} px/cell")
