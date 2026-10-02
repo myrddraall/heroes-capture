@@ -1,0 +1,18 @@
+# Pinned dependency versions enforced across the workspace.
+# `pnpm check` validates and `pnpm fix` applies these versions.
+npm:
+  '@types/node': '^20.17.11'
+  '@typescript-eslint/eslint-plugin': '^8.20.0'
+  '@typescript-eslint/parser': '^8.20.0'
+  eslint: '^9.18.0'
+  husky: '^9.1.7'
+  prettier: '^3.4.2'
+  syncpack: '^13.0.0'
+  tsup: '^8.5.1'
+  typescript: '^5.9.3'
+  vitest: '^2.1.8'
+
+github-actions:
+  actions/checkout: v7
+  actions/setup-node: v6
+  pnpm/action-setup: v6

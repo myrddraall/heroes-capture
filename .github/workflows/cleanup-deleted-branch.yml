@@ -1,0 +1,15 @@
+name: Cleanup Deleted Branch
+
+# Deleting a work branch also deletes the release/<branch> counterpart that
+# create-release-pr maintained for it. The delete event also fires for tags,
+# hence the ref_type guard. Note: delete-event workflows only run from the
+# copy of this file on the DEFAULT branch.
+
+on: delete
+
+jobs:
+  cleanup:
+    if: github.event.ref_type == 'branch'
+    uses: cpdevtools/git-flow/.github/workflows/cleanup-deleted-branch.yml@main
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}

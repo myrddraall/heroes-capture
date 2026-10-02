@@ -1,0 +1,70 @@
+# Registry Configuration examples — copy entries into registries.yml as needed.
+
+registries:
+  # NPM Registry (npmjs.com)
+  npm:
+    type: npm
+    url: https://registry.npmjs.org
+    auth: NPM_TOKEN # Environment variable name containing auth token
+    scope: '@my-scope' # Optional: NPM scope for scoped packages
+
+  # GitHub Packages (NPM)
+  github-npm:
+    type: npm
+    url: https://npm.pkg.github.com
+    auth: GITHUB_TOKEN
+    scope: '@my-scope'
+
+  # NuGet.org
+  nuget:
+    type: nuget
+    url: https://api.nuget.org/v3/index.json
+    auth: NUGET_API_KEY
+
+  # GitHub Packages (NuGet)
+  github-nuget:
+    type: nuget
+    url: https://nuget.pkg.github.com/my-org/index.json
+    auth: GITHUB_TOKEN
+
+  # Docker Hub
+  dockerhub:
+    type: docker
+    registry: docker.io
+    namespace: my-org # Optional: Docker Hub username/org
+    auth: DOCKERHUB_TOKEN
+    usernameEnv: DOCKERHUB_USERNAME # Optional: separate username env var
+
+  # GitHub Container Registry (ghcr.io)
+  ghcr:
+    type: docker
+    registry: ghcr.io
+    namespace: my-org
+    auth: GITHUB_TOKEN
+
+  # Azure Container Registry
+  acr:
+    type: docker
+    registry: myregistry.azurecr.io
+    auth: ACR_TOKEN
+    usernameEnv: ACR_USERNAME
+
+# How to use in a package's release-artifacts.yml:
+# artifacts:
+#   - type: npm
+#     registries: ['github-npm']
+#   - type: docker
+#     registries: ['ghcr']
+
+# Workflow usage:
+# - uses: cpdevtools/git-flow/actions/publish-release@main
+#   with:
+#     pr-number: ${{ github.event.pull_request.number }}
+#     token: ${{ secrets.GITHUB_TOKEN }}
+#   env:
+#     # Pass all tokens as environment variables
+#     NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+#     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#     NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+#     DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+#     DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}

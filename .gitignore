@@ -1,0 +1,24 @@
+node_modules/
+dist/
+coverage/
+.DS_Store
+*.log
+.env
+.env.local
+.wireit/
+
+
+# IDEs and editors
+/.idea
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# heroes-capture working and output folders, and game files fetched locally
+packages/heroes-capture/work/
+packages/heroes-capture/local-assets/

@@ -1,0 +1,9 @@
+# Registries used when publishing release artifacts.
+# Referenced by each package's release-artifacts.yml (registries: [...]).
+# See registries.example.yml for all supported registry types.
+registries:
+  github-npm:
+    type: npm
+    url: https://npm.pkg.github.com
+    auth: GITHUB_TOKEN
+    scope: '@myrddraall'

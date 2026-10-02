@@ -1,0 +1,14 @@
+packages:
+  - 'packages/*'
+
+# The git-flow toolchain ships on a prerelease cadence, so its packages are
+# regularly younger than the default release-age cutoff. Exclude them by name:
+# pnpm stops at the first entry matching a package, so a version-pinned entry
+# silently shadows every later one for that package — a stale pin is worse than
+# no pin. The policy still applies to everything else in the tree.
+minimumReleaseAgeExclude:
+  - '@cpdevtools/git-flow'
+  - '@cpdevtools/git-flow-cli'
+  - '@cpdevtools/ts-dev-utilities'
+  - '@cpdevtools/ts-dev-utilities-cli'
+  - '@oclif/core'

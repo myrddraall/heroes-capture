@@ -1,0 +1,3 @@
+# Maps release group placeholders to their current version.
+# The git-flow release process reads and bumps this file.
+0.0.0-MAIN: 0.1.0

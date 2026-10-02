@@ -1,0 +1,16 @@
+# dev-link map — rename to dev-local.yml to enable.
+#
+# `devutil dev-link` repoints installed node_modules/<pkg> symlinks at these
+# local checkouts (paths relative to the workspace root) so you can develop
+# against unreleased toolchain changes. pnpm always installs the published
+# graph from the committed lockfile; the overlay never touches the lockfile or
+# any manifest. The root `postinstall` script runs `devutil dev-link auto`,
+# which links everything mapped — only when DEV_LOCAL=true (the devcontainer
+# exports it) and never under CI — so a fresh clone + `pnpm install` is all it
+# takes. `devutil dev-link status` shows what is linked; `unlink` restores the
+# published symlinks.
+packages:
+  '@cpdevtools/git-flow': ../git-flow/packages/git-flow
+  '@cpdevtools/git-flow-cli': ../git-flow/packages/git-flow-cli
+  '@cpdevtools/ts-dev-utilities': ../ts-dev-utilities/packages/ts-dev-utilities
+  '@cpdevtools/ts-dev-utilities-cli': ../ts-dev-utilities/packages/cli

@@ -1,0 +1,67 @@
+name: Deploy — Production
+
+# Per-environment deploy workflow for the "Production" GitHub Environment.
+# Discovered by `gitflow deploy` via convention: deploy-{env}.yml.
+# Dispatched by the CLI with resolved repo + release_id arguments.
+# Environment is hardcoded — secrets/vars come only from "Production".
+#
+# Required environment configuration (Settings → Environments → Production):
+#   vars.DEPLOY_URL              — URL of the git-flow deploy gateway/service
+#   secrets.DEPLOY_HMAC_SECRET   — HMAC secret shared with the deploy service
+#   vars.DEPLOY_TYPE_DEFAULT     — optional: default deploy method (node, compose, swarm)
+#   vars.DEPLOY_ENV              — optional: KEY=VAL lines passed to the deploy
+#   vars.DEPLOY_ALLOWED_METHODS  — optional: comma-separated allowed methods
+#
+# Copy this file per environment (e.g. deploy-staging.yml) and change the
+# workflow name, environment name, and `environment:` values.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: 'GitHub Release ID (numeric) or tag (e.g. v1.2.3/@my-scope/my-pkg)'
+        required: true
+        type: string
+      deploy_type:
+        description: 'Deploy type (node, compose, swarm). Leave blank for environment default.'
+        required: false
+        type: string
+        default: ''
+      deploy_env:
+        description: 'Per-run deploy env overrides as KEY=VAL lines (highest priority).'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  deployments: write
+  packages: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: 'Production'
+    env:
+      DEPLOY_URL: ${{ vars.DEPLOY_URL || '' }}
+      DEPLOY_HMAC_SECRET: ${{ secrets.DEPLOY_HMAC_SECRET || '' }}
+      DEPLOY_TYPE_DEFAULT: ${{ vars.DEPLOY_TYPE_DEFAULT || '' }}
+      DEPLOY_ENV: ${{ vars.DEPLOY_ENV || '' }}
+      DEPLOY_ALLOWED_METHODS: ${{ vars.DEPLOY_ALLOWED_METHODS || '' }}
+    steps:
+      - name: Checkout git-flow (for action)
+        uses: actions/checkout@v7
+        with:
+          repository: cpdevtools/git-flow
+          path: .git-flow-action
+
+      - name: Deploy via gateway
+        uses: ./.git-flow-action/actions/deploy
+        with:
+          environment: 'Production'
+          release_id: ${{ inputs.release_id }}
+          deploy_type: ${{ inputs.deploy_type }}
+          deploy_env: |
+            ${{ env.DEPLOY_ENV }}
+            ${{ inputs.deploy_env }}
+          allowed_methods: ${{ env.DEPLOY_ALLOWED_METHODS }}

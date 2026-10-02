@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://unpkg.com/syncpack@13.0.0/dist/schema.json
+
+versionGroups:
+  - label: Use workspace protocol for packages in this workspace
+    packages:
+      - '**'
+    dependencies:
+      - $LOCAL
+    dependencyTypes:
+      - '!local'
+    pinVersion: 'workspace:*'
+
+semverGroups:
+  - label: Use caret ranges for dependencies
+    range: '^'
+    dependencies:
+      - '**'
+    packages:
+      - '**'
+
+sortFirst:
+  - name
+  - version
+  - private
+  - description
+  - main
+  - types
+  - bin
+  - scripts
+  - dependencies
+  - devDependencies
+  - peerDependencies
+  - optionalDependencies
+  - keywords
+  - author
+  - license
+  - repository
+  - bugs
+  - homepage
+  - engines

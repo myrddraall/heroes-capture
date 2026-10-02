@@ -1,0 +1,24 @@
+name: Create Release PR
+
+on:
+  push:
+    branches-ignore:
+      - 'release/**'
+
+jobs:
+  create-release-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Create Release PR
+        uses: cpdevtools/git-flow/actions/create-release-pr@main
+        with:
+          branch: ${{ github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          versions-file: .publish/versions.yml
+          run-number: ${{ github.run_number }}
