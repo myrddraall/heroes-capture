@@ -1,6 +1,14 @@
 packages:
   - 'packages/*'
 
+# pnpm blocks dependency install scripts until each is answered. @jamiephan/stormlib (the
+# MPQ writer the current Node injector uses) is answered `false`: its script runs node-gyp,
+# which fails here because the published package leaves out StormLib's sources, and nothing
+# needs it, as the package loads the prebuilt binary it ships for each platform at runtime.
+# It goes away when the injector is ported to Python (PLAN.md).
+allowBuilds:
+  '@jamiephan/stormlib': false
+
 # The git-flow toolchain ships on a prerelease cadence, so its packages are
 # regularly younger than the default release-age cutoff. Exclude them by name:
 # pnpm stops at the first entry matching a package, so a version-pinned entry
