@@ -4,12 +4,12 @@ rem
 rem   render.cmd                                     Towers of Doom, structures kept
 rem   render.cmd "Cursed Hollow"                     another map
 rem   render.cmd "Cursed Hollow" hide                bare terrain, structures hidden
-rem   render.cmd "Towers of Doom" keep --markers     further options go to inject.mjs, except:
+rem   render.cmd "Towers of Doom" keep --fov 12      further options go to inject.mjs, except:
 rem     --show-ui      diagnostic: leave the HUD up, launch the map and stop
-rem     --probe-zoom   diagnostic: find how far the camera can be before markers stop drawing
-rem     --probe-fov    diagnostic: find the narrowest field of view that still draws markers
-rem     --probe-light  diagnostic: screenshots from several camera distances and positions
+rem     --probe-light  diagnostic: command sequences at chosen points, a shot after each
 rem     --probe-sky    diagnostic: one edge tile over each solid-colour skybox
+rem     --probe-depth  diagnostic: only measure the sky layers' parallax (renders do it after the tiles)
+rem     --probe-waits  diagnostic: the fixed waits tried shorter, compared with the current ones
 rem
 rem Start Heroes from Battle.net first (so it is logged in), in Windowed (Fullscreen).
 setlocal
@@ -26,9 +26,6 @@ rem little at the seams. (The dark areas seen at far distances were the game's l
 rem to an old camera; the map script now refits it at every tile, so the distance is free.)
 set "DISTANCE=214"
 set "KEEP=0.4"
-rem (Screenshots are placed by the camera positions the map script reports; --markers adds the
-rem older registration labels, which the stitch can also place by.)
-set "EXTRA="
 set "GAME=D:\Games\Heroes of the Storm"
 
 rem Options after the map and structures go to inject.mjs as they are.
@@ -42,14 +39,14 @@ goto :collect
 
 rem Diagnostic switches are handled here, not by inject.mjs.
 set "PROBE="
-echo %ARGS% | find "--probe-zoom" >nul && set "PROBE=--probe-zoom"
-echo %ARGS% | find "--probe-fov" >nul && set "PROBE=--probe-fov"
 echo %ARGS% | find "--probe-light" >nul && set "PROBE=--probe-light"
 echo %ARGS% | find "--probe-sky" >nul && set "PROBE=--probe-sky"
-if defined PROBE set "ARGS=%ARGS:--probe-zoom=%"
-if defined PROBE set "ARGS=%ARGS:--probe-fov=%"
+echo %ARGS% | find "--probe-depth" >nul && set "PROBE=--probe-depth"
+echo %ARGS% | find "--probe-waits" >nul && set "PROBE=--probe-waits"
 if defined PROBE set "ARGS=%ARGS:--probe-light=%"
 if defined PROBE set "ARGS=%ARGS:--probe-sky=%"
+if defined PROBE set "ARGS=%ARGS:--probe-depth=%"
+if defined PROBE set "ARGS=%ARGS:--probe-waits=%"
 set "SHOWUI="
 echo %ARGS% | find "--show-ui" >nul && set "SHOWUI=1"
 
@@ -62,12 +59,12 @@ py -c "import mss, pydirectinput, PIL, numpy, pyvips, scipy, dxcam" 2>nul || py 
 echo.
 echo [1/3] Preparing %MAP% (structures: %STRUCTURES%, %SCREEN%)
 set "MANIFEST="
-for /f "usebackq delims=" %%m in (`node inject.mjs "%MAP%" --structures %STRUCTURES% --screen %SCREEN% --distance %DISTANCE% --keep %KEEP% %EXTRA%%ARGS%`) do set "MANIFEST=%%m"
+for /f "usebackq delims=" %%m in (`node inject.mjs "%MAP%" --structures %STRUCTURES% --screen %SCREEN% --distance %DISTANCE% --keep %KEEP%%ARGS%`) do set "MANIFEST=%%m"
 if not defined MANIFEST goto :error
 
 if defined PROBE (
   echo.
-  echo Camera probe %PROBE%
+  echo Probe %PROBE%
   py capture.py "%MANIFEST%" --game "%GAME%" %PROBE% || goto :error
   popd
   exit /b 0

@@ -6,6 +6,9 @@
  * own TerrainData.xml and LightData.xml.
  */
 
+/** The tileset a map's t3Terrain.xml names (<heightMap tileSet="...">), or null. */
+export const tilesetOf = (t3Terrain) => (t3Terrain.match(/\btileSet="([^"]+)"/i) || [])[1] || null;
+
 /** CTerrain entries: id -> { parent?, lighting?, skybox?, parallax?, hideLowest? } (the FixedSkyboxModel,
  * NonFixedSkyboxModel and HideLowestLevel fields; "" for a skybox cleared). */
 export function parseTerrains(xml, into = {}) {
@@ -79,11 +82,25 @@ function inherited(table, id, field, seen = new Set()) {
  * no skybox can show through.
  */
 export function hasSky(mapFiles, table) {
-  const tileset = (mapFiles.t3Terrain.match(/\btileSet="([^"]+)"/i) || [])[1] || null;
+  const tileset = tilesetOf(mapFiles.t3Terrain);
   if (!tileset) return false;
   const terrains = structuredClone(table.terrains);
   if (mapFiles.terrainData) parseTerrains(mapFiles.terrainData, terrains);
   return Boolean(inherited(terrains, tileset, 'hideLowest') || inherited(terrains, tileset, 'skybox') || inherited(terrains, tileset, 'parallax'));
+}
+
+/**
+ * The map's own sky models, { fixed, parallax } (model ids, or null): its tileset's, with the
+ * map's TerrainData.xml overrides, falling back to the game's own where the map clears one
+ * (Battlefield of Eternity clears the fixed skybox, though its model still exists).
+ */
+export function skyModels(mapFiles, table) {
+  const tileset = tilesetOf(mapFiles.t3Terrain);
+  if (!tileset) return { fixed: null, parallax: null };
+  const terrains = structuredClone(table.terrains);
+  if (mapFiles.terrainData) parseTerrains(mapFiles.terrainData, terrains);
+  const pick = (field) => inherited(terrains, tileset, field) || inherited(table.terrains, tileset, field) || null;
+  return { fixed: pick('skybox'), parallax: pick('parallax') };
 }
 
 /**
@@ -92,7 +109,7 @@ export function hasSky(mapFiles, table) {
  * Returns { tileset, lighting, key, yaw } with what could be resolved; yaw is null if not.
  */
 export function mainLight(mapFiles, table) {
-  const tileset = (mapFiles.t3Terrain.match(/\btileSet="([^"]+)"/i) || [])[1] || null;  // <heightMap tileSet="...">
+  const tileset = tilesetOf(mapFiles.t3Terrain);
   // Copies, so a map's overrides never leak into the table.
   const terrains = structuredClone(table.terrains);
   const lights = structuredClone(table.lights);

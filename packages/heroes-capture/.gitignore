@@ -2,3 +2,5 @@ work/
 __pycache__/
 # personal: copies from a machine-specific path
 update.cmd
+# game files fetched for sky probes (Blizzard's assets: never committed)
+local-assets/

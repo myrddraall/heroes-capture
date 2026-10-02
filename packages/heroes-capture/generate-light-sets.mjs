@@ -1,6 +1,6 @@
 /**
- * Build light-sets.json: for every tileset in the game, its light set, and for every light set,
- * the direction of its main ("Key") light. inject.mjs uses it to point the lighting-refit look
+ * Build light-sets.json: for every tileset in the game, its light set and skybox, for every light
+ * set the direction of its main ("Key") light. inject.mjs uses it to point the lighting-refit look
  * at a map's main light (--refit-yaw) without a per-map setting.
  *
  *   node generate-light-sets.mjs <dir with the game's TerrainData.xml and LightData.xml files>

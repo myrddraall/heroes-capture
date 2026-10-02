@@ -22,10 +22,10 @@
  *                            --px-per-cell (beyond about 120 the game renders the terrain
  *                            in low detail: dark squares around holes, dark wedges)
  *   --keep <0..1>            share of each screenshot used, centred           (default 0.6)
- *   --no-lens                leave field of view and far clip to the map
- *   --freeze                 pause model animations (experimental)
- *   --markers                show registration markers around each screenshot (experimental)
+ *   --no-lens                leave field of view and clip planes to the map
  *   --show-ui                leave the HUD up (diagnostic)
+ *   --paint-texture <texture> <colour|clear>   paint one of the map's own sky textures a
+ *                            solid colour, or make it transparent (sky probes); repeatable
  *   --keep-intro             let the intro cutscene play out instead of skipping it (diagnostic)
  *   --margin <cells>         capture past the camera bounds (lifts them)      (default 0)
  *   --crop-margin <cells>    the stitched image reaches this far past the camera bounds
@@ -40,11 +40,9 @@ import {
   MPQ_FILE_COMPRESS,
   MPQ_FILE_REPLACEEXISTING,
 } from '@jamiephan/stormlib';
-import { captureScript } from './capture-script.mjs';
-import { SKIES, skyFiles, solidDds } from './sky.mjs';
-import { hasSky } from './light-data.mjs';
-import { STATUS_CELLS, STATUS_CELL_UNITS } from './capture-script.mjs';
-import { mainLight } from './light-data.mjs';
+import { captureScript, STATUS_CELLS, STATUS_CELL_H, STATUS_CELL_W, STATUS_ROWS } from './capture-script.mjs';
+import { hasSky, mainLight, skyModels, tilesetOf } from './light-data.mjs';
+import { PARALLAX_KEYS, paintedTextureFiles, parallaxKeys, SKIES, skyFiles, solidDds } from './sky.mjs';
 
 const S2MA_MAPS = 'https://raw.githubusercontent.com/jamiephan/HeroesOfTheStorm_S2MA/main/maps';
 
@@ -60,10 +58,8 @@ function parseArgs(argv) {
     refitYaw: null,
     keep: 0.6,
     lens: true,
-    freeze: false,
-    keepMechanics: true,  // map-mechanic units such as altars stay: removing them leaves holes in the terrain
-    markers: false,
     showUi: false,
+    paintTextures: {},
     keepIntro: false,
     margin: 0,
     cropMargin: 12,
@@ -83,10 +79,12 @@ function parseArgs(argv) {
     else if (a === '--refit-yaw') opts.refitYaw = Number(next());
     else if (a === '--keep') opts.keep = Number(next());
     else if (a === '--no-lens') opts.lens = false;
-    else if (a === '--freeze') opts.freeze = true;
     else if (a === '--keep-intro') opts.keepIntro = true;
-    else if (a === '--markers') opts.markers = true;
     else if (a === '--show-ui') opts.showUi = true;
+    else if (a === '--paint-texture') {
+      const name = next();
+      opts.paintTextures[name] = next();
+    }
     else if (a === '--margin') opts.margin = Number(next());
     else if (a === '--crop-margin') opts.cropMargin = Number(next());
     else if (a === '--out') opts.out = next();
@@ -124,27 +122,15 @@ async function resolveMap(map, outDir) {
   return { file, name: map };
 }
 
+/** A JSON table shipped next to this script. */
+const readTable = (name) => JSON.parse(readFileSync(new URL(`./${name}`, import.meta.url), 'utf8'));
+
 /**
  * The yaw of the lighting-refit look: facing the map's main light (see light-data.mjs), or
  * 180 with a warning when the light can't be found.
  */
-function resolveRefitYaw(archive) {
-  const read = (name) => {
-    try {
-      return archive.readFile(name).toString('utf8');
-    } catch {
-      return null;
-    }
-  };
-  const table = JSON.parse(readFileSync(new URL('./light-sets.json', import.meta.url), 'utf8'));
-  const light = mainLight(
-    {
-      t3Terrain: read('t3Terrain.xml') || '',
-      terrainData: read('Base.StormData\\GameData\\TerrainData.xml'),
-      lightData: read('Base.StormData\\GameData\\LightData.xml'),
-    },
-    table,
-  );
+function resolveRefitYaw(mapData, lightSets) {
+  const light = mainLight(mapData, lightSets);
   if (light.yaw === null) {
     console.error(`warning: the map's main light wasn't found (tileset ${light.tileset}, light set ${light.lighting}); the refit look faces yaw 180. Pass --refit-yaw, or regenerate light-sets.json.`);
     return 180;
@@ -247,6 +233,25 @@ function planGrid(opts, info) {
   };
 }
 
+/** Add or replace a file in the map archive, compressed. */
+function addFile(archive, name, data) {
+  const ok = archive.addBuffer(name, data, {
+    flags: MPQ_FILE_REPLACEEXISTING | MPQ_FILE_COMPRESS,
+    compression: MPQ_COMPRESSION_ZLIB,
+  });
+  if (!ok) throw new Error(`could not add ${name} to the map`);
+}
+
+/**
+ * The map's identity in the status strip: a 16-bit hash of this preparation (map, structures
+ * and time), so the capture can tell its own map from one left running by an earlier run.
+ */
+function preparationId(id) {
+  let h = 2166136261;
+  for (const ch of `${id} ${Date.now()}`) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
+  return (h ^ (h >>> 16)) & 0xffff;
+}
+
 /**
  * Galaxy is single-pass: a function must be defined before any call to it, and the game gives
  * no error when it isn't; the whole map script silently fails and the map runs with no
@@ -279,22 +284,27 @@ async function main() {
   try {
     // (Widening the playable bounds in MapInfo, to move the game's boundary fade off the outer
     // walls, made the map unopenable: "Unable to open map".)
+    const read = (name) => (archive.hasFile(name) ? archive.readFileAsString(name) : null);
     const info = readMapInfo(archive.readFile('MapInfo'));
-    const refitYaw = opts.refitYaw ?? resolveRefitYaw(archive);
+    const lightSets = readTable('light-sets.json');
+    const mapData = {
+      t3Terrain: read('t3Terrain.xml') || '',
+      terrainData: read('Base.StormData\\GameData\\TerrainData.xml'),
+      lightData: read('Base.StormData\\GameData\\LightData.xml'),
+    };
+    const refitYaw = opts.refitYaw ?? resolveRefitYaw(mapData, lightSets);
     // Whether the void shows the sky (the tileset has a skybox): then each tile is shot over
     // white and over black and the difference is the transparency. Otherwise the void is
     // terrain drawn black; one shot over black, and the stitch makes that black transparent.
-    const skyMode = hasSky(
-      { t3Terrain: archive.hasFile('t3Terrain.xml') ? archive.readFileAsString('t3Terrain.xml') : '', terrainData: archive.hasFile('Base.StormData\\GameData\\TerrainData.xml') ? archive.readFileAsString('Base.StormData\\GameData\\TerrainData.xml') : null },
-      JSON.parse(readFileSync(new URL('./light-sets.json', import.meta.url), 'utf8')),
-    ) ? 'matte' : 'black';
+    const skyMode = hasSky(mapData, lightSets) ? 'matte' : 'black';
+    const skyStart = skyMode === 'matte' ? 'white' : 'black';
+    // The map's own sky models, for probes that show them (chat "sky mapsky" / "sky mapparallax").
+    const mapSky = skyModels(mapData, lightSets);
+    console.error(`map's own sky: fixed ${mapSky.fixed || 'none'}, parallax ${mapSky.parallax || 'none'}`);
     console.error(skyMode === 'matte' ? 'void: sky (each tile shot over white and black)' : 'void: black terrain (one shot over black)');
-    let areas = [];
-    try {
-      areas = parseAreas(archive.readFileAsString('Regions'));
-    } catch {
-      // no Regions file: one area, the camera bounds
-    }
+    // A map of several arenas: its Regions file (none: one area, the camera bounds).
+    const regions = read('Regions');
+    const areas = regions ? parseAreas(regions) : [];
     let grid;
     if (areas.length) {
       // One grid per area, rows numbered on from the last area's with a gap row between, so
@@ -330,43 +340,24 @@ async function main() {
       grid = planGrid(opts, info);
     }
     const unbound = opts.margin > 0 || areas.length > 0;
-    // Far clip well past the camera, with a floor so the chat "zoom" command can pull back freely.
+    // Far clip well past the camera.
     const lens = opts.lens
       ? { fov: opts.fov, farClip: Math.max(800, Math.ceil(grid.distance * 3)) }
       : null;
-    // Numbered markers, spread irregularly over the view. Each tile is shot twice, with them and
-    // without, so they may sit anywhere on screen; within 0.32 of the view from its centre keeps
-    // most of them on screen when the game holds the camera back at an edge.
-    const viewW = opts.screen.w / opts.pxPerCell;
-    const viewH = opts.screen.h / opts.pxPerCell;
-    const LAYOUT = [
-      [-0.32, -0.32],
-      [-0.25, 0.05],
-      [-0.32, 0.29],
-      [0.07, -0.3],
-      [-0.09, 0.32],
-      [0.32, -0.26],
-      [0.27, 0.08],
-      [0.32, 0.32],
-    ];
-    const markers = opts.markers
-      ? LAYOUT.map(([i, j]) => ({ dx: i * viewW, dy: j * viewH }))
-      : null;
-    // The part of each kept screenshot the stitch may use: all of it, since the kept (clean)
-    // shot has no markers in it.
-    const pageShare = null;
-
     // Cloud layers are doodads placed in the map (Battlefield of Eternity: 20 Storm_Doodad_Heaven_Clouds);
     // the script hides every doodad type with "cloud" in its name.
-    let hideDoodads = [];
-    try {
-      hideDoodads = [...new Set([...archive.readFileAsString('Objects').matchAll(/<ObjectDoodad [^>]*Type="([^"]*[Cc]loud[^"]*)"/g)].map((m) => m[1]))];
-    } catch {
-      // no Objects file
-    }
+    const objects = read('Objects') || '';
+    const hideDoodads = [...new Set([...objects.matchAll(/<ObjectDoodad [^>]*Type="([^"]*[Cc]loud[^"]*)"/g)].map((m) => m[1]))];
     if (hideDoodads.length) console.error(`cloud doodads hidden: ${hideDoodads.join(', ')}`);
 
+    const mapId = preparationId(id);
+
     const original = archive.readFileAsString('MapScript.galaxy');
+    // The map's opening timers (opening-timers.json), by the libraries its script includes.
+    const timerTable = readTable('opening-timers.json');
+    const includes = [...original.matchAll(/^include "([^"]+)"/gm)].map((m) => m[1].split('/').pop());
+    const openingTimers = includes.flatMap((lib) => timerTable[lib] || []);
+    console.error(openingTimers.length ? `opening timers cut short: ${openingTimers.length} (${includes.filter((l) => timerTable[l]).join(', ')})` : 'opening timers: none known for this map');
     const init = original.lastIndexOf('void InitMap () {');
     if (init < 0) throw new Error('MapScript.galaxy has no InitMap; not a battleground script?');
     const eol = original.includes('\r\n') ? '\r\n' : '\n';
@@ -379,15 +370,14 @@ async function main() {
       refitYaw,
       lens,
       unbound,
-      keepMechanics: opts.keepMechanics,
-      freeze: opts.freeze,
       showUi: opts.showUi,
       keepIntro: opts.keepIntro,
-      markers,
-      sky: true,
-      skyColour: skyMode === 'matte' ? 'white' : 'black',
+      skyColour: skyStart,
+      mapSky,
       mapWidth: info.width,
       mapHeight: info.height,
+      openingTimers,
+      mapId,
       hideDoodads,
     }).replace(/\n/g, eol);
     checkDefinitionOrder(script);
@@ -398,34 +388,26 @@ async function main() {
       original.slice(init, close) +
       `${eol}    hrsCap_Init();` +
       original.slice(close);
-    const ok = archive.addBuffer('MapScript.galaxy', Buffer.from(patched, 'utf8'), {
-      flags: MPQ_FILE_REPLACEEXISTING | MPQ_FILE_COMPRESS,
-      compression: MPQ_COMPRESSION_ZLIB,
-    });
-    if (!ok) throw new Error('could not replace MapScript.galaxy');
+    addFile(archive, 'MapScript.galaxy', Buffer.from(patched, 'utf8'));
 
     // The status strip's cells are a white texture tinted per cell (capture-script.mjs).
-    const white = archive.addBuffer('Assets\\Textures\\HrsWhite.dds', solidDds([255, 255, 255], 64, 64), {
-      flags: MPQ_FILE_REPLACEEXISTING | MPQ_FILE_COMPRESS,
-      compression: MPQ_COMPRESSION_ZLIB,
-    });
-    if (!white) throw new Error('could not add the status strip texture');
+    addFile(archive, 'Assets\\Textures\\HrsWhite.dds', solidDds([255, 255, 255], 64, 64));
 
     // The solid-colour skyboxes (sky.mjs): the capture shoots each tile over white and over
     // black, and the stitch turns the difference into transparency.
-    {
-      const tileset = (archive.readFileAsString('t3Terrain.xml').match(/\btileSet="([^"]+)"/i) || [])[1];
-      if (!tileset) throw new Error('t3Terrain.xml names no tileset; cannot set the skybox');
-      const read = (name) => (archive.hasFile(name) ? archive.readFileAsString(name) : null);
-      for (const file of skyFiles(tileset, skyMode === 'matte' ? 'white' : 'black', read)) {
-        const added = archive.addBuffer(file.name, file.data, {
-          flags: MPQ_FILE_REPLACEEXISTING | MPQ_FILE_COMPRESS,
-          compression: MPQ_COMPRESSION_ZLIB,
-        });
-        if (!added) throw new Error(`could not add ${file.name}`);
-      }
-      console.error(`skyboxes: ${Object.keys(SKIES).join(', ')} (tileset ${tileset})`);
+    const tileset = tilesetOf(mapData.t3Terrain);
+    if (!tileset) throw new Error('t3Terrain.xml names no tileset; cannot set the skybox');
+    // Keyed copies of the map's parallax sky (sky probes), when its model file is in local-assets/.
+    let keys = { models: [], files: [] };
+    const keyFile = PARALLAX_KEYS[mapSky.parallax] && new URL(`./local-assets/${PARALLAX_KEYS[mapSky.parallax].file}`, import.meta.url);
+    if (keyFile && existsSync(keyFile)) {
+      keys = parallaxKeys(mapSky.parallax, readFileSync(keyFile));
+      console.error(`keyed copies of ${mapSky.parallax}: chat "sky parallaxwhite", "parallaxblack", "parallaxbare", "parallaxwhitebare"`);
     }
+    for (const file of skyFiles(tileset, skyStart, read, keys)) addFile(archive, file.name, file.data);
+    for (const file of paintedTextureFiles(opts.paintTextures)) addFile(archive, file.name, file.data);
+    for (const [name, paint] of Object.entries(opts.paintTextures)) console.error(`texture ${name} painted ${paint}`);
+    console.error(`skyboxes: ${Object.keys(SKIES).join(', ')} (tileset ${tileset})`);
 
     const manifest = {
       map: source.name,
@@ -449,14 +431,12 @@ async function main() {
       cols: grid.cols,
       rows: grid.rows,
       tiles: grid.tiles,
-      markers,
-      pageShare,
       keepIntro: opts.keepIntro,
-      sky: { mode: skyMode, start: skyMode === 'matte' ? 'white' : 'black', colours: Object.keys(SKIES) },
+      sky: { mode: skyMode, start: skyStart, colours: Object.keys(SKIES), mapSky, keys: keys.models.length > 0 },
       hideDoodads,
-      // The status strip sits in the top-left corner; this many pixels of each screenshot's left
-      // edge are blanked by the capture and left out by the stitch (status.py, stitch.py).
-      status: { cells: STATUS_CELLS, cellUnits: STATUS_CELL_UNITS, pageLeft: 64 },
+      // The status strip (two columns) sits in the top-left corner; this many pixels of each
+      // screenshot's left edge are blanked by the capture and left out by the stitch.
+      status: { cells: STATUS_CELLS, rows: STATUS_ROWS, cellUnits: [STATUS_CELL_W, STATUS_CELL_H], pageLeft: 64, mapId },
     };
     const manifestPath = resolve(opts.out, `${id}.json`);
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));

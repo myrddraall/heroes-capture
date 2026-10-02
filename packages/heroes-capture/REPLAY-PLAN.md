@@ -21,7 +21,7 @@ Branch: `experiment/replay-capture`, off whatever state `tools/map-capture` is i
 | Pausing freezes everything driven by game time                                       | Observed by Erd in normal replays                                                                                        |
 | Seeking forward works (fast re-simulation); seeking back restarts from the beginning | Standard replay behaviour; so the plan only ever seeks forward                                                           |
 | Text-tag markers draw at a far camera only if they were created under a close one    | Found in this tool (the zoom probe); matters because in a replay we don't control the camera at creation time            |
-| Numbered markers, marker fitting and marker-anchored stitching                       | Already built and tested for the live capture; they carry over unchanged                                                 |
+| Numbered markers, marker fitting and marker-anchored stitching                       | Built and tested for the live capture, then removed from it once tiles were placed by the status strip's camera echo; `markers.py`, the script's marker code and stitch's `markers.json` support are in commit `da06a41` |
 
 ## The pipeline
 
