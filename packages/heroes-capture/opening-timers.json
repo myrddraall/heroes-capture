@@ -1,0 +1,10 @@
+{
+  "_comment": "Per map library (as the map script includes it): the timers between the gates opening and the map's first objective, which the capture cuts short so the objective is in place before any tile is shot. Names from the library's Galaxy code (CASC: mods/heroesmapmods/battlegroundmapmods/<map>.stormmod/base.stormdata/<lib>.galaxy).",
+  "LibMHmu": [
+    "libMHmu_gv_hanamura.lv_mapMechanic_ObjectivePreviewTimer",
+    "libMHmu_gv_hanamura.lv_mapMechanic_ObjectivePreviewDelay",
+    "libMHmu_gv_hanamuraMM10secondcountdownTimer",
+    "libMHmu_gv_elevator.lv_elevatorInitialRaiseTimer",
+    "libMHmu_gv_elevator.lv_elevatorRaiseTimer"
+  ]
+}
