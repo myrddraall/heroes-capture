@@ -93,7 +93,7 @@ cell there is no more detail: that's the game's own texture resolution.
 
 - `<id>.png`: the full image, cropped to the camera bounds plus `--crop-margin` cells, widened
   to take in all of the map the screenshots show (a map of several arenas: `<id>-m1.png`,
-  `<id>-m2.png`, ..., one per arena, each cropped to its area).
+  `<id>-m2.png`, ..., one per arena, each cropped to its own content).
   It has an alpha channel: the void is transparent
 - `<id>-preview.jpg`: 2048 px wide (transparency shown over dark grey)
 - `<id>-on-white.jpg`: the full image flattened over white, for looking at
@@ -107,8 +107,16 @@ cell there is no more detail: that's the game's own texture resolution.
   backdrop), `<id>-composite.png` (background, haze and map together, with transparency),
   `<id>-composite-on-black.png`, `<id>-composite-with-fixed.png` (over the fixed skybox, stretched
   behind everything as a backdrop), and `<id>-layers.json` with each layer's speed against the map
-  and where it sits. Every render of a map with its own parallax sky also writes
-  `<id>/sky-layers.json`, the measured speeds.
+  and where it sits. The sky layers are the sky seen from the middle camera position: the
+  shells are a tilted plane (fitted from the sky shots' overlaps), so the map's straight edges
+  come out slanted and the layer is a trapezoid, transparent in the corners no shot reaches.
+  Every render of a map with its own parallax sky also writes `<id>/sky-layers.json`, the
+  measured speeds.
+- `<id>-viewer/`: a prototype viewer, `index.html` and the layer images it shows (the map, on a
+  map of several arenas each arena's, shown one at a time with buttons to switch, the sky
+  layers centred on it; and where the map has them the fixed skybox, background art and haze). Drag to pan, mouse wheel to
+  zoom; the sky layers move at their rates behind the map, and zooming moves the camera up and
+  down, so they shrink less than the map. Opens straight from the folder (no server needed).
 
 ## How it works
 
@@ -119,7 +127,11 @@ cell there is no more detail: that's the game's own texture resolution.
   stacked on the map, the camera bounds moved to the round's arena at run time) marks each
   with a region named `..._MapBounds` in its `Regions` file; with two or more, each gets its
   own grid, the script lifts the camera bounds so the camera can reach them all, and the
-  stitch writes one image per arena (`<id>-m1.png`, ...).
+  stitch writes one image per arena (`<id>-m1.png`, ...), without the edges of the arenas next
+  to it that its screenshots see across the void (each separate piece goes to the arena it is
+  nearest). Past an arena's edges that face no other arena the capture goes on where the map
+  does, as on a map of one. Such a map plays rounds (its script includes `LibAREN`): killing a core ends only
+  the round, so `quit` first leaves the other team one round win short of the match.
 - **The capture script** reveals the whole map, removes every unit except structures (and
   keeps removing them as they spawn), hides health bars, keeps or hides structures, hides the
   HUD, and sets a straight-down camera. Typing `tile <n>` in chat moves the camera to tile n.
@@ -207,7 +219,8 @@ cell there is no more detail: that's the game's own texture resolution.
   directly it can't authenticate; `--battlenet` or `HRS_BATTLENET` if the app isn't in the
   usual place), then launches the map through `Support64\HeroesSwitcher_x64.exe` (Heroes must be
   at the main menu: a running match keeps its map), waits for the status strip, on a map with its own sky, measures and shoots the sky layers
-  while the map gets ready, measures the camera bounds the game really applies (an arena's are far tighter than its map file says)
+  while the map gets ready (or once it is ready, when an in-game hero selection hides the world
+  meanwhile: Punisher Arena), measures the camera bounds the game really applies (an arena's are far tighter than its map file says)
   from where the camera stops when sent to two corners, re-plans the grid from them, sends
   each tile with its position (`tile <n> <x> <y>`), records where the camera really went
   (`positions.json`), and for each tile takes the kept image once `tile` has been carried out, then (number pad 5, or the `black` command if the key went
@@ -252,6 +265,8 @@ cell there is no more detail: that's the game's own texture resolution.
 | `runlog.py`                                | the run's log (printed and written to `log.txt`)                                              |
 | `frames.py` | screenshots on disk (`.npy`, or PNG from older runs) |
 | `workers.py` | the ordered thread pool the stitches use |
+| `matching.py` | phase correlation, for the stitches' matching |
+| `viewer.py`, `viewer.html` | the prototype viewer folder the stitch writes per map image |
 | `local-assets/` | game files fetched for sky probes (BoE's parallax sky model); not in git |
 
 ## Troubleshooting

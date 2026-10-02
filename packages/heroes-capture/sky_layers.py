@@ -136,7 +136,7 @@ def measure(session, manifest: dict, out_dir: Path, area: dict | None = None) ->
     return result
 
 
-SKY_KEEP = 0.8  # the share of a screen the sky moves between neighbouring camera positions (0.6 gave 20 positions on Battlefield of Eternity, 0.8 gives 12, and sharper layers: fewer slightly misaligned shots blended at each point)
+SKY_KEEP = 0.8  # the share of a screen the sky moves between neighbouring camera positions (0.6 gave 20 positions on Battlefield of Eternity, 0.8 gives 12; the shots must overlap for sky_stitch to fit the shells' tilt)
 FIXED_CLIP = 600  # a near clip past the parallax shells and short of the fixed skybox (which survives 1000)
 
 

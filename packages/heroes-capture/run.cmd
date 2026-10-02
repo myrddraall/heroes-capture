@@ -2,10 +2,11 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: full render of Battlefield of Eternity with the third round of speed-ups: the
-rem black shot from number pad 5 instead of a chat command, the stitch running while the game
-rem leaves the match, and no fixed sleep after the map loads. Logs end with stage timings.
-call "%~dp0render.cmd" "Battlefield of Eternity" keep
+rem Current step: full render of Punisher Arena again. Since the last run: the haze layer's
+rem transparency is estimated where the sky shells end before the map does (the far south),
+rem instead of coming out opaque; arena edges facing no other arena are captured further where
+rem the map runs on; the viewer shows one arena at a time, centred on the sky layers.
+call "%~dp0render.cmd" "Punisher Arena" keep
 
 :copy
 rem Copy this run's output (everything in work\ except the map files) to the results folder,

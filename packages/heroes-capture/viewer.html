@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>/*TITLE*/</title>
+<style>
+  :root { --backdrop: #000; --panel: rgba(0, 0, 0, 0.7); --text: #fff; --accent: #ffd479; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--backdrop); }
+  #view { position: fixed; inset: 0; cursor: grab; touch-action: none; user-select: none; }
+  #view.dragging { cursor: grabbing; }
+  #view img { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; pointer-events: none; }
+  #view img.fixed { inset: 0; width: 100%; height: 100%; object-fit: cover; transform: none; }
+  #view img[hidden] { display: none; }
+  #arenas { position: fixed; top: 16px; left: 16px; display: flex; gap: 8px; padding: 8px; border-radius: 8px; background: var(--panel); }
+  #arenas[hidden] { display: none; }
+  #arenas button { font: 600 15px/1 system-ui, sans-serif; color: var(--text); background: transparent; border: 2px solid var(--text); border-radius: 6px; padding: 8px 14px; cursor: pointer; }
+  #arenas button[aria-pressed="true"] { color: #000; background: var(--accent); border-color: var(--accent); }
+  #arenas button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div id="view" role="application" aria-label="/*TITLE*/: drag to pan, mouse wheel to zoom"></div>
+<nav id="arenas" aria-label="Arenas" hidden></nav>
+<script>
+// Written by the map-capture stitch (viewer.py). Each layer is placed so the pixel the game shows
+// at the screen's middle, with the camera over map cell (cx, cy), is at the middle of the window.
+// Zooming moves the camera up or down: a layer moving at `rate` against the map is drawn at
+// 1 / (1 + rate * (1 / zoom - 1)) of its size (the map, rate 1, at `zoom`; the fixed skybox not at all).
+// A map of several arenas (one image each) shows one arena at a time, with the sky layers
+// centred on it: their middle behind the arena's middle.
+const data = /*DATA*/;
+const view = document.getElementById("view");
+const layers = [];
+
+// Each map image's extent in map cells, and its middle.
+const arenas = data.maps.map((map) => {
+  const west = map.originCell.x, north = map.originCell.y;
+  const east = west + map.width / map.pxPerCell, south = north - map.height / map.pxPerCell;
+  return { map, west, east, north, south, middle: [(west + east) / 2, (north + south) / 2] };
+});
+let current = 0;
+
+if (data.fixed) {
+  const img = new Image();
+  img.src = data.fixed;
+  img.alt = "";
+  img.className = "fixed";
+  view.appendChild(img);
+}
+function addLayer(src, rate, place) {
+  const img = new Image();
+  img.src = src;
+  img.alt = "";
+  img.draggable = false;
+  view.appendChild(img);
+  layers.push({ img, rate, place });
+  return img;
+}
+for (const sky of data.sky) {
+  addLayer(sky.src, sky.rate, (cx, cy) => {
+    // One map: the sky where the game has it. Several arenas: centred on the arena shown.
+    const [ox, oy] = arenas.length > 1 ? arenas[current].middle : sky.centreCell;
+    return [sky.centrePixel[0] + sky.pxPerMapCell[0] * (cx - ox), sky.centrePixel[1] - sky.pxPerMapCell[1] * (cy - oy)];
+  });
+}
+for (const arena of arenas) {
+  const map = arena.map;
+  arena.img = addLayer(map.src, 1, (cx, cy) => [(cx - map.originCell.x) * map.pxPerCell, (map.originCell.y - cy) * map.pxPerCell]);
+}
+
+// The camera: the map cell at the window's middle, and the map's screen pixels per image pixel.
+const pxPerCell = data.maps[0].pxPerCell;  // one scale for all the map's images
+let cx = 0, cy = 0, zoom = 1;
+const fit = () => {
+  const a = arenas[current];
+  return Math.min(innerWidth / ((a.east - a.west) * pxPerCell), innerHeight / ((a.north - a.south) * pxPerCell));
+};
+
+function draw() {
+  const w = view.clientWidth / 2, h = view.clientHeight / 2;
+  for (const { img, rate, place } of layers) {
+    if (img.hidden) continue;
+    const s = 1 / (1 + rate * (1 / zoom - 1));
+    const [px, py] = place(cx, cy);
+    img.style.transform = `translate(${w - px * s}px, ${h - py * s}px) scale(${s})`;
+  }
+}
+function clampCamera() {
+  const a = arenas[current];
+  cx = Math.min(a.east, Math.max(a.west, cx));
+  cy = Math.min(a.north, Math.max(a.south, cy));
+}
+function show(index) {
+  current = index;
+  arenas.forEach((a, k) => { a.img.hidden = k !== index; });
+  for (const button of document.querySelectorAll("#arenas button")) {
+    button.setAttribute("aria-pressed", String(Number(button.dataset.index) === index));
+  }
+  [cx, cy] = arenas[index].middle;
+  zoom = fit();
+  draw();
+}
+
+if (arenas.length > 1) {
+  const nav = document.getElementById("arenas");
+  arenas.forEach((a, k) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.index = String(k);
+    button.textContent = a.map.label || `Arena ${k + 1}`;
+    button.addEventListener("click", () => show(k));
+    nav.appendChild(button);
+  });
+  nav.hidden = false;
+}
+
+let last = null;
+view.addEventListener("pointerdown", (e) => {
+  last = [e.clientX, e.clientY];
+  view.setPointerCapture(e.pointerId);
+  view.classList.add("dragging");
+});
+view.addEventListener("pointermove", (e) => {
+  if (!last) return;
+  const cells = zoom * pxPerCell;
+  cx -= (e.clientX - last[0]) / cells;
+  cy += (e.clientY - last[1]) / cells;
+  last = [e.clientX, e.clientY];
+  clampCamera();
+  draw();
+});
+const endDrag = () => { last = null; view.classList.remove("dragging"); };
+view.addEventListener("pointerup", endDrag);
+view.addEventListener("pointercancel", endDrag);
+
+view.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  // Zoom about the cursor: the map cell under it stays under it.
+  const dx = e.clientX - view.clientWidth / 2, dy = e.clientY - view.clientHeight / 2;
+  const ux = cx + dx / (zoom * pxPerCell), uy = cy - dy / (zoom * pxPerCell);
+  zoom = Math.min(2, Math.max(fit() * 0.5, zoom * Math.exp(-e.deltaY * 0.0015)));
+  cx = ux - dx / (zoom * pxPerCell);
+  cy = uy + dy / (zoom * pxPerCell);
+  clampCamera();
+  draw();
+}, { passive: false });
+
+addEventListener("resize", draw);
+show(0);
+</script>
+</body>
+</html>

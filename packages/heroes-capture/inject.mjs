@@ -358,6 +358,9 @@ async function main() {
     const includes = [...original.matchAll(/^include "([^"]+)"/gm)].map((m) => m[1].split('/').pop());
     const openingTimers = includes.flatMap((lib) => timerTable[lib] || []);
     console.error(openingTimers.length ? `opening timers cut short: ${openingTimers.length} (${includes.filter((l) => timerTable[l]).join(', ')})` : 'opening timers: none known for this map');
+    // A map of rounds (arena mode): "quit" makes the current round the last.
+    const arena = includes.includes('LibAREN');
+    if (arena) console.error('rounds (LibAREN): "quit" ends the match after this round');
     const init = original.lastIndexOf('void InitMap () {');
     if (init < 0) throw new Error('MapScript.galaxy has no InitMap; not a battleground script?');
     const eol = original.includes('\r\n') ? '\r\n' : '\n';
@@ -379,6 +382,7 @@ async function main() {
       openingTimers,
       mapId,
       hideDoodads,
+      arena,
     }).replace(/\n/g, eol);
     checkDefinitionOrder(script);
     // Galaxy is single-pass: the capture functions go before InitMap, the call at its end.

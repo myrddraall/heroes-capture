@@ -48,6 +48,9 @@ export const STATUS_CELL_H = 15; // cell height (18 px)
  * @param {string[]} o.hideDoodads Doodad types to hide (cloud layers placed in the map as doodads).
  * @param {boolean} [o.keepIntro] Let the intro cutscene play out instead of skipping it
  *   (diagnostic: does skipping it leave the map's lighting half changed?).
+ * @param {boolean} [o.arena] The map plays rounds (its script includes LibAREN: Punisher Arena):
+ *   a core killed ends only the round, so "quit" first gives the other team all but its last
+ *   round win.
  */
 export function captureScript({
   tiles,
@@ -66,6 +69,7 @@ export function captureScript({
   mapId = 0,
   hideDoodads = [],
   keepIntro = false,
+  arena = false,
 }) {
   const n = tiles.length;
   const tileLines = tiles
@@ -928,7 +932,9 @@ bool hrsCap_gt_BgSpeed_Func (bool testConds, bool runActions) {
 
 // "quit" ends the match by killing that player's own core: the game then ends it its normal way
 // (end sequence, defeat), back towards the menu, where the next run's map loads. (Ending it
-// directly with GameOver crashed Battlefield of Eternity once the match had run about 30 s.)
+// directly with GameOver crashed Battlefield of Eternity once the match had run about 30 s.) On
+// a map of rounds the other team is first one round win short of the match, so this round is
+// the last.
 bool hrsCap_gt_Quit_Func (bool testConds, bool runActions) {
     if (!runActions) {
         return true;
@@ -938,7 +944,7 @@ bool hrsCap_gt_Quit_Func (bool testConds, bool runActions) {
     Wait(0.25, c_timeReal);
     hrsCap_Restore();
     Wait(0.5, c_timeReal);
-    UnitKill(libGame_gv_teams[libGame_gf_TeamNumberOfPlayer(EventPlayer())].lv_core);
+${arena ? '    libAREN_gv_aRM_RoundScore[libGame_gf_EnemyTeam(libGame_gf_TeamNumberOfPlayer(EventPlayer()))] = libAREN_gv_victoriesCount - 1;\n' : ''}    UnitKill(libGame_gv_teams[libGame_gf_TeamNumberOfPlayer(EventPlayer())].lv_core);
     return true;
 }
 

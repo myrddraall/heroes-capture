@@ -20,6 +20,7 @@ Writes, next to the tiles folder:
   <id>.geo.json     scale and origin, to convert map cells to image pixels (for replay overlays)
                     (a map of several arenas, e.g. Punisher Arena: <id>-<area>.png etc., one per arena)
   <id>-tiles/       with --tiles: a Google Maps style pyramid ({z}/{y}/{x}.png, 256 px)
+  <id>-viewer/      a prototype viewer: index.html and the layers it shows (viewer.py)
 """
 
 import argparse
@@ -34,7 +35,9 @@ import pyvips
 from PIL import Image
 
 import sky_stitch
+import viewer
 from frames import PNG_COMPRESSION, frame_exists, load_frame
+from matching import phase_correlate
 from workers import ordered_map
 from runlog import log, log_timings, set_log_file, stage
 
@@ -49,30 +52,6 @@ MATTE_BAND = 32  # rows matted at a time (see Shots.matte)
 # ------------------------------------------------------------------------------------------------
 # Matching
 # ------------------------------------------------------------------------------------------------
-
-
-def phase_correlate(a: np.ndarray, b: np.ndarray) -> tuple[float, float, float]:
-    """(dy, dx, strength) with b(y, x) ≈ a(y + dy, x + dx), to a fraction of a pixel;
-    strength near 1 is a clean match."""
-    win = np.outer(np.hanning(a.shape[0]), np.hanning(a.shape[1])).astype(np.float32)
-    fa = np.fft.rfft2((a - a.mean()) * win)
-    fb = np.fft.rfft2((b - b.mean()) * win)
-    cross = fb * np.conj(fa)
-    cross /= np.abs(cross) + 1e-9
-    corr = np.fft.irfft2(cross, s=a.shape)
-    y, x = np.unravel_index(int(np.argmax(corr)), corr.shape)
-
-    def refine(before: float, peak: float, after: float) -> float:
-        # Vertex of the parabola through the peak and its neighbours.
-        denom = before - 2 * peak + after
-        return 0.5 * (before - after) / denom if denom else 0.0
-
-    h, w = corr.shape
-    fy = y + refine(corr[(y - 1) % h, x], corr[y, x], corr[(y + 1) % h, x])
-    fx = x + refine(corr[y, (x - 1) % w], corr[y, x], corr[y, (x + 1) % w])
-    dy = fy - h if fy > h / 2 else fy
-    dx = fx - w if fx > w / 2 else fx
-    return -float(dy), -float(dx), float(corr.max())
 
 
 def unwrap(shift: float, size: float, expected: float) -> float:
@@ -669,12 +648,49 @@ def void_terrain_transparent(rgba: np.ndarray, px_per_cell: float) -> np.ndarray
 # ------------------------------------------------------------------------------------------------
 
 
-def write_outputs(manifest: dict, base: Path, shots: Shots, layout: Layout, seams: dict, scale: float, ax: float, ay: float, pyramid: bool) -> None:
-    """The image cropped to the camera bounds plus a margin (the screenshots reach half a screen
-    further out: sky, or on a map of several arenas the next arena's stands), and its preview,
-    on-white copy, geo file and pyramid. Several arenas: one image each, <id>-<area>.png. They
-    sit close together and their stands interleave, so the full margin is kept towards a
-    neighbour too (its stands' tips at the edge) rather than cutting into this arena's own."""
+def other_areas_removed(rgba: np.ndarray, areas: list, own: int, scale: float, ax: float, ay: float) -> tuple[np.ndarray, int]:
+    """On a map of several arenas: an arena's image without the edges of the arenas next to it,
+    which its screenshots see across the void between them. Each separate solid piece of the
+    image (void all round it) belongs to the arena whose bounds it is nearest; the pieces nearer
+    another arena are made transparent (with a few pixels round them, their soft edges). The
+    arena's own floating pieces stay, as they are nearest it, and so does anything touching the
+    arena itself. Image pixel (x, y) is map cell ((x - ax) / scale, (ay - y) / scale). Returns
+    the image and how many pieces went."""
+    from scipy import ndimage
+
+    labels, count = ndimage.label(rgba[:, :, 3] >= 16, structure=np.ones((3, 3), dtype=bool))
+    if count < 2:
+        return rgba, 0
+
+    def gap(piece: tuple[slice, slice], bounds: dict) -> float:
+        """Map cells between a piece's bounding box and an area's bounds (0 where they overlap)."""
+        rows, cols = piece
+        left, right = (cols.start - ax) / scale, (cols.stop - ax) / scale
+        top, bottom = (ay - rows.start) / scale, (ay - rows.stop) / scale
+        dx = max(bounds["left"] - right, left - bounds["right"], 0.0)
+        dy = max(bounds["bottom"] - top, bottom - bounds["top"], 0.0)
+        return float(np.hypot(dx, dy))
+
+    pieces = ndimage.find_objects(labels)
+    others = np.zeros(count + 1, dtype=bool)
+    for k, piece in enumerate(pieces, start=1):
+        mine = gap(piece, areas[own]["bounds"])
+        others[k] = mine > 0 and any(gap(piece, a["bounds"]) < mine for i, a in enumerate(areas) if i != own)
+    if not others.any():
+        return rgba, 0
+    kept = (labels > 0) & ~others[labels]
+    gone = ndimage.binary_dilation(others[labels], iterations=4) & ~kept
+    rgba[gone] = 0
+    return rgba, int(others.sum())
+
+
+def write_outputs(manifest: dict, base: Path, shots: Shots, layout: Layout, seams: dict, scale: float, ax: float, ay: float, pyramid: bool) -> list[str]:
+    """The image cropped to the camera bounds plus a margin, or further where the map runs on
+    past them, and its preview, on-white copy, geo file and pyramid. Several arenas: one image
+    each, <id>-<area>.png, without the edges of the arenas next to it (other_areas_removed), so
+    its crop can follow its own content the same way.
+    Returns the ids of the images written."""
+    written = []
     width, height = layout.width, layout.height
     margin = manifest.get("cropMargin", 12)
     outputs = [(a["name"], a["bounds"]) for a in manifest.get("areas") or []] or [(None, manifest["cameraBounds"])]
@@ -695,20 +711,23 @@ def write_outputs(manifest: dict, base: Path, shots: Shots, layout: Layout, seam
             composed = compose(shots, layout, seams, subset)
         with stage("void transparency"):
             composed = void_terrain_transparent(composed, manifest["pxPerCell"])
-        if name is None:
-            # One map, one image: the crop follows the map, not the camera bounds. A map's
-            # terrain can run well past its camera bounds (Cursed Hollow: 25 cells), and the
-            # edge screenshots see it; the output takes in everything that isn't void. (Faint
-            # pixels don't count, so a blurred rim or a stray speck can't set the edge.) The
-            # same margin of transparency on every side, as far as the canvas allows.
-            opaque = composed[::4, ::4, 3] >= 32
-            rows_on, cols_on = np.nonzero(opaque.any(axis=1))[0], np.nonzero(opaque.any(axis=0))[0]
-            if len(rows_on) and len(cols_on):
-                pad = int(round(margin * scale))
-                x0 = min(x0, max(0, int(cols_on[0] * 4) - pad))
-                x1 = max(x1, min(width, int((cols_on[-1] + 1) * 4) + pad))
-                y0 = min(y0, max(0, int(rows_on[0] * 4) - pad))
-                y1 = max(y1, min(height, int((rows_on[-1] + 1) * 4) + pad))
+        if name is not None:
+            with stage("other arenas removed"):
+                composed, removed = other_areas_removed(composed, manifest["areas"], area_no, scale, ax, ay)
+            log(f"  {out_id}: {removed} pieces of the arenas next to it removed")
+        # The crop follows the map, not the camera bounds. A map's terrain can run well past
+        # its camera bounds (Cursed Hollow: 25 cells), and the edge screenshots see it; the
+        # output takes in everything that isn't void. (Faint pixels don't count, so a blurred
+        # rim or a stray speck can't set the edge.) The same margin of transparency on every
+        # side, as far as the canvas allows.
+        opaque = composed[::4, ::4, 3] >= 32
+        rows_on, cols_on = np.nonzero(opaque.any(axis=1))[0], np.nonzero(opaque.any(axis=0))[0]
+        if len(rows_on) and len(cols_on):
+            pad = int(round(margin * scale))
+            x0 = min(x0, max(0, int(cols_on[0] * 4) - pad))
+            x1 = max(x1, min(width, int((cols_on[-1] + 1) * 4) + pad))
+            y0 = min(y0, max(0, int(rows_on[0] * 4) - pad))
+            y1 = max(y1, min(height, int((rows_on[-1] + 1) * 4) + pad))
         image = pyvips.Image.new_from_array(composed, interpretation="srgb").crop(x0, y0, x1 - x0, y1 - y0)
         out_png = base.parent / f"{out_id}.png"
         writes = [
@@ -736,6 +755,8 @@ def write_outputs(manifest: dict, base: Path, shots: Shots, layout: Layout, seam
         log(f"{x1 - x0}x{y1 - y0} px -> {out_png}")
         if pyramid:
             log(f"tile pyramid -> {base.parent / f'{out_id}-tiles'}")
+        written.append(out_id)
+    return written
 
 
 def main() -> None:
@@ -821,9 +842,10 @@ def main() -> None:
         (base / "seams.json").write_text(json.dumps(
             {f"{i}-{j}": {"kind": k, "start": st, "path": p.tolist(), "placed": [placed[i].tolist(), placed[j].tolist()]}
              for (i, j), (k, st, p) in seams.items()}))
-    write_outputs(manifest, base, shots, layout, seams, scale, ax, ay, args.tiles)
+    written = write_outputs(manifest, base, shots, layout, seams, scale, ax, ay, args.tiles)
     # The map's own sky layers and the composites, when the capture shot them.
-    sky_stitch.build(manifest, base)
+    sky_stitch.build(manifest, base, written)
+    viewer.write(base.parent, manifest["id"], manifest["map"], written)
     log_timings("stitch")
 
 

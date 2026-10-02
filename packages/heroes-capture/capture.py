@@ -485,24 +485,47 @@ def edge_content(frame: np.ndarray, black: np.ndarray | None, matting: bool, lef
     return int(content.sum()) >= EDGE_CONTENT
 
 
+def outer_edges(tiles: list, areas: list | None) -> dict[int, dict[str, int]]:
+    """Per area (0 on a map of one), its grid's outer rows and columns: {side: row or column}.
+    On a map of several arenas, not the sides facing another arena: past those is the other
+    arena, not more of this one."""
+    edges = {}
+    for k in sorted({t.get("area", 0) for t in tiles}):
+        mine = [t for t in tiles if t.get("area", 0) == k]
+        rows, cols = [t["row"] for t in mine], [t["col"] for t in mine]
+        edges[k] = {"top": min(rows), "bottom": max(rows), "left": min(cols), "right": max(cols)}
+        if areas:
+            a = areas[k]["bounds"]
+            for other in (o["bounds"] for i, o in enumerate(areas) if i != k):
+                across = other["left"] < a["right"] and other["right"] > a["left"]
+                along = other["bottom"] < a["top"] and other["top"] > a["bottom"]
+                for side, faces in (("top", across and other["bottom"] >= a["top"]), ("bottom", across and other["top"] <= a["bottom"]),
+                                    ("left", along and other["right"] <= a["left"]), ("right", along and other["left"] >= a["right"])):
+                    if faces:
+                        edges[k].pop(side, None)
+    return edges
+
+
 def capture_tiles(session: Session, manifest: dict, start: int, settle_time: float, out: Path, positions: dict, positions_path: Path, manifest_path: Path) -> None:
     """Every tile from `start`, saved as PNGs (written in the background while the next tile is
     shot), with the camera positions in positions.json. Three tiles in a row that fail raise
     Recoverable, resuming at the first of them.
 
     Then past the grid, where the map runs on: an outer tile with map content at its outer edge
-    (Battlefield of Eternity's arches past the camera bounds) gets a tile beyond it, the camera
-    bounds lifted to the whole map, and so on outwards (EDGE_RINGS at most). Those tiles are added
+    (Battlefield of Eternity's arches past the camera bounds; on a map of several arenas, an
+    arena's edges that face no other arena) gets a tile beyond it, the camera bounds lifted to
+    the whole map, and so on outwards (EDGE_RINGS at most). Those tiles are added
     to the manifest, so the stitch places them like the rest."""
     tiles = manifest["tiles"]
     matting = (manifest.get("sky") or {}).get("mode") == "matte"
     left = int((manifest.get("status") or {}).get("pageLeft", 0))
-    rows = [t["row"] for t in tiles]
-    cols = [t["col"] for t in tiles]
-    outer = {"top": min(rows), "bottom": max(rows), "left": min(cols), "right": max(cols)}
-    # Not on a map of several arenas: its areas' grids sit side by side, and their edges are each
-    # other's.
-    extend = not manifest.get("areas")
+    outer = outer_edges(tiles, manifest.get("areas"))
+
+    def sides_of(tile: dict) -> list[str]:
+        """The grid's outer edges this tile is on."""
+        at = outer.get(tile.get("area", 0), {})
+        return [side for side, edge in at.items() if (tile["row"] if side in ("top", "bottom") else tile["col"]) == edge]
+
     flagged: list[tuple[dict, str]] = []  # (tile, side): content at that edge
     saver = ThreadPoolExecutor(max_workers=2)
     state = {"previous": None, "cleared": 0, "failures": 0, "done": 0}
@@ -551,17 +574,17 @@ def capture_tiles(session: Session, manifest: dict, start: int, settle_time: flo
             else:
                 note += "  (no shot over black; kept opaque)"
         for side in sides:
-            if extend and edge_content(frame, black, matting, left, side):
+            if edge_content(frame, black, matting, left, side):
                 flagged.append((tile, side))
                 note += f"  (the map runs on past its {side} edge)"
         state["done"] += 1
         eta = (time.time() - started) / state["done"] * max(0, total - start - state["done"])
         log(f"  tile {tile['index'] + 1}/{total}  (row {tile['row']}, col {tile['col']})  ~{eta:.0f}s left{note}")
 
-    if extend and start:
+    if start:
         # A resumed run: the outer tiles shot before it still count (from their saved shots).
         for tile in tiles[:start]:
-            sides = [side for side, at in outer.items() if (tile["row"] if side in ("top", "bottom") else tile["col"]) == at]
+            sides = sides_of(tile)
             if sides and frame_exists(out / f"tile_{tile['index']:04d}"):
                 frame = load_frame(out / f"tile_{tile['index']:04d}")
                 black = load_frame(out / f"tile_{tile['index']:04d}-black") if frame_exists(out / f"tile_{tile['index']:04d}-black") else None
@@ -571,17 +594,15 @@ def capture_tiles(session: Session, manifest: dict, start: int, settle_time: flo
         step(lambda: session.send("unbound"), "lifting the camera bounds")
     with stage("tiles"):
         for tile in tiles[start:]:
-            sides = [side for side, at in outer.items() if (tile["row"] if side in ("top", "bottom") else tile["col"]) == at]
-            take(tile, len(tiles), sides)
+            take(tile, len(tiles), sides_of(tile))
     with stage("tiles past the grid"):
-        extend_past_grid(manifest, tiles, flagged, take, extend, session, manifest_path)
+        extend_past_grid(manifest, tiles, flagged, take, session, manifest_path)
     saver.shutdown(wait=True)
 
 
-def extend_past_grid(manifest: dict, tiles: list, flagged: list, take, extend: bool, session, manifest_path: Path) -> None:
-    """Tiles beyond outer tiles whose outer edge had map content, outwards (see capture_tiles)."""
-    if not extend:
-        return
+def extend_past_grid(manifest: dict, tiles: list, flagged: list, take, session, manifest_path: Path) -> None:
+    """Tiles beyond outer tiles whose outer edge had map content, outwards (see capture_tiles);
+    each in its arena on a map of several."""
     step_x, step_y = manifest["step"]["x"], manifest["step"]["y"]
     move = {"top": (0, step_y, -1, 0), "bottom": (0, -step_y, 1, 0), "left": (-step_x, 0, 0, -1), "right": (step_x, 0, 0, 1)}
     taken = {(t["row"], t["col"]) for t in tiles}
@@ -595,7 +616,8 @@ def extend_past_grid(manifest: dict, tiles: list, flagged: list, take, extend: b
             if key in taken:
                 continue
             taken.add(key)
-            new.append(({"index": len(tiles) + len(new), "row": key[0], "col": key[1], "x": tile["x"] + dx, "y": tile["y"] + dy, "edge": True}, side))
+            new.append(({"index": len(tiles) + len(new), "row": key[0], "col": key[1], "x": tile["x"] + dx, "y": tile["y"] + dy, "edge": True,
+                         **({"area": tile["area"]} if "area" in tile else {})}, side))
         if not new:
             break
         if not unbound_sent:
@@ -683,16 +705,25 @@ def main() -> None:
         session = Session(screen, int(manifest["status"].get("pageLeft", 0)))
         probe = args.probe_light or args.probe_sky or args.probe_waits or args.probe_depth
         measured = None
+        sky_waits = False  # the sky work put off until the map is ready (its world was hidden)
 
-        def sky_work() -> None:
+        def sky_work(wait_if_hidden: bool = False) -> None:
             """The map's own sky layers, while the map gets ready: how fast each moves against
             the map (a parallax viewer's layer speeds), and the layers themselves as images
             where the map has keyed copies of its sky. Over the camera bounds the game applies
             (the grid is re-planned from them only once the map is ready, as its opening can
             change them; the sky only needs the camera to reach where it is sent)."""
-            nonlocal measured
+            nonlocal measured, sky_waits
             if not (manifest.get("sky") or {}).get("mapSky", {}).get("parallax"):
                 return
+            if wait_if_hidden:
+                # An in-game hero selection (Punisher Arena) fades to black and hides the world
+                # until the picks are done, though the map takes commands: the shots would be black.
+                frame = step(lambda: session.grab(dark_ok=True), "a look at the map")
+                if frame is not None and float((frame.max(axis=2) > 16).mean()) < 0.01:
+                    log("  the map's world isn't drawn yet (an in-game hero selection?); the sky work waits until the map is ready")
+                    sky_waits = True
+                    return
             area = None if manifest.get("unbound") else game_bounds(session, manifest)
             with stage("sky depth measurement"):
                 measured = step(lambda: sky_layers.measure(session, manifest, out.parent, area), "measuring the sky layers")
@@ -701,7 +732,9 @@ def main() -> None:
 
         # A resumed run (after a recovery) keeps the sky work this run already did.
         sky_done = args.start and (out.parent / "sky-layers.json").exists() and (out.parent / "sky" / "positions.json").exists()
-        start_up(session, manifest, args.manifest, out, before_ready=None if probe or sky_done else sky_work)
+        start_up(session, manifest, args.manifest, out, before_ready=None if probe or sky_done else lambda: sky_work(wait_if_hidden=True))
+        if sky_waits:
+            sky_work()
         if args.probe_light:
             probes.probe_light(session, manifest, out)
             return
