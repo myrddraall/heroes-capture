@@ -1,10 +1,14 @@
-"""Screenshots on disk: raw arrays (.npy), which the stitch reads without decoding, or PNG from
-older runs. Paths are given without the extension."""
+"""Images on disk. Screenshots: raw arrays (.npy), which the stitch reads without decoding, or PNG
+from older runs; paths are given without the extension. And the zlib level the big output PNGs
+are written at."""
 
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
+
+
+PNG_COMPRESSION = 1  # zlib level for the big output PNGs: much faster to write than 6, somewhat larger files
 
 
 def save_frame(stem: Path, frame: np.ndarray) -> None:

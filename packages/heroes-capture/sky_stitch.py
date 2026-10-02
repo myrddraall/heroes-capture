@@ -33,11 +33,10 @@ import numpy as np
 import pyvips
 from PIL import Image
 
-from frames import frame_exists, load_frame
+from frames import PNG_COMPRESSION, frame_exists, load_frame
 from runlog import log, stage
 from workers import ordered_map
 
-PNG_COMPRESSION = 1  # zlib level for the big PNGs: much faster to write than 6, somewhat larger files
 
 
 def _load(stem: Path) -> np.ndarray:
@@ -117,7 +116,8 @@ def build(manifest: dict, base: Path) -> None:
 
     def rate_of(layer: str) -> tuple[float, float]:
         known = (measured["layers"].get(layer) or measured["layers"]["parallax"])["rate"]
-        fallback = [r for r in known if r] or [record["rateUsedForSteps"]]
+        used = record["rateUsedForSteps"]
+        fallback = [r for r in known if r] or [r for r in (used if isinstance(used, list) else [used]) if r]
         return tuple(float(r) if r else float(np.mean(fallback)) for r in known)
 
     # The status strip's column (the first `left` columns of every shot) is cut off each shot, so

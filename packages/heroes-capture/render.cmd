@@ -8,7 +8,7 @@ rem   render.cmd "Towers of Doom" keep --fov 12      further options go to injec
 rem     --show-ui      diagnostic: leave the HUD up, launch the map and stop
 rem     --probe-light  diagnostic: command sequences at chosen points, a shot after each
 rem     --probe-sky    diagnostic: one edge tile over each solid-colour skybox
-rem     --probe-depth  diagnostic: only measure the sky layers' parallax (renders do it after the tiles)
+rem     --probe-depth  diagnostic: only measure the sky layers' parallax (renders do it during the start-up)
 rem     --probe-waits  diagnostic: the fixed waits tried shorter, compared with the current ones
 rem
 rem Start Heroes from Battle.net first (so it is logged in), in Windowed (Fullscreen).

@@ -79,7 +79,10 @@ export function captureScript({
     // far/near ratio, and at this distance flat decals on the ground (road trim, cracks, the
     // decorations lying on surfaces) were z-fighting the ground and losing in patches.
     CameraSetValue(lp_player, c_cameraValueNearClip, 5.0, 0.0, -1, 10.0);`
-    : '';
+    : `
+    // No lens: the game's own clip planes (a sky shot's "hidemap" moved them).
+    CameraSetValue(lp_player, c_cameraValueNearClip, CameraInfoGetValue(CameraInfoDefault(), c_cameraValueNearClip), 0.0, -1, 10.0);
+    CameraSetValue(lp_player, c_cameraValueFarClip, CameraInfoGetValue(CameraInfoDefault(), c_cameraValueFarClip), 0.0, -1, 10.0);`;
   const boundsLine = unbound
     ? `
     CameraSetBounds(PlayerGroupAll(), RegionEntireMap(), false);`
@@ -140,6 +143,7 @@ trigger hrsCap_gt_Unbound;
 trigger hrsCap_gt_RefitWait;
 trigger hrsCap_gt_HideMap;
 trigger hrsCap_gt_KeyBlack;
+trigger hrsCap_gt_Quiet;
 fixed hrsCap_refitWait = 0.1;  // real seconds the lighting-refit look is held before each tile (chat "refitwait"; 0.25 until the waits probe showed shorter changes nothing but the effects that animate anyway)
 bool hrsCap_unbound = false;  // chat "unbound": the camera may go anywhere on the map (tiles past the camera bounds)
 trigger hrsCap_gt_Quit;
@@ -736,6 +740,18 @@ bool hrsCap_gt_Black_Func (bool testConds, bool runActions) {
     return true;
 }
 
+// Sixteen times a second: transmissions (an Immortal's voice line puts a subtitle and its backdrop
+// on screen, outside the frames the scene hides) and messages cleared, so none can be in a kept
+// shot (the shot follows the tile's acknowledgement by a tenth of a second).
+bool hrsCap_gt_Quiet_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    TransmissionClearGroup(PlayerGroupAll());
+    UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
+    return true;
+}
+
 // Number pad 5: the black skybox, like "black" but from one key press (no chat box to open, type
 // into and send), for the second shot of every tile. A key carries no sequence number: the strip
 // keeps the tile's and shows the sky as black, which is what the capture waits for (and it falls
@@ -963,6 +979,8 @@ void hrsCap_Init () {
     libCore_gv_bALOpenTheGatesDelay = hrsCap_gatesDelay;  // read when GameLib starts its countdown
     hrsCap_gt_Sweep = TriggerCreate("hrsCap_gt_Sweep_Func");
     TriggerAddEventTimePeriodic(hrsCap_gt_Sweep, 0.25, c_timeReal);
+    hrsCap_gt_Quiet = TriggerCreate("hrsCap_gt_Quiet_Func");
+    TriggerAddEventTimePeriodic(hrsCap_gt_Quiet, 0.0625, c_timeReal);
 }
 
 `;

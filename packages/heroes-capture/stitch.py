@@ -34,7 +34,7 @@ import pyvips
 from PIL import Image
 
 import sky_stitch
-from frames import frame_exists, load_frame
+from frames import PNG_COMPRESSION, frame_exists, load_frame
 from workers import ordered_map
 from runlog import log, log_timings, set_log_file, stage
 
@@ -44,7 +44,6 @@ SEAM_STEP = 2  # a seam may move this many (reduced) pixels sideways per pixel a
 ANCHOR_WEIGHT = 5.0  # an anchor's weight in the solve, against a match's (its strength, up to 1)
 ANCHOR = -1  # a virtual node in the solve: every anchored screenshot is connected to it
 MATTE_BAND = 32  # rows matted at a time (see Shots.matte)
-PNG_COMPRESSION = 1  # zlib level for the big PNGs: much faster to write than 6, somewhat larger files
 
 
 # ------------------------------------------------------------------------------------------------

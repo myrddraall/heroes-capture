@@ -6,12 +6,14 @@ The injected map script (capture-script.mjs) takes chat commands and reports thr
 strip (status.py) when each is done and where the camera really is. The capture:
 
   1. starts Heroes if needed and launches the map (game_control.py);
-  2. waits for the strip, checks it is the map prepared for this run, and waits until the map
-     reports ready (gates open, opening timers cut short, animations paused);
+  2. waits for the strip and checks it is the map prepared for this run; while the map gets ready
+     (gates open, opening timers cut short, animations paused) it measures and shoots the map's
+     own sky layers, where there are any (sky_layers.py);
   3. measures the camera bounds the game applies and re-plans the grid from them;
-  4. for each tile: `tile <n> <x> <y>`, `clean` and the kept shot, and with matting `black` and
-     the same view over the black skybox; the camera positions go to positions.json;
-  5. leaves the match, back to the menu for the next run.
+  4. for each tile: `tile <n> <x> <y>` and the kept shot, and with matting number pad 5 and the
+     same view over the black skybox; the camera positions go to positions.json;
+  5. leaves the match without waiting for the menu (the stitch runs meanwhile; the next launch
+     waits for it).
 
 When the match is lost (the game closes, the map fails to load, another map is running) the run
 is launched again and resumes from the first missing tile, three times at most.
@@ -36,8 +38,9 @@ from PIL import Image
 
 import probes
 import sky_layers
-from frames import save_frame
+from frames import frame_exists, load_frame, save_frame
 from game_control import (
+    FocusLost,
     Recoverable,
     dismiss_failed_dialog,
     launch_map,
@@ -49,7 +52,7 @@ from game_control import (
     wait_for_map_load,
 )
 from game_state import IN_MAP, LOADING, MAP_FAILED, MENU, NOT_RUNNING, PHASES, game_state
-from game_window import foreground_is_game, game_region, hold_key
+from game_window import game_region, hold_key
 from runlog import log, log_timings, set_log_file, stage
 from screen import ScreenGrabber, disagree, looks_black, same_view, view_shift
 from status import Status, StatusStrip
@@ -236,9 +239,21 @@ def wait_until_ready(session: Session) -> None:
             step(lambda: session.send("pause"), "pausing the animations")
             return
         time.sleep(1.0)
-    status = session.status()
+    status = step(session.status, "reading the strip")
     clock = f"; game clock {status.game_seconds} s since the gates, {status.opening_cuts} opening timers cut short" if status else ""
     log(f"  map ready after {time.time() - started:.0f} s{clock}")
+
+
+def game_bounds(session: Session, manifest: dict) -> dict | None:
+    """The camera bounds the game applies right now: where the camera stops when sent to the
+    map's corners (None if the map didn't answer, or the result makes no sense)."""
+    size = manifest["mapSize"]
+    low = step(lambda: session.send("tile 0 0 0", timeout=3.0), "the bounds check")
+    high = step(lambda: session.send(f"tile 0 {size['width']} {size['height']}", timeout=3.0), "the bounds check")
+    if not (low and high):
+        return None
+    bounds = {"left": low[0].camera_x, "bottom": low[0].camera_y, "right": high[0].camera_x, "top": high[0].camera_y}
+    return bounds if bounds["left"] < bounds["right"] and bounds["bottom"] < bounds["top"] else None
 
 
 def measure_bounds(session: Session, manifest: dict, manifest_path: Path) -> None:
@@ -246,14 +261,7 @@ def measure_bounds(session: Session, manifest: dict, manifest_path: Path) -> Non
     says): the camera is sent to the map's corners and the strip reports where it stopped. A
     grid planned for the wrong bounds spends most tiles on sky. The grid is re-planned (and the
     manifest rewritten) when they differ from the map file's."""
-    size = manifest["mapSize"]
-    low = step(lambda: session.send("tile 0 0 0", timeout=3.0), "the bounds check")
-    high = step(lambda: session.send(f"tile 0 {size['width']} {size['height']}", timeout=3.0), "the bounds check")
-    bounds = None
-    if low and high:
-        bounds = {"left": low[0].camera_x, "bottom": low[0].camera_y, "right": high[0].camera_x, "top": high[0].camera_y}
-        if not (bounds["left"] < bounds["right"] and bounds["bottom"] < bounds["top"]):
-            bounds = None
+    bounds = game_bounds(session, manifest)
     if bounds is None:
         log("  couldn't measure the camera bounds in the game; using the map file's")
         return
@@ -299,7 +307,7 @@ def start_up(session: Session, manifest: dict, manifest_path: Path, out: Path, b
         wait_for_strip(session, out)
         # The map running is the one prepared for this run (not one an earlier run left).
         expected_id = manifest["status"].get("mapId")
-        seen = session.status()
+        seen = step(session.status, "reading the strip")
         if expected_id is not None and seen is not None and seen.map_id != expected_id:
             quit_match()
             raise Recoverable(f"another map is running (identity {seen.map_id}, expected {expected_id})")
@@ -524,7 +532,11 @@ def capture_tiles(session: Session, manifest: dict, start: int, settle_time: flo
             log(f"    tile {tile['index'] + 1} failed (no answer from the map, or black frames); not saved")
             if state["failures"] >= 3:
                 first_bad = tile["index"] - state["failures"] + 1
-                game = game_state(session.raw_grab() if foreground_is_game() else None, session.strip)
+                try:
+                    frame_now = session.raw_grab()
+                except FocusLost:
+                    frame_now = None
+                game = game_state(frame_now, session.strip)
                 if game != IN_MAP:
                     raise Recoverable(f"the match was lost at tile {first_bad + 1} ({game})", resume_at=first_bad)
                 quit_match()
@@ -546,6 +558,17 @@ def capture_tiles(session: Session, manifest: dict, start: int, settle_time: flo
         eta = (time.time() - started) / state["done"] * max(0, total - start - state["done"])
         log(f"  tile {tile['index'] + 1}/{total}  (row {tile['row']}, col {tile['col']})  ~{eta:.0f}s left{note}")
 
+    if extend and start:
+        # A resumed run: the outer tiles shot before it still count (from their saved shots).
+        for tile in tiles[:start]:
+            sides = [side for side, at in outer.items() if (tile["row"] if side in ("top", "bottom") else tile["col"]) == at]
+            if sides and frame_exists(out / f"tile_{tile['index']:04d}"):
+                frame = load_frame(out / f"tile_{tile['index']:04d}")
+                black = load_frame(out / f"tile_{tile['index']:04d}-black") if frame_exists(out / f"tile_{tile['index']:04d}-black") else None
+                flagged.extend((tile, side) for side in sides if edge_content(frame, black, matting, left, side))
+    if any(t.get("edge") for t in tiles[start:]):
+        # Tiles past the grid left by the run this one resumes: the camera bounds lifted again.
+        step(lambda: session.send("unbound"), "lifting the camera bounds")
     with stage("tiles"):
         for tile in tiles[start:]:
             sides = [side for side, at in outer.items() if (tile["row"] if side in ("top", "bottom") else tile["col"]) == at]
@@ -602,7 +625,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--probe-light", action="store_true", help="diagnostic: command sequences at chosen points (HRS_PROBE_POINTS, HRS_PROBE_TILE_PATH), a shot after each")
     ap.add_argument("--probe-sky", action="store_true", help="diagnostic: one edge tile over each solid-colour skybox, to check the colour shows and is uniform")
     ap.add_argument("--probe-waits", action="store_true", help="diagnostic: the fixed waits tried shorter on sample tiles and a sky swap, compared with the current ones; and the sky pass with positions further apart")
-    ap.add_argument("--probe-depth", action="store_true", help="diagnostic: only measure the sky layers' parallax (done after the tiles in every render)")
+    ap.add_argument("--probe-depth", action="store_true", help="diagnostic: only measure the sky layers' parallax (done during the start-up in every render)")
     ap.add_argument("--settle", type=float, default=0.1, help="least seconds from a move to the kept screenshot (default 0.1; the waits probe found differences only where the scene animates anyway, as at 0.5)")
     ap.add_argument("--start", type=int, default=0, help="first tile, to resume a run (default 0)")
     ap.add_argument("--monitor", type=int, help="capture this mss monitor number instead of the game window")
@@ -618,8 +641,12 @@ def main() -> None:
     out = args.manifest.parent / manifest["id"] / "tiles"
     out.mkdir(parents=True, exist_ok=True)
     if not args.start:
-        for old in [*out.glob("tile_*.png"), *out.glob("tile_*.npy")]:  # an earlier run's shots would mix into this one
-            old.unlink()
+        # An earlier run's shots would mix into this one (its sky shots and measurement too: the
+        # stitch builds sky layers from whatever it finds).
+        sky_dir = out.parent / "sky"
+        for old in [*out.glob("tile_*.png"), *out.glob("tile_*.npy"), *sky_dir.glob("*.png"), *sky_dir.glob("*.npy"), sky_dir / "positions.json", out.parent / "sky-layers.json"]:
+            if old.exists():
+                old.unlink()
     set_log_file(args.manifest.parent / manifest["id"] / "log.txt")
     log(f"capture {manifest['id']}: {len(tiles)} tiles, screen {manifest['screen']['w']}x{manifest['screen']['h']}, fov {manifest.get('fov')}, {manifest['pxPerCell']} px/cell")
     # Where the camera really was for each tile (the status strip's echo), for stitch.py; kept
@@ -660,14 +687,21 @@ def main() -> None:
         def sky_work() -> None:
             """The map's own sky layers, while the map gets ready: how fast each moves against
             the map (a parallax viewer's layer speeds), and the layers themselves as images
-            where the map has keyed copies of its sky."""
+            where the map has keyed copies of its sky. Over the camera bounds the game applies
+            (the grid is re-planned from them only once the map is ready, as its opening can
+            change them; the sky only needs the camera to reach where it is sent)."""
             nonlocal measured
+            if not (manifest.get("sky") or {}).get("mapSky", {}).get("parallax"):
+                return
+            area = None if manifest.get("unbound") else game_bounds(session, manifest)
             with stage("sky depth measurement"):
-                measured = step(lambda: sky_layers.measure(session, manifest, out.parent), "measuring the sky layers")
+                measured = step(lambda: sky_layers.measure(session, manifest, out.parent, area), "measuring the sky layers")
             with stage("sky layer shots"):
-                sky_layers.capture(session, manifest, out.parent, measured)
+                sky_layers.capture(session, manifest, out.parent, measured, area=area)
 
-        start_up(session, manifest, args.manifest, out, before_ready=None if probe else sky_work)
+        # A resumed run (after a recovery) keeps the sky work this run already did.
+        sky_done = args.start and (out.parent / "sky-layers.json").exists() and (out.parent / "sky" / "positions.json").exists()
+        start_up(session, manifest, args.manifest, out, before_ready=None if probe or sky_done else sky_work)
         if args.probe_light:
             probes.probe_light(session, manifest, out)
             return

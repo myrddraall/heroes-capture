@@ -58,7 +58,7 @@ def phase_offset(a: np.ndarray, b: np.ndarray) -> tuple[float, float, float]:
     return float(dx) * 2, float(dy) * 2, float(corr.max())
 
 
-def measure(session, manifest: dict, out_dir: Path) -> dict | None:
+def measure(session, manifest: dict, out_dir: Path, area: dict | None = None) -> dict | None:
     """Measure the sky layers' rates (see the module notes) and write sky-layers.json; None when
     the map has no parallax sky. Leaves the scene as the next `tile` expects it (that command
     puts back the capture camera and our sky)."""
@@ -70,7 +70,7 @@ def measure(session, manifest: dict, out_dir: Path) -> dict | None:
     layers = {"parallax": "sky mapparallax 1"}
     if sky.get("keys"):
         layers["haze"] = "sky parallaxblack 1"
-    area = manifest["area"]
+    area = area or manifest["area"]  # the camera bounds the game applies, when the caller measured them
     centre = ((area["left"] + area["right"]) / 2, (area["bottom"] + area["top"]) / 2)
     log(f"measuring the sky layers' parallax ({', '.join(layers)}; near clip {clip}) ...")
 
@@ -140,7 +140,7 @@ SKY_KEEP = 0.8  # the share of a screen the sky moves between neighbouring camer
 FIXED_CLIP = 600  # a near clip past the parallax shells and short of the fixed skybox (which survives 1000)
 
 
-def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep: float = SKY_KEEP, folder_name: str = "sky") -> None:
+def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep: float = SKY_KEEP, folder_name: str = "sky", area: dict | None = None) -> None:
     """The sky layers as images, for a parallax viewer: the camera steps across the map (steps
     sized so the sky, moving at its measured rate, moves `keep` of a screen between
     positions), the map clipped away, and at each position the keyed copies of the parallax
@@ -151,30 +151,33 @@ def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep:
     sky = manifest.get("sky") or {}
     if not sky.get("keys") or not measured:
         return
-    rate = [r for r in (measured["layers"].get("parallax") or {}).get("rate", []) if r]
+    # Per axis, the fastest layer's rate: the sky that moves most between positions sets the step.
+    rates = [layer.get("rate") or [None, None] for name, layer in measured["layers"].items() if name != "fixed"]
+    rate_xy = [max([r[axis] for r in rates if r[axis]], default=None) for axis in (0, 1)]
     scale = [s for s in measured.get("mapPxPerCell", []) if s]
-    if not rate or not scale:
+    if not any(rate_xy) or not scale:
         log("  sky layer images: no measured rate; skipped")
         return
-    rate, scale = min(rate), float(np.mean(scale))
+    rate_xy = [r or max(r2 for r2 in rate_xy if r2) for r in rate_xy]  # an axis not measured: the other's
+    scale = float(np.mean(scale))
     folder = out_dir / folder_name
     folder.mkdir(exist_ok=True)
     for old in [*folder.glob("*.png"), *folder.glob("*.npy")]:
         old.unlink()
-    area = manifest["area"]
+    area = area or manifest["area"]
     screen = manifest["screen"]
 
-    def spread(lo: float, hi: float, view: float) -> list[float]:
+    def spread(lo: float, hi: float, view: float, rate: float) -> list[float]:
         step_cells = keep * view / (rate * scale)
         count = max(1, math.ceil((hi - lo) / step_cells) + 1)
         return [lo + (hi - lo) * k / (count - 1) for k in range(count)] if count > 1 else [(lo + hi) / 2]
 
-    xs = spread(area["left"], area["right"], screen["w"])
-    ys = spread(area["bottom"], area["top"], screen["h"])
+    xs = spread(area["left"], area["right"], screen["w"], rate_xy[0])
+    ys = spread(area["bottom"], area["top"], screen["h"], rate_xy[1])
     clip = measured["nearClip"]
     log(f"sky layer images: {len(xs)}x{len(ys)} camera positions, near clip {clip} ...")
     saver = ThreadPoolExecutor(max_workers=2)
-    record = {"keep": keep, "rateUsedForSteps": rate, "mapPxPerCell": scale, "nearClip": clip, "screen": screen, "positions": {}}
+    record = {"keep": keep, "rateUsedForSteps": rate_xy, "mapPxPerCell": scale, "nearClip": clip, "screen": screen, "positions": {}}
 
     def save(frame: np.ndarray, name: str) -> None:
         saver.submit(save_frame, folder / name, frame)
@@ -194,7 +197,13 @@ def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep:
         settle(SKY_SETTLE)
         save(session.grab(dark_ok=True), "fixed")
 
-    step(fixed_alone, "the fixed skybox")
+    try:
+        step(fixed_alone, "the fixed skybox")
+    except RuntimeError as e:
+        log(f"  the fixed skybox: {e}; no sky layer images this run")
+        step(lambda: session.send("sky mapparallax 1"), "putting the map's own parallax back")
+        saver.shutdown(wait=True)
+        return
     n = 0
     for y in reversed(ys):  # north first, like the tiles
         for x in xs:
@@ -222,7 +231,7 @@ def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep:
             except RuntimeError as e:
                 log(f"  sky position {n + 1}: {e}; skipped")
             n += 1
-    session.send("sky mapparallax 1")  # the map's own parallax back
+    step(lambda: session.send("sky mapparallax 1"), "putting the map's own parallax back")
     saver.shutdown(wait=True)
     (folder / "positions.json").write_text(json.dumps(record, indent=2))
     log(f"  sky layer images: {len(record['positions'])} positions -> {folder.name}/")
