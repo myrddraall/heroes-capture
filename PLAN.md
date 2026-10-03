@@ -138,8 +138,8 @@ Proposed; the boundaries are chosen before each starts.
 3. **Package and tests.** The `heroes-capture` command, `pyproject.toml`, the package scripts; the
    simulated game and regression scripts into `tests/`, run by `test.yml`. Built: the package in
    `src/heroes_capture`, `heroes-capture map|prepare|capture|stitch`, 53 tests (units, the
-   simulated game, the game's data from the CDN) passing locally; the first real run of the
-   command and of the workflow are next.
+   simulated game, the game's data from the CDN) passing locally; the command rendered Battlefield of
+   Eternity on the PC. The test workflow's first run is next.
 4. **Release.** PyInstaller build with the version resource; `build-pack` on Windows; the
    `executable` artifact; the first release.
 5. **Switch over.** The development loop on the PC points here; `tools/map-capture` leaves
