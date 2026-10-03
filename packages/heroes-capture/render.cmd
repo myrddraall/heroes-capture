@@ -26,7 +26,6 @@ rem little at the seams. (The dark areas seen at far distances were the game's l
 rem to an old camera; the map script now refits it at every tile, so the distance is free.)
 set "DISTANCE=214"
 set "KEEP=0.4"
-set "GAME=D:\Games\Heroes of the Storm"
 
 rem Options after the map and structures go to inject.py as they are.
 set "ARGS="
@@ -61,14 +60,14 @@ if not defined MANIFEST goto :error
 if defined PROBE (
   echo.
   echo Probe %PROBE%
-  py capture.py "%MANIFEST%" --game "%GAME%" %PROBE% || goto :error
+  py capture.py "%MANIFEST%" %PROBE% || goto :error
   popd
   exit /b 0
 )
 if defined SHOWUI (
   echo.
   echo Diagnostic run: launching the map and stopping here.
-  py capture.py "%MANIFEST%" --game "%GAME%" --launch-only
+  py capture.py "%MANIFEST%" --launch-only
   popd
   exit /b 0
 )
@@ -78,7 +77,7 @@ if exist "%MANIFEST:.json=%\tiles" rmdir /s /q "%MANIFEST:.json=%\tiles"
 
 echo.
 echo [2/3] Capturing
-py capture.py "%MANIFEST%" --game "%GAME%" || goto :error
+py capture.py "%MANIFEST%" || goto :error
 
 echo.
 echo [3/3] Stitching

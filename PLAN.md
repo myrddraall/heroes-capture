@@ -61,15 +61,18 @@ outputs are shared.
 
 Nothing generated is checked in: the program reads or downloads what it needs when it runs.
 
-- Game data comes from the local game install's CASC storage: the light sets (today the generated
-  `light-sets.json`), the sky models for the keyed copies (today the uncommitted `local-assets/`),
-  the map libraries. It always matches the installed build, and a capture needs the game
-  installed anyway.
-- Maps come from the local install's CASC too, if the battleground `.stormmap` files are there.
+- Game data comes from the local game install's CASC storage (the install found by itself: its
+  uninstall entry, the Battle.net app's list, the usual folders): the tilesets and light sets,
+  the sky models for the keyed copies, and the maps. It always matches the installed build, and a
+  capture needs the game installed anyway.
+- The battleground maps are `.s2ma` archives under content-hash names in the storage's depot
+  cache; each is opened once per game update to index them by name (a map has a map script; its
+  name is `DocInfo/Name` in its game strings).
 - Without an install (CI, the simulated-game tests on Linux), the same data comes from Blizzard's
-  CDN through CascLib's online storage (`CascOpenOnlineStorage`, product code `hero`).
-  The GitHub mirror `jamiephan/HeroesOfTheStorm_S2MA` stays only if that does not work.
-- Cache: `%LOCALAPPDATA%\heroes-capture\cache`, keyed by game build.
+  CDN through CascLib's online storage (`CascOpenOnlineStorage`, product code `hero`). No
+  mirror is needed.
+- Cache: `%LOCALAPPDATA%\heroes-capture\cache` (the map index, keyed by the list of depot
+  files; the CDN's files).
 - `opening-timers.json` stays in the code: it is hand-curated knowledge, not generated data.
 
 ## Repository
@@ -128,7 +131,10 @@ Proposed; the boundaries are chosen before each starts.
    identical), and rendered Battlefield of Eternity in the game. **Done.**
 2. **Game data from CASC.** CascLib, local install first; a spike on its online storage for Heroes;
    light sets and the keyed sky models read at runtime; `light-sets.json`,
-   `generate-light-sets.mjs` and `local-assets/` go.
+   `generate-light-sets.mjs` and `local-assets/` go. Built (`casclib.py`, `game_data.py`;
+   CascLib from `tools/build_casclib.py`, cross-compiled for Windows with Zig until stage 4
+   builds it there) and checked against stage 1's output from the CDN: identical on 9 maps; a
+   render from the local install is next.
 3. **Package and tests.** The `heroes-capture` command, `pyproject.toml`, the package scripts; the
    simulated game and regression scripts into `tests/`, run by `test.yml`.
 4. **Release.** PyInstaller build with the version resource; `build-pack` on Windows; the
@@ -138,6 +144,9 @@ Proposed; the boundaries are chosen before each starts.
 
 ## Verified
 
+- CascLib's online storage works for Heroes (product `hero`), and the battleground maps are in
+  the game's storage (as `.s2ma` files): all 35 found, Battlefield of Eternity byte-identical to
+  the mirror's copy.
 - The release pipeline end to end, with a stand-in exe (`release-stub/`, built by
   `tools/build_exe.py`): `build-pack` on `windows-latest` built it with PyInstaller, pack's PE check
   read the release version from its `ProductVersion`, and the pre-release
@@ -146,6 +155,4 @@ Proposed; the boundaries are chosen before each starts.
 
 ## To verify
 
-- CascLib's online storage works for Heroes (product `hero`).
-- The battleground `.stormmap` files are in the local CASC storage.
 - The executable's size and start-up time, and whether antivirus flags the one-file build.

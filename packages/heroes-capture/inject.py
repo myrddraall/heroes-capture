@@ -4,8 +4,9 @@
     python inject.py "Towers of Doom" [options]
     python inject.py "C:\\path\\to\\Some Map.stormmap" [options]
 
-A bare name is downloaded from jamiephan/HeroesOfTheStorm_S2MA (refreshed from the live game every
-few hours). Options:
+A bare name is a map as the game names it, read from the installed game (or, with no install,
+from Blizzard's CDN); the tileset and light-set definitions and the sky models come from there too.
+Options:
 
   --structures keep|hide   keep or hide forts, towers, cores and gates      (default keep)
   --px-per-cell <n>        output resolution, pixels per map cell         (default 48)
@@ -14,7 +15,7 @@ few hours). Options:
   --pitch <deg>            camera pitch (default 90, straight down)
   --refit-yaw <deg>        yaw of the lighting-refit look before each tile; by default it
                            faces the map's main light, found from the map's tileset and the
-                           game's light sets (light-sets.json); only a shallow look towards
+                           game's light sets (read from the game); only a shallow look towards
                            the light clears the dark boxes around holes
   --distance <units>       camera distance instead: the field of view is chosen to keep
                            --px-per-cell (beyond about 120 the game renders the terrain
@@ -34,14 +35,12 @@ few hours). Options:
 import json
 import math
 import re
-import shutil
 import struct
 import sys
 import time
-import urllib.parse
-import urllib.request
 from pathlib import Path
 
+import game_data
 import js_json
 from capture_script import STATUS_CELL_H, STATUS_CELL_W, STATUS_CELLS, STATUS_ROWS, capture_script
 from light_data import has_sky, main_light, sky_models, tileset_of
@@ -49,7 +48,6 @@ from sky import PARALLAX_KEYS, SKIES, painted_texture_files, parallax_keys, sky_
 from stormlib import Archive
 
 HERE = Path(__file__).resolve().parent
-S2MA_MAPS = "https://raw.githubusercontent.com/jamiephan/HeroesOfTheStorm_S2MA/main/maps"
 
 
 def log(message: str) -> None:
@@ -102,24 +100,14 @@ def slug(s: str) -> str:
     return re.sub(r"^-|-$", "", re.sub(r"[^a-z0-9]+", "-", s.lower()))
 
 
-def resolve_map(map_: str, out_dir: Path) -> dict:
+def resolve_map(map_: str, storage) -> tuple[str, bytes]:
+    """The map's name and its .stormmap: a path to one, or a map the game has, by name."""
     if map_.lower().endswith(".stormmap"):
         path = Path(map_)
         if not path.exists():
             raise SystemExit(f"no such file: {map_}")
-        return {"file": path.resolve(), "name": path.name[: -len(".stormmap")]}
-    folder = out_dir / "original"
-    folder.mkdir(parents=True, exist_ok=True)
-    file = (folder / f"{map_}.stormmap").resolve()
-    if not file.exists():
-        url = f"{S2MA_MAPS}/{urllib.parse.quote(map_, safe='-_.!~*()' + chr(39))}.stormmap"  # as encodeURIComponent
-        log(f"downloading {url}")
-        try:
-            with urllib.request.urlopen(url) as response:
-                file.write_bytes(response.read())
-        except urllib.error.HTTPError as e:
-            raise SystemExit(f'{e.code} downloading "{map_}" — check the name against {S2MA_MAPS}')
-    return {"file": file, "name": map_}
+        return path.name[: -len(".stormmap")], path.read_bytes()
+    return game_data.map_file(storage, map_)
 
 
 def read_table(name: str) -> dict:
@@ -138,7 +126,7 @@ def resolve_refit_yaw(map_data: dict, light_sets: dict) -> int:
     light = main_light(map_data, light_sets)
     if light["yaw"] is None:
         log(f"warning: the map's main light wasn't found (tileset {light['tileset']}, light set {light['lighting']}); "
-            "the refit look faces yaw 180. Pass --refit-yaw, or regenerate light-sets.json.")
+            "the refit look faces yaw 180. Pass --refit-yaw.")
         return 180
     log(f"main light: tileset {light['tileset']}, light set {light['lighting']}, from {light['yaw']:.0f} degrees (the refit look faces it)")
     return js_round(light["yaw"])
@@ -263,17 +251,23 @@ def main() -> None:
     opts = parse_args(sys.argv[1:])
     out = Path(opts["out"])
     out.mkdir(parents=True, exist_ok=True)
-    source = resolve_map(opts["map"], out)
+    install = game_data.find_install()
+    if install:
+        log(f"game data from the install in {install}")
+    with game_data.open_storage(install) as storage:
+        map_name, map_bytes = resolve_map(opts["map"], storage)
+        light_sets = game_data.light_sets(storage)
+        models = {spec["file"]: game_data.sky_model_file(storage, spec["file"]) for spec in PARALLAX_KEYS.values()}
+    source = {"name": map_name}
     id_ = f"{slug(source['name'])}-{'terrain' if opts['structures'] == 'hide' else 'structures'}"
     target = (out / f"{id_}.stormmap").resolve()
-    shutil.copyfile(source["file"], target)
+    target.write_bytes(map_bytes)
 
     with Archive(target) as archive:
         # (Widening the playable bounds in MapInfo, to move the game's boundary fade off the outer
         # walls, made the map unopenable: "Unable to open map".)
         read = archive.read_text
         info = read_map_info(archive.read("MapInfo"))
-        light_sets = read_table("light-sets.json")
         map_data = {
             "t3Terrain": read("t3Terrain.xml") or "",
             "terrainData": read("Base.StormData\\GameData\\TerrainData.xml"),
@@ -342,12 +336,11 @@ def main() -> None:
         tileset = tileset_of(map_data["t3Terrain"])
         if not tileset:
             raise SystemExit("t3Terrain.xml names no tileset; cannot set the skybox")
-        # Keyed copies of the map's parallax sky (sky probes), when its model file is in local-assets/.
+        # Keyed copies of the map's parallax sky, when sky.py knows that model (its file from the game).
         keys = {"models": [], "files": []}
         key_spec = PARALLAX_KEYS.get(map_sky["parallax"])
-        key_file = HERE / "local-assets" / key_spec["file"] if key_spec else None
-        if key_file and key_file.exists():
-            keys = parallax_keys(map_sky["parallax"], key_file.read_bytes())
+        if key_spec and models.get(key_spec["file"]):
+            keys = parallax_keys(map_sky["parallax"], models[key_spec["file"]])
             log(f'keyed copies of {map_sky["parallax"]}: chat "sky parallaxwhite", "parallaxblack", "parallaxbare", "parallaxwhitebare"')
         for name, data in sky_files(tileset, sky_start, read, keys):
             archive.write(name, data)

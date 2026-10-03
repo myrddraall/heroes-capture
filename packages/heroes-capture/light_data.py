@@ -1,8 +1,8 @@
 """The map's main light, for the lighting-refit look (see capture_script.galaxy): the map's
 tileset (t3Terrain.xml) names a light set (CTerrain Lighting), and the light set's "Key"
 directional light has a direction. Tileset and light-set definitions live in the game's data
-(light-sets.json, built by generate_light_sets.py); a map can override either in its own
-TerrainData.xml and LightData.xml.
+(game_data.light_sets reads them at runtime); a map can override either in its own TerrainData.xml
+and LightData.xml.
 """
 
 import copy
@@ -132,7 +132,7 @@ def sky_models(map_files: dict, table: dict) -> dict:
 def main_light(map_files: dict, table: dict) -> dict:
     """The map's main light and the yaw that faces it. `map_files` holds the map's own
     t3Terrain.xml, TerrainData.xml and LightData.xml (the last two may be None); `table` is
-    light-sets.json. Returns {tileset, lighting, key, yaw} with what could be resolved; yaw is
+    game_data.light_sets(). Returns {tileset, lighting, key, yaw} with what could be resolved; yaw is
     None if not."""
     tileset = tileset_of(map_files["t3Terrain"])
     terrains = _terrains(map_files, table)

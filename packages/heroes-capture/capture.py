@@ -51,13 +51,13 @@ from game_control import (
     step,
     wait_for_map_load,
 )
+from game_data import find_install
 from game_state import IN_MAP, LOADING, MAP_FAILED, MENU, NOT_RUNNING, PHASES, game_state
 from game_window import game_region, hold_key
 from runlog import log, log_timings, set_log_file, stage
 from screen import ScreenGrabber, disagree, looks_black, same_view, view_shift
 from status import Status, StatusStrip
 
-DEFAULT_GAME = r"D:\Games\Heroes of the Storm"
 
 
 def tile_command(tile: dict) -> str:
@@ -640,7 +640,7 @@ def extend_past_grid(manifest: dict, tiles: list, flagged: list, take, session, 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("manifest", type=Path, help="the .json written by inject.py")
-    ap.add_argument("--game", default=DEFAULT_GAME, help=f"Heroes of the Storm folder (default {DEFAULT_GAME})")
+    ap.add_argument("--game", help="Heroes of the Storm folder (found from the install by default)")
     ap.add_argument("--battlenet", default=os.environ.get("HRS_BATTLENET"), help="the Battle.net app (Battle.net.exe), used to start Heroes when it isn't running; found automatically if not given")
     ap.add_argument("--no-launch", action="store_true", help="the map is already running")
     ap.add_argument("--launch-only", action="store_true", help="launch the map and stop (to try chat commands by hand)")
@@ -677,7 +677,10 @@ def main() -> None:
     positions: dict = json.loads(positions_path.read_text()) if args.start and positions_path.exists() else {}
 
     if not args.no_launch:
-        launch_map(manifest, args.game, args.battlenet)
+        game = args.game or find_install()
+        if not game:
+            sys.exit("Heroes of the Storm's install wasn't found (uninstall entries, the Battle.net app's list, the usual folders); pass --game")
+        launch_map(manifest, str(game), args.battlenet)
     if args.launch_only:
         print("\nLaunched. In the game, chat commands: 'tile <n>' moves to a tile, 'clean', 'black', 'sky <colour>', 'pause'.")
         return

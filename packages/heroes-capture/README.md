@@ -20,7 +20,12 @@ logged in; capture.py then hands the prepared map to the running game.
 
   The map archives are read and written with [StormLib](https://github.com/ladislav-zezula/StormLib):
   its release DLL (v9.40) is downloaded on first use into
-  `%LOCALAPPDATA%\heroes-capture\cache` and checked against the release's SHA-256.
+  `%LOCALAPPDATA%\heroes-capture\cache` and checked against the release's SHA-256. The game's
+  own data (its maps, tilesets and light sets, sky models) is read from the install's CASC storage
+  with [CascLib](https://github.com/ladislav-zezula/CascLib), which publishes no binaries:
+  `python tools/build_casclib.py --windows` builds `native/CascLib.dll` (with CMake and Zig:
+  `pip install cmake ziglang`). The install is found by itself (its uninstall entry, the
+  Battle.net app's list, the usual folders).
 
 - In the game's options: **Display Mode: Windowed (Fullscreen)** (screenshots of exclusive
   fullscreen come out black), your monitor's native resolution, graphics on Ultra.
@@ -31,9 +36,8 @@ logged in; capture.py then hands the prepared map to the running game.
 `update.cmd` that refreshes the files and calls it needs no arguments. `update.cmd` is not
 tracked: it contains the machine's source path.
 
-The quick way is `render.cmd`, which runs all three steps at 3440x1440 against
-`D:\Games\Heroes of the Storm` (edit `SCREEN` and `GAME` at the top to change them), and
-installs what's needed on first run:
+The quick way is `render.cmd`, which runs all three steps at 3440x1440 (edit `SCREEN` at the top
+to change it) against the installed game, and installs what's needed on first run:
 
 ```powershell
 render.cmd                          # Towers of Doom, structures kept
@@ -59,9 +63,9 @@ still stitch).
 
 Use `--structures hide` for bare terrain; it writes `…-terrain` files alongside.
 
-Map names are the file names in
-[jamiephan/HeroesOfTheStorm_S2MA/maps](https://github.com/jamiephan/HeroesOfTheStorm_S2MA/tree/main/maps)
-(kept current with the live game), or pass a path to any `.stormmap`.
+Map names are as the game shows them (case and punctuation don't matter), or pass a path to any
+`.stormmap`. The battleground maps are `.s2ma` archives under content-hash names in the game's
+storage; the first run after a game update opens each to index them by name (about 20 s).
 
 ### Options (inject.py)
 
@@ -152,11 +156,9 @@ cell there is no more detail: that's the game's own texture resolution.
   the latest look counts, and only a shallow look towards the light cleared every box. The
   light's direction comes from the map's tileset (`t3Terrain.xml`), the tileset's light set
   and that light set's "Key" light, with the map's own `TerrainData.xml` / `LightData.xml`
-  overriding; tilesets and light sets are in `light-sets.json` (`light_data.py` resolves
-  them, `--refit-yaw` overrides). After a game update that adds tilesets, rebuild the table:
-  extract every `mods/**/GameData/TerrainData.xml` and `LightData.xml` from the game's CASC
-  storage into a folder (file names = CASC paths with `__` for the separators) and run
-  `python generate_light_sets.py <folder>`.
+  overriding; the tilesets and light sets are read from every mod's `GameData/TerrainData.xml`
+  and `LightData.xml` in the game's storage at each run (`game_data.py`, `light_data.py`;
+  `--refit-yaw` overrides), so a game update that adds tilesets needs nothing done.
 - **Opening events first.** The gates open 3 s in (GameLib's `libCore_gv_bALOpenTheGatesDelay`
   and its countdown timer); then, for 8 real seconds, the map's own timers between the gates and
   its first objective are cut short as each starts (`opening-timers.json`, by the libraries the
@@ -188,7 +190,7 @@ cell there is no more detail: that's the game's own texture resolution.
   (difference matting: the difference between the shots is exactly the see-through share; the
   white level is measured from the shots, the game renders it at about 230; pixels that changed
   between the shots other than by the sky, an animated glow, stay opaque). Whether a map's
-  void shows the sky is read from its tileset (`light-sets.json`, with the map's own overrides:
+  void shows the sky is read from its tileset (from the game's data, with the map's own overrides:
   the lowest terrain level undrawn, or a skybox). Without that (Dragon Shire, Towers of Doom,
   Tomb of the Spider Queen) the void is terrain drawn black, which no skybox shows through:
   one shot per tile, over black, and the stitch makes the near-black that is connected to the
@@ -253,10 +255,11 @@ cell there is no more detail: that's the game's own texture resolution.
 | ------------------------------------------ | --------------------------------------------------------------------------------------------- |
 | `inject.py`                                | prepares the map: reads it, plans the grid, injects the script, adds the textures, writes the manifest |
 | `capture_script.galaxy`, `capture_script.py` | the Galaxy script injected into the map (scene, opening, status strip, chat commands), and its values |
-| `sky.py`, `light_data.py`                  | the solid-colour skyboxes; the map's tileset, lighting and sky from `light-sets.json`          |
+| `sky.py`, `light_data.py`                  | the solid-colour skyboxes; the map's tileset, lighting and sky from the game's definitions     |
 | `stormlib.py`                              | MPQ archives through StormLib (ctypes)                                                        |
+| `casclib.py`, `game_data.py`               | the game's CASC storage through CascLib; the install, the maps, tilesets, light sets, models   |
+| `tools/build_casclib.py`                   | builds CascLib into `native/` (not in git)                                                    |
 | `js_json.py`                               | JSON written as JavaScript writes it, so manifests match those the Node injector wrote        |
-| `generate_light_sets.py`                   | rebuilds `light-sets.json` from the game's data                                               |
 | `opening-timers.json`                      | per map library, the timers between the gates and the first objective                          |
 | `capture.py`                               | the capture run: start-up, the tiles, recovery                                                |
 | `status.py`                                | reads the status strip                                                                        |
@@ -273,7 +276,6 @@ cell there is no more detail: that's the game's own texture resolution.
 | `workers.py` | the ordered thread pool the stitches use |
 | `matching.py` | phase correlation, for the stitches' matching |
 | `viewer.py`, `viewer.html` | the prototype viewer folder the stitch writes per map image |
-| `local-assets/` | game files fetched for sky probes (BoE's parallax sky model); not in git |
 
 ## Troubleshooting
 

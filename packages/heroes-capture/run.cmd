@@ -2,9 +2,9 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: the first render with the Python injector (inject.py, the map archive written
-rem through StormLib; the Node one is gone). Battlefield of Eternity, as it writes the most into
-rem the map: the keyed sky copies and every sky texture. The first run downloads StormLib's DLL.
+rem Current step: the first render with the game's data read from the install (CascLib, which
+rem the tool finds by itself): the map, the tilesets and light sets, the sky model for the keyed
+rem copies. Battlefield of Eternity, which uses all of them. The first run indexes the maps.
 call "%~dp0render.cmd" "Battlefield of Eternity" keep
 
 :copy

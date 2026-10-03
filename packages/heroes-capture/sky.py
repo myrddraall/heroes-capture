@@ -60,8 +60,8 @@ def model_id(colour: str) -> str:
 # draws in front of a 4300-unit bowl, behind our 700-unit ones).
 SCALED = {"colours": ["white", "black"], "scales": [3, 10]}
 
-# The map's own parallax sky models we can make keyed copies of: the model file (a copy of the
-# game's, in local-assets/, fetched for probes and never committed) and its background texture.
+# The map's own parallax sky models we can make keyed copies of: the model file (read from the
+# game's storage) and its background texture.
 # Each copy points that texture at a white or a black one (chat "sky parallaxwhite" /
 # "sky parallaxblack") while sharing the haze textures, so the haze can be matted over white and
 # black within one match. The name is replaced by one of the same length, which leaves the rest of

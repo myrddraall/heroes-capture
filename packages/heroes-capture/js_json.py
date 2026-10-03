@@ -1,5 +1,5 @@
 """JSON written the way JavaScript's JSON.stringify writes it, so files the Node tools wrote
-(manifests, light-sets.json) come out byte for byte the same: numbers as JavaScript prints them
+(manifests) come out byte for byte the same: numbers as JavaScript prints them
 (26, not 26.0; 0.00001, not 1e-05) and its indentation."""
 
 import json

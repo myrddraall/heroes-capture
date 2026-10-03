@@ -24,3 +24,4 @@ __pycache__/
 packages/heroes-capture/work/
 packages/heroes-capture/build/
 packages/heroes-capture/local-assets/
+packages/heroes-capture/native/
