@@ -9,11 +9,11 @@ importers:
   .:
     devDependencies:
       '@cpdevtools/git-flow':
-        specifier: ^1.2.1
-        version: 1.2.1(chokidar@3.6.0)
+        specifier: ^1.2.2
+        version: 1.2.2(chokidar@3.6.0)
       '@cpdevtools/git-flow-cli':
-        specifier: ^1.2.1
-        version: 1.2.1(chokidar@3.6.0)
+        specifier: ^1.2.2
+        version: 1.2.2(chokidar@3.6.0)
       '@cpdevtools/ts-dev-utilities-cli':
         specifier: ^1.1.6
         version: 1.2.0
@@ -76,13 +76,13 @@ packages:
     resolution: {integrity: sha512-qehxGkRj55h/ff8EMaJ+cYhyaKlHIxqYDn682wQD7RNp9UujOQsHog2uS0r2vzr4pW+sXf90NeeayjcNaX3fFg==}
     engines: {node: '>=6.9.0'}
 
-  '@cpdevtools/git-flow-cli@1.2.1':
-    resolution: {integrity: sha512-iOTrVlK0G64ZlMwSSA/BZYc0zf9uE6XAmAhWFr+dgkHypFrMNSM9d6Bc52230oIdcn0w9m+5/opYcNpMsbGmIw==, tarball: https://npm.pkg.github.com/download/@cpdevtools/git-flow-cli/1.2.1/0708bce052d8cd57b3d2d394d6a0c852381bb47e}
+  '@cpdevtools/git-flow-cli@1.2.2':
+    resolution: {integrity: sha512-tkElHxJI76176aCfkvrIH3smXPwp14kuhl+AxZlq0dyyaus2sO/fePtSpyd1h/K//WxQ6v54vBdl3DoKKUdD7Q==, tarball: https://npm.pkg.github.com/download/@cpdevtools/git-flow-cli/1.2.2/f1865fb59e92a88bf4fd26c90bf6a6731564e5bb}
     engines: {node: '>=24'}
     hasBin: true
 
-  '@cpdevtools/git-flow@1.2.1':
-    resolution: {integrity: sha512-obN9np+ulS+WMdSS4yqB9CENCd/GvV2k9F2OAoMB+U7qp7n1xL7sJGmplIlGtnL8U6xu1nde300eBD/l1otgxQ==, tarball: https://npm.pkg.github.com/download/@cpdevtools/git-flow/1.2.1/6a6c786a20b209df51b47ae6d1a11b727312637b}
+  '@cpdevtools/git-flow@1.2.2':
+    resolution: {integrity: sha512-+GRHNEUiVn/0OdH15iUDyx8g4q+ojku72yoZkiZ2kUnWJTxZxVHLQfynDAePh0HM8RAtaCX0yFvLL65DHEKpMQ==, tarball: https://npm.pkg.github.com/download/@cpdevtools/git-flow/1.2.2/2279c56fe1d0b87993a6945636526e379aa96417}
     engines: {node: '>=24'}
 
   '@cpdevtools/ts-dev-utilities-cli@1.2.0':
@@ -1173,9 +1173,9 @@ snapshots:
 
   '@babel/helper-validator-identifier@7.29.7': {}
 
-  '@cpdevtools/git-flow-cli@1.2.1(chokidar@3.6.0)':
+  '@cpdevtools/git-flow-cli@1.2.2(chokidar@3.6.0)':
     dependencies:
-      '@cpdevtools/git-flow': 1.2.1(chokidar@3.6.0)
+      '@cpdevtools/git-flow': 1.2.2(chokidar@3.6.0)
       '@oclif/core': 4.14.0
       '@oclif/plugin-autocomplete': 3.3.0
       '@oclif/plugin-help': 6.3.0
@@ -1187,7 +1187,7 @@ snapshots:
       - chokidar
       - supports-color
 
-  '@cpdevtools/git-flow@1.2.1(chokidar@3.6.0)':
+  '@cpdevtools/git-flow@1.2.2(chokidar@3.6.0)':
     dependencies:
       '@actions/core': 1.11.1
       '@actions/github': 6.0.1
