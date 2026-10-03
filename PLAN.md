@@ -81,7 +81,7 @@ On the [cpdevtools git-flow template](https://github.com/cpdevtools/git-flow-tem
 
 - the root `package.json` holds git-flow (1.2.1 or later: the `executable` artifact type and
   Windows runners), versioning, husky, and root aliases for the commands people run (`verb.noun`,
-  e.g. `pnpm run build.exe`, `pnpm run test.harness`);
+  e.g. `pnpm run build.exe`, `pnpm test`);
 - `packages/heroes-capture/` holds the Python project (`pyproject.toml`, managed with uv), a
   `package.json` with `github.actions.build` (PyInstaller at the release version) and
   `github.actions.test`, and a `release-artifacts.yml` declaring the executable;
@@ -136,7 +136,10 @@ Proposed; the boundaries are chosen before each starts.
    builds it there) and checked against stage 1's output from the CDN: identical on 9 maps;
    rendered Battlefield of Eternity from the local install. **Done.**
 3. **Package and tests.** The `heroes-capture` command, `pyproject.toml`, the package scripts; the
-   simulated game and regression scripts into `tests/`, run by `test.yml`.
+   simulated game and regression scripts into `tests/`, run by `test.yml`. Built: the package in
+   `src/heroes_capture`, `heroes-capture map|prepare|capture|stitch`, 53 tests (units, the
+   simulated game, the game's data from the CDN) passing locally; the first real run of the
+   command and of the workflow are next.
 4. **Release.** PyInstaller build with the version resource; `build-pack` on Windows; the
    `executable` artifact; the first release.
 5. **Switch over.** The development loop on the PC points here; `tools/map-capture` leaves

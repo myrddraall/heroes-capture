@@ -19,7 +19,7 @@ dependencies = [
 heroes-capture = "heroes_capture.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "pytest-xdist>=3"]
 
 [build-system]
 requires = ["hatchling"]
@@ -30,3 +30,4 @@ packages = ["src/heroes_capture"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["game_data: reads the game's data from Blizzard's CDN (deselect with -m \"not game_data\")"]

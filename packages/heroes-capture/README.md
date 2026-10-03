@@ -280,6 +280,28 @@ cell there is no more detail: that's the game's own texture resolution.
 | `matching.py` | phase correlation, for the stitches' matching |
 | `viewer.py`, `viewer.html` | the prototype viewer folder the stitch writes per map image |
 
+## Tests
+
+```sh
+python tools/build_native.py   # once: StormLib and CascLib for this machine, into native/
+uv run pytest -n auto          # or pnpm test from the workspace root
+```
+
+- `tests/test_units.py`: the pieces with exact rules (JSON as JavaScript writes it, the script's
+  numbers, the grid, lighting, sky textures, the sky measurement's consistency rule).
+- `tests/test_simulated.py`: the capture end to end against a simulated game and desktop
+  (`tests/sim/fakegame.py`: a virtual clock, the chat commands carried out, frames with the
+  status strip): renders in both void modes, a resumed run, lost focus, a silent strip, a crash,
+  the wrong map, the probes; and the stitch of a simulated render.
+- `tests/test_game_data.py` (marker `game_data`): the game's own data from Blizzard's CDN (no
+  install needed): the maps by name, the tilesets and light sets, the sky models, and three maps
+  prepared from it, whose injected script may use only names Blizzard's own Galaxy code has. The
+  first run downloads about 3.7 GB into the cache (CascLib keeps whole CDN archives); skip them
+  with `-m "not game_data"`.
+
+The workspace's test workflow runs them all on every push, keeping `native/` and the CDN cache
+between runs.
+
 ## Troubleshooting
 
 - **The game asks you to log in, or can't validate the licence:** start the Battle.net app and
