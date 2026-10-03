@@ -74,9 +74,9 @@ Nothing generated is checked in: the program reads or downloads what it needs wh
 
 On the [cpdevtools git-flow template](https://github.com/cpdevtools/git-flow-template):
 
-- the root `package.json` holds git-flow (1.2.0 or later, for the `executable` artifact type),
-  versioning, husky, and root aliases for the commands people run (`verb.noun`, e.g.
-  `pnpm run build.exe`, `pnpm run test.harness`);
+- the root `package.json` holds git-flow (1.2.1 or later: the `executable` artifact type and
+  Windows runners), versioning, husky, and root aliases for the commands people run (`verb.noun`,
+  e.g. `pnpm run build.exe`, `pnpm run test.harness`);
 - `packages/heroes-capture/` holds the Python project (`pyproject.toml`, managed with uv), a
   `package.json` with `github.actions.build` (PyInstaller at the release version) and
   `github.actions.test`, and a `release-artifacts.yml` declaring the executable;
@@ -89,11 +89,12 @@ On the [cpdevtools git-flow template](https://github.com/cpdevtools/git-flow-tem
 ## Release: git-flow, built on Windows
 
 `build-pack` runs on Ubuntu by default, and PyInstaller cannot cross-compile, so this repository's
-`build-pack-publish.yml` runs `build-pack` on `windows-latest`. That needs the `build-pack` action
-to work there: its bash steps, zx calls and paths under Git Bash on Windows runners, with no
-Docker assumed.
+`build-pack-publish.yml` runs the `build-pack` job on `windows-latest` (the `publish-release` job
+stays on Ubuntu). git-flow 1.2.1 supports that: zx and pnpm's scripts run under Git for Windows'
+bash, and nothing needs `zip` or Docker. Project scripts are therefore written for bash, as on
+Linux.
 
-### The `executable` artifact type (git-flow 1.2.0)
+### The `executable` artifact type
 
 Built into git-flow; `release-artifacts.yml` declares it:
 
@@ -135,5 +136,6 @@ Proposed; the boundaries are chosen before each starts.
 
 - CascLib's online storage works for Heroes (product `hero`).
 - The battleground `.stormmap` files are in the local CASC storage.
-- The `build-pack` action runs on `windows-latest`.
+- A release of an `executable` from `windows-latest` (git-flow's own Windows test run released npm
+  packages).
 - The executable's size and start-up time, and whether antivirus flags the one-file build.
