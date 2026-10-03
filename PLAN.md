@@ -132,10 +132,16 @@ Proposed; the boundaries are chosen before each starts.
 5. **Switch over.** The development loop on the PC points here; `tools/map-capture` leaves
    `heroes-replay-stats`.
 
+## Verified
+
+- The release pipeline end to end, with a stand-in exe (`release-stub/`, built by
+  `tools/build_exe.py`): `build-pack` on `windows-latest` built it with PyInstaller, pack's PE check
+  read the release version from its `ProductVersion`, and the pre-release
+  `v0.1.0-feature.release-pipeline.alpha.0` carries `heroes-capture-win-x64.exe` and its `.sha256`
+  (git-flow 1.2.2, which fixed the `executable` type's missing output folder).
+
 ## To verify
 
 - CascLib's online storage works for Heroes (product `hero`).
 - The battleground `.stormmap` files are in the local CASC storage.
-- A release of an `executable` from `windows-latest` (git-flow's own Windows test run released npm
-  packages).
 - The executable's size and start-up time, and whether antivirus flags the one-file build.
