@@ -1,0 +1,8 @@
+# Declares what this project publishes. Read by `gitflow pack`.
+# The executable is built by github.actions.build (tools/build_exe.py) on windows-latest; pack
+# checks its ProductVersion equals the release version, then attaches it with a .sha256.
+artifacts:
+  - type: executable
+    name: heroes-capture
+    path: dist/heroes-capture.exe
+    platform: win-x64

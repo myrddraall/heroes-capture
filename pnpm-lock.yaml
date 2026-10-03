@@ -9,11 +9,11 @@ importers:
   .:
     devDependencies:
       '@cpdevtools/git-flow':
-        specifier: ^1.1.1
-        version: 1.1.2(chokidar@3.6.0)
+        specifier: ^1.2.1
+        version: 1.2.1(chokidar@3.6.0)
       '@cpdevtools/git-flow-cli':
-        specifier: ^1.1.1
-        version: 1.1.2(chokidar@3.6.0)
+        specifier: ^1.2.1
+        version: 1.2.1(chokidar@3.6.0)
       '@cpdevtools/ts-dev-utilities-cli':
         specifier: ^1.1.6
         version: 1.2.0
@@ -76,13 +76,13 @@ packages:
     resolution: {integrity: sha512-qehxGkRj55h/ff8EMaJ+cYhyaKlHIxqYDn682wQD7RNp9UujOQsHog2uS0r2vzr4pW+sXf90NeeayjcNaX3fFg==}
     engines: {node: '>=6.9.0'}
 
-  '@cpdevtools/git-flow-cli@1.1.2':
-    resolution: {integrity: sha512-lQE9z1RoVsvdhw24/af5Cww24zpjhRR/6HRHbd5qnuPOhpBzG+NIYPQRZBBpSHbgH1W+Oy5SufmmJsIw4pcyvw==, tarball: https://npm.pkg.github.com/download/@cpdevtools/git-flow-cli/1.1.2/b8d54d0d584eea622ba1371ed2d3f468fb7a7562}
+  '@cpdevtools/git-flow-cli@1.2.1':
+    resolution: {integrity: sha512-iOTrVlK0G64ZlMwSSA/BZYc0zf9uE6XAmAhWFr+dgkHypFrMNSM9d6Bc52230oIdcn0w9m+5/opYcNpMsbGmIw==, tarball: https://npm.pkg.github.com/download/@cpdevtools/git-flow-cli/1.2.1/0708bce052d8cd57b3d2d394d6a0c852381bb47e}
     engines: {node: '>=24'}
     hasBin: true
 
-  '@cpdevtools/git-flow@1.1.2':
-    resolution: {integrity: sha512-ij01qASWWMPRNNxHcnTKAcfjVGa4bloDuYqtQSOvZbJGJ1trL9TdBjwNvnrPRV52PhO3JXIr1e+H7QGChQlY8A==, tarball: https://npm.pkg.github.com/download/@cpdevtools/git-flow/1.1.2/f9ecb8e6c2c5128eb9007d3096cdb158c1e2ee8d}
+  '@cpdevtools/git-flow@1.2.1':
+    resolution: {integrity: sha512-obN9np+ulS+WMdSS4yqB9CENCd/GvV2k9F2OAoMB+U7qp7n1xL7sJGmplIlGtnL8U6xu1nde300eBD/l1otgxQ==, tarball: https://npm.pkg.github.com/download/@cpdevtools/git-flow/1.2.1/6a6c786a20b209df51b47ae6d1a11b727312637b}
     engines: {node: '>=24'}
 
   '@cpdevtools/ts-dev-utilities-cli@1.2.0':
@@ -92,6 +92,10 @@ packages:
 
   '@cpdevtools/ts-dev-utilities@1.2.0':
     resolution: {integrity: sha512-H3qryv5Cjr0lcNyXkryc9fN6N8FYkhGk5e2PZ4Y4ogemGsUKT+vej1QC5Xr/0ZW3UXfQ5LTQW0RinopkIlz8oA==, tarball: https://npm.pkg.github.com/download/@cpdevtools/ts-dev-utilities/1.2.0/1aba57bde2f35ee6979890560ae60b2671944a3f}
+    engines: {node: '>=24'}
+
+  '@cpdevtools/ts-dev-utilities@1.2.1':
+    resolution: {integrity: sha512-uVDG/+cJ2Jpwc71bRCfPaJLJca98shQcFPRvYWueA/aCIFiBNbirgo6cqQazgk6i3ZrujN/5bvguIEGIKW+eMQ==, tarball: https://npm.pkg.github.com/download/@cpdevtools/ts-dev-utilities/1.2.1/68f438348bc247d5842a2111174921fb703f8f65}
     engines: {node: '>=24'}
 
   '@eslint-community/eslint-utils@4.10.1':
@@ -320,6 +324,10 @@ packages:
     resolution: {integrity: sha512-lGq+9yr1/GuAWaVYIHRjvvySG5/4VfKIvC8EWxStPdcDh/Ka7FG3twP6v4d5BkravUilhIAsG4Qj83t02LWUPQ==}
     engines: {node: '>=0.4.0'}
     hasBin: true
+
+  adm-zip@0.5.18:
+    resolution: {integrity: sha512-ufJnssQGbxzLNS1Ho9bCtX4rQKCCvoVuDLHoJyc3F9dOGDB4BkWs2Ci0kv53lqocAEQ/Cbi+I2XCsNYGqVYqng==}
+    engines: {node: '>=12.0'}
 
   ajv@6.15.0:
     resolution: {integrity: sha512-fgFx7Hfoq60ytK2c7DhnF8jIvzYgOMxfugjLOSMHjLIPgenqa7S7oaagATUq99mV6IYvN2tRmC0wnTYX6iPbMw==}
@@ -1165,9 +1173,9 @@ snapshots:
 
   '@babel/helper-validator-identifier@7.29.7': {}
 
-  '@cpdevtools/git-flow-cli@1.1.2(chokidar@3.6.0)':
+  '@cpdevtools/git-flow-cli@1.2.1(chokidar@3.6.0)':
     dependencies:
-      '@cpdevtools/git-flow': 1.1.2(chokidar@3.6.0)
+      '@cpdevtools/git-flow': 1.2.1(chokidar@3.6.0)
       '@oclif/core': 4.14.0
       '@oclif/plugin-autocomplete': 3.3.0
       '@oclif/plugin-help': 6.3.0
@@ -1179,11 +1187,12 @@ snapshots:
       - chokidar
       - supports-color
 
-  '@cpdevtools/git-flow@1.1.2(chokidar@3.6.0)':
+  '@cpdevtools/git-flow@1.2.1(chokidar@3.6.0)':
     dependencies:
       '@actions/core': 1.11.1
       '@actions/github': 6.0.1
-      '@cpdevtools/ts-dev-utilities': 1.2.0
+      '@cpdevtools/ts-dev-utilities': 1.2.1
+      adm-zip: 0.5.18
       fast-glob: 3.3.3
       nunjucks: 3.2.4(chokidar@3.6.0)
       semver: 7.8.5
@@ -1197,6 +1206,14 @@ snapshots:
       '@cpdevtools/ts-dev-utilities': 1.2.0
 
   '@cpdevtools/ts-dev-utilities@1.2.0':
+    dependencies:
+      change-case: 5.4.4
+      globby: 14.1.0
+      jsonc-parser: 3.3.1
+      semver: 7.8.5
+      yaml: 2.9.1
+
+  '@cpdevtools/ts-dev-utilities@1.2.1':
     dependencies:
       change-case: 5.4.4
       globby: 14.1.0
@@ -1488,6 +1505,8 @@ snapshots:
       acorn: 8.18.0
 
   acorn@8.18.0: {}
+
+  adm-zip@0.5.18: {}
 
   ajv@6.15.0:
     dependencies:

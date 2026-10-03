@@ -5,6 +5,7 @@
   "description": "heroes-capture: captures Heroes of the Storm assets from the game client \u2014 workspace root",
   "scripts": {
     "build": "devutil run build",
+    "build.exe": "pnpm --filter @myrddraall/heroes-capture build.exe",
     "check": "wireit",
     "clean": "wireit",
     "fix": "wireit",
@@ -18,8 +19,8 @@
     "typecheck": "devutil run typecheck"
   },
   "devDependencies": {
-    "@cpdevtools/git-flow": "^1.1.1",
-    "@cpdevtools/git-flow-cli": "^1.1.1",
+    "@cpdevtools/git-flow": "^1.2.1",
+    "@cpdevtools/git-flow-cli": "^1.2.1",
     "@cpdevtools/ts-dev-utilities-cli": "^1.1.6",
     "@types/node": "^20.17.11",
     "@typescript-eslint/eslint-plugin": "^8.20.0",
