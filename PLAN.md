@@ -133,8 +133,8 @@ Proposed; the boundaries are chosen before each starts.
    light sets and the keyed sky models read at runtime; `light-sets.json`,
    `generate-light-sets.mjs` and `local-assets/` go. Built (`casclib.py`, `game_data.py`;
    CascLib from `tools/build_casclib.py`, cross-compiled for Windows with Zig until stage 4
-   builds it there) and checked against stage 1's output from the CDN: identical on 9 maps; a
-   render from the local install is next.
+   builds it there) and checked against stage 1's output from the CDN: identical on 9 maps;
+   rendered Battlefield of Eternity from the local install. **Done.**
 3. **Package and tests.** The `heroes-capture` command, `pyproject.toml`, the package scripts; the
    simulated game and regression scripts into `tests/`, run by `test.yml`.
 4. **Release.** PyInstaller build with the version resource; `build-pack` on Windows; the
