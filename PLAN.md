@@ -51,7 +51,7 @@ outputs are shared.
 - PyInstaller, one-file. It bundles numpy, scipy and libvips, so expect 150 to 250 MB, and a few
   seconds to start.
 - The release version is embedded in the executable's version resource (`VS_VERSIONINFO`), which
-  the release checks (see the plugin below).
+  the release checks (see the release section below).
 - StormLib (MPQ archives: the maps) and CascLib (the game's CASC storage) are called through
   ctypes, their DLLs inside the executable. Both are MIT, both by Ladislav Zezula.
 
@@ -74,8 +74,9 @@ Nothing generated is checked in: the program reads or downloads what it needs wh
 
 On the [cpdevtools git-flow template](https://github.com/cpdevtools/git-flow-template):
 
-- the root `package.json` holds git-flow, versioning, husky, and root aliases for the commands
-  people run (`verb.noun`, e.g. `pnpm run build.exe`, `pnpm run test.harness`);
+- the root `package.json` holds git-flow (1.2.0 or later, for the `executable` artifact type),
+  versioning, husky, and root aliases for the commands people run (`verb.noun`, e.g.
+  `pnpm run build.exe`, `pnpm run test.harness`);
 - `packages/heroes-capture/` holds the Python project (`pyproject.toml`, managed with uv), a
   `package.json` with `github.actions.build` (PyInstaller at the release version) and
   `github.actions.test`, and a `release-artifacts.yml` declaring the executable;
@@ -92,25 +93,27 @@ On the [cpdevtools git-flow template](https://github.com/cpdevtools/git-flow-tem
 to work there: its bash steps, zx calls and paths under Git Bash on Windows runners, with no
 Docker assumed.
 
-### Plugin: `@cpdevtools/git-flow-plugin-executable`
+### The `executable` artifact type (git-flow 1.2.0)
 
-Discovered by the `git-flow-plugin-*` naming convention. Artifact type `executable`:
+Built into git-flow; `release-artifacts.yml` declares it:
 
-| Field         | Meaning                                                                             |
-| ------------- | ----------------------------------------------------------------------------------- |
-| `name`        | Asset file name; `${VERSION}` allowed, e.g. `heroes-capture-${VERSION}-win-x64.exe` |
-| `path`        | The built file, relative to the project                                             |
-| `platform`    | e.g. `win-x64`, shown in the release asset's label                                  |
-| `checksum`    | Attach `<name>.sha256` (default `true`)                                             |
-| `contentType` | Default `application/vnd.microsoft.portable-executable`                             |
+```yaml
+artifacts:
+  - type: executable
+    name: heroes-capture
+    path: dist/heroes-capture.exe
+    platform: win-x64
+```
 
-- `pack`: check the file exists; read the PE `VS_VERSIONINFO` ProductVersion by parsing the file,
-  not running it, and fail unless it equals `ctx.version` (a stale build, as `ng-lib` checks for
-  npm); copy it to `artifactOutputDir` under the resolved name; write the sha256 file.
-- `upload`: attach the executable and its checksum to the draft release, as `release-attachment`
-  does.
-- `publish`, `packDeploy`: nothing. `getRegistries` returns `[]`; `getVersion` returns the
-  project version.
+- The release gets `heroes-capture-win-x64.exe` and `heroes-capture-win-x64.exe.sha256`. The
+  version is not in the file name (the release tag carries it), so
+  `releases/latest/download/heroes-capture-win-x64.exe` stays a permanent link.
+- Pack verifies rather than builds: for an `.exe` it reads the version resource's
+  `ProductVersion` string without running the file, and refuses the binary unless it equals the
+  release version, so a stale `dist` can't ship under a new tag.
+- So `github.actions.build` stamps `PROJECT_VERSION` into PyInstaller's version file as the
+  `ProductVersion` string (the four-part numeric version can't hold a prerelease such as
+  `0.2.0-beta.1`, and isn't read).
 
 ## Stages
 
@@ -123,8 +126,8 @@ Proposed; the boundaries are chosen before each starts.
    `generate-light-sets.mjs` and `local-assets/` go.
 3. **Package and tests.** The `heroes-capture` command, `pyproject.toml`, the package scripts; the
    simulated game and regression scripts into `tests/`, run by `test.yml`.
-4. **Release.** PyInstaller build with the version resource; `build-pack` on Windows; the plugin;
-   the first release.
+4. **Release.** PyInstaller build with the version resource; `build-pack` on Windows; the
+   `executable` artifact; the first release.
 5. **Switch over.** The development loop on the PC points here; `tools/map-capture` leaves
    `heroes-replay-stats`.
 
