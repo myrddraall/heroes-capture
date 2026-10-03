@@ -125,7 +125,7 @@ Proposed; the boundaries are chosen before each starts.
 1. **Injector in Python.** Port `inject.mjs`, `capture-script.mjs`, `sky.mjs` and
    `light-data.mjs`; MPQ writing through StormLib. Node leaves the package. Ported and checked
    against the Node injector (9 maps, 6 option sets: manifests and all 4,644 archive files
-   identical); the first real render with it is next.
+   identical), and rendered Battlefield of Eternity in the game. **Done.**
 2. **Game data from CASC.** CascLib, local install first; a spike on its online storage for Heroes;
    light sets and the keyed sky models read at runtime; `light-sets.json`,
    `generate-light-sets.mjs` and `local-assets/` go.
