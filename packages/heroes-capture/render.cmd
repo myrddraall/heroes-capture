@@ -50,8 +50,9 @@ if defined PROBE set "ARGS=%ARGS:--probe-waits=%"
 set "SHOWUI="
 echo %ARGS% | find "--show-ui" >nul && set "SHOWUI=1"
 
-rem First run only: install what the scripts need.
-if not exist node_modules (
+rem Install what the scripts need when it is missing (checked by the package itself: a
+rem node_modules left from another copy of the tool can lack it).
+if not exist node_modules\@jamiephan\stormlib\package.json (
   call npm install || goto :error
 )
 py -c "import mss, pydirectinput, PIL, numpy, pyvips, scipy, dxcam" 2>nul || py -m pip install -r requirements.txt || goto :error

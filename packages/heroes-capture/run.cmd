@@ -14,6 +14,11 @@ if not defined HRS_RESULTS (
   echo Results not copied back: HRS_RESULTS is not set. Run this through update.cmd.
   exit /b 0
 )
+if not exist "%~dp0work" (
+  echo.
+  echo Nothing to copy back: the run made no work folder.
+  exit /b 1
+)
 echo.
 echo Copying results to %HRS_RESULTS% ...
 if not exist "%HRS_RESULTS%" mkdir "%HRS_RESULTS%"
