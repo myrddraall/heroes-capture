@@ -20,6 +20,7 @@ __pycache__/
 .venv/
 
 # heroes-capture working and output folders, and game files fetched locally
+/tmp/
 packages/heroes-capture/work/
 packages/heroes-capture/build/
 packages/heroes-capture/local-assets/
