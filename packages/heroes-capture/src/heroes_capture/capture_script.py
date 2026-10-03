@@ -19,7 +19,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from string import Template
 
-import js_json
+from . import js_json
 
 TEMPLATE = Path(__file__).with_name("capture_script.galaxy")
 

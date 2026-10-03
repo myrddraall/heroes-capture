@@ -21,9 +21,9 @@ from pathlib import Path
 
 import numpy as np
 
-from frames import save_frame
-from game_control import settle, step
-from runlog import log
+from .frames import save_frame
+from .game_control import settle, step
+from .runlog import log
 
 SKY_SETTLE = 0.1  # real seconds for a sky swap to be drawn before its shot (was 1; the waits probe found shots within one level down to 0.05)
 MAP_SETTLE = 0.1  # real seconds after a camera move before a shot of the map (as the tiles' settle)

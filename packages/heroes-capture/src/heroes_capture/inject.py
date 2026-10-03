@@ -1,8 +1,8 @@
 """Prepares a battleground for capture: copies the .stormmap, injects the capture script
 (capture_script.galaxy) and writes the capture grid the capture and stitch steps follow.
 
-    python inject.py "Towers of Doom" [options]
-    python inject.py "C:\\path\\to\\Some Map.stormmap" [options]
+    heroes-capture prepare "Towers of Doom" [options]   (heroes-capture map runs it first)
+    heroes-capture prepare "C:\\path\\to\\Some Map.stormmap" [options]
 
 A bare name is a map as the game names it, read from the installed game (or, with no install,
 from Blizzard's CDN); the tileset and light-set definitions and the sky models come from there too.
@@ -40,12 +40,12 @@ import sys
 import time
 from pathlib import Path
 
-import game_data
-import js_json
-from capture_script import STATUS_CELL_H, STATUS_CELL_W, STATUS_CELLS, STATUS_ROWS, capture_script
-from light_data import has_sky, main_light, sky_models, tileset_of
-from sky import PARALLAX_KEYS, SKIES, painted_texture_files, parallax_keys, sky_files, solid_dds
-from stormlib import Archive
+from . import game_data
+from . import js_json
+from .capture_script import STATUS_CELL_H, STATUS_CELL_W, STATUS_CELLS, STATUS_ROWS, capture_script
+from .light_data import has_sky, main_light, sky_models, tileset_of
+from .sky import PARALLAX_KEYS, SKIES, painted_texture_files, parallax_keys, sky_files, solid_dds
+from .stormlib import Archive
 
 HERE = Path(__file__).resolve().parent
 
@@ -88,7 +88,7 @@ def parse_args(argv: list[str]) -> dict:
         else:
             raise SystemExit(f"unknown option {a}")
     if not opts["map"]:
-        raise SystemExit('usage: python inject.py "<map name or .stormmap path>" [options]')
+        raise SystemExit('usage: heroes-capture prepare "<map name or .stormmap path>" [options]')
     if opts["structures"] not in ("keep", "hide"):
         raise SystemExit("--structures is keep or hide")
     if not 0 < opts["keep"] <= 1:
@@ -247,8 +247,9 @@ def merge_area_grids(opts: dict, info: dict, areas: list[dict]) -> dict:
     return grid
 
 
-def main() -> None:
-    opts = parse_args(sys.argv[1:])
+def main(argv: list[str]) -> Path:
+    """Prepare the map; returns the manifest's path."""
+    opts = parse_args(argv)
     out = Path(opts["out"])
     out.mkdir(parents=True, exist_ok=True)
     install = game_data.find_install()
@@ -394,9 +395,4 @@ def main() -> None:
         f"output about {js_round(grid['cols'] * grid['step']['x'] * opts['pxPerCell'])}x"
         f"{js_round(grid['rows'] * grid['step']['y'] * opts['pxPerCell'])} px")
     log(f"map      {target}")
-    # The one line on stdout, so scripts (render.cmd) can pick the manifest up.
-    print(manifest_path)
-
-
-if __name__ == "__main__":
-    main()
+    return manifest_path

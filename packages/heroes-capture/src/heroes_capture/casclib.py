@@ -1,14 +1,14 @@
-"""The game's CASC storage through CascLib, by ctypes: the local install's, or Blizzard's CDN
-(downloaded on demand into a cache) where no game is installed.
-
-CascLib (3.0) publishes no binaries; tools/build_casclib.py builds it: on Windows a Unicode DLL
-(native/CascLib.dll in a development copy), elsewhere libcasc.so, named by HRS_CASCLIB.
+"""The game's CASC storage through CascLib (3.0), by ctypes: the local install's, or Blizzard's CDN
+(downloaded on demand into a cache) where no game is installed. CascLib publishes no binaries:
+tools/build_native.py builds it (on Windows a Unicode DLL); native.py says where it is.
 """
 
 import ctypes
 import os
 import sys
 from pathlib import Path
+
+from .native import library
 
 CASC_OPEN_BY_NAME = 0
 CASC_LOCALE_ALL = 0xFFFFFFFF
@@ -19,32 +19,16 @@ PRODUCT = "hero"
 _lib = None
 
 
-def library_path() -> Path:
-    """Where CascLib is: bundled with the program, in a development copy's native/, or on
-    Linux the build HRS_CASCLIB names."""
-    if sys.platform != "win32":
-        found = os.environ.get("HRS_CASCLIB")
-        if not found:
-            raise RuntimeError("HRS_CASCLIB must name a libcasc.so built by tools/build_casclib.py")
-        return Path(found)
-    bundled = Path(getattr(sys, "_MEIPASS", "")) / "CascLib.dll"
-    if getattr(sys, "_MEIPASS", None) and bundled.exists():
-        return bundled
-    local = Path(__file__).resolve().parent / "native" / "CascLib.dll"
-    if local.exists():
-        return local
-    raise RuntimeError(f"CascLib.dll is missing: build it with tools/build_casclib.py (expected {local})")
-
-
 def _load():
     global _lib
     if _lib is not None:
         return _lib
+    path = library("CascLib.dll", "libcasc.so")
     if sys.platform == "win32":
-        lib = ctypes.WinDLL(str(library_path()))
+        lib = ctypes.WinDLL(str(path))
         path_type = ctypes.c_wchar_p  # built Unicode: storage paths are wide
     else:
-        lib = ctypes.CDLL(str(library_path()))
+        lib = ctypes.CDLL(str(path))
         path_type = ctypes.c_char_p
     handle, dword, name = ctypes.c_void_p, ctypes.c_uint32, ctypes.c_char_p
     signatures = {

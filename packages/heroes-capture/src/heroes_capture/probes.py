@@ -9,11 +9,11 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-import game_control
-import sky_layers
-from game_control import quit_match, send_chat, settle, step
-from runlog import log
-from screen import changed_share
+from . import game_control
+from . import sky_layers
+from .game_control import quit_match, send_chat, settle, step
+from .runlog import log
+from .screen import changed_share
 
 
 def _save(frame: np.ndarray, path: Path) -> None:

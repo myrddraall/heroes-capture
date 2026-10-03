@@ -11,8 +11,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-from casclib import Storage
-from stormlib import Archive, cache_dir
+from .casclib import Storage
+from .stormlib import Archive
+
+
+def cache_dir() -> Path:
+    """Where downloads and indexes are kept: %LOCALAPPDATA%\\heroes-capture\\cache (on Windows)."""
+    base = os.environ.get("LOCALAPPDATA") or os.path.join(Path.home(), ".cache")
+    return Path(base) / "heroes-capture" / "cache"
 
 SKY_MODELS = "mods\\heroes.stormmod\\base.stormassets\\assets\\skyboxes"
 GAMESTRINGS = "enus.stormdata/localizeddata/gamestrings.txt"
@@ -158,7 +164,7 @@ def light_sets(storage: Storage) -> dict:
     """For every tileset its light set and skybox, for every light set its main ("Key") light's
     direction: {terrains, lights}, from every mod's GameData/TerrainData.xml and LightData.xml. A
     field set later replaces one set earlier; missing fields come from a definition's parent."""
-    from light_data import parse_lights, parse_terrains
+    from .light_data import parse_lights, parse_terrains
 
     files = []
     for name in storage.find("*TerrainData.xml") + storage.find("*LightData.xml"):

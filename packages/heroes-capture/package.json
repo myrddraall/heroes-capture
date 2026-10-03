@@ -6,7 +6,6 @@
   "scripts": {
     "build.exe": "python tools/build_exe.py",
     "github.actions.build": "python tools/build_exe.py",
-    "github.actions.pack": "gitflow pack",
-    "inject": "python inject.py"
+    "github.actions.pack": "gitflow pack"
   }
 }

@@ -1,22 +1,14 @@
-"""MPQ archives (a battleground's .stormmap) through StormLib, by ctypes.
-
-On Windows the library is StormLib's own release DLL (v9.40, x64), downloaded once into the cache
-and checked against the release's SHA-256. Elsewhere (the tests on Linux) it is a libstorm.so
-built from the same release, named by HRS_STORMLIB.
+"""MPQ archives (a battleground's .stormmap) through StormLib (v9.40), by ctypes. On Windows
+it is StormLib's own release DLL (a Unicode build), elsewhere libstorm.so built from the same
+release; native.py says where (tools/build_native.py puts them there).
 """
 
 import ctypes
-import hashlib
-import io
 import os
 import sys
-import urllib.request
-import zipfile
 from pathlib import Path
 
-RELEASE = "v9.40"
-DLL_ZIP = f"https://github.com/ladislav-zezula/StormLib/releases/download/{RELEASE}/stormlib_dll.zip"
-DLL_ZIP_SHA256 = "b2c9635e7b63edee1bd7c82e7dc180d739f3accb2b8994804c7774e464ce89ae"  # release.sha256 of v9.40
+from .native import library
 
 MPQ_FILE_COMPRESS = 0x00000200
 MPQ_FILE_REPLACEEXISTING = 0x80000000
@@ -26,37 +18,16 @@ SFILE_OPEN_FROM_MPQ = 0
 _lib = None
 
 
-def cache_dir() -> Path:
-    base = os.environ.get("LOCALAPPDATA") or os.path.join(Path.home(), ".cache")
-    return Path(base) / "heroes-capture" / "cache"
-
-
-def _windows_dll() -> Path:
-    """StormLib.dll from the release, fetched into the cache the first time."""
-    path = cache_dir() / f"stormlib-{RELEASE}" / "StormLib.dll"
-    if not path.exists():
-        print(f"downloading StormLib {RELEASE} ({DLL_ZIP})", file=sys.stderr)
-        with urllib.request.urlopen(DLL_ZIP) as response:
-            data = response.read()
-        if hashlib.sha256(data).hexdigest() != DLL_ZIP_SHA256:
-            raise RuntimeError(f"{DLL_ZIP} doesn't match StormLib {RELEASE}'s published checksum")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(zipfile.ZipFile(io.BytesIO(data)).read("x64/StormLib.dll"))
-    return path
-
-
 def _load():
     global _lib
     if _lib is not None:
         return _lib
+    path = library("StormLib.dll", "libstorm.so")
     if sys.platform == "win32":
-        lib = ctypes.WinDLL(str(_windows_dll()), use_last_error=True)
+        lib = ctypes.WinDLL(str(path), use_last_error=True)
         path_type = ctypes.c_wchar_p  # the release DLL is a Unicode build: archive paths are wide
     else:
-        found = os.environ.get("HRS_STORMLIB")
-        if not found:
-            raise RuntimeError("HRS_STORMLIB must name a libstorm.so built from StormLib " + RELEASE)
-        lib = ctypes.CDLL(found)
+        lib = ctypes.CDLL(str(path))
         path_type = ctypes.c_char_p
     handle, dword, name = ctypes.c_void_p, ctypes.c_uint32, ctypes.c_char_p
     signatures = {

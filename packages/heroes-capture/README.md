@@ -7,25 +7,26 @@ stitched by their known positions. Structures (forts, towers, cores, gates) can 
 hidden, so each map can be rendered both ways.
 
 Runs on Windows with the game installed. Start Heroes from the Battle.net app first, so it's
-logged in; capture.py then hands the prepared map to the running game.
+logged in; the capture then hands the prepared map to the running game.
 
 ## Setup (once)
 
 - [Python](https://www.python.org) 3.11 or later
-- In this folder:
+- In this folder (the package, `src/heroes_capture`, and its dependencies):
 
   ```powershell
-  pip install -r requirements.txt
+  pip install -e .
   ```
 
-  The map archives are read and written with [StormLib](https://github.com/ladislav-zezula/StormLib):
-  its release DLL (v9.40) is downloaded on first use into
-  `%LOCALAPPDATA%\heroes-capture\cache` and checked against the release's SHA-256. The game's
-  own data (its maps, tilesets and light sets, sky models) is read from the install's CASC storage
-  with [CascLib](https://github.com/ladislav-zezula/CascLib), which publishes no binaries:
-  `python tools/build_casclib.py --windows` builds `native/CascLib.dll` (with CMake and Zig:
-  `pip install cmake ziglang`). The install is found by itself (its uninstall entry, the
-  Battle.net app's list, the usual folders).
+- The native libraries, into `native/` (not in git): the map archives are read and written with
+  [StormLib](https://github.com/ladislav-zezula/StormLib) (v9.40, its release DLL, checked
+  against the release's SHA-256), the game's own data (its maps, tilesets and light sets, sky
+  models) is read from the install's CASC storage with
+  [CascLib](https://github.com/ladislav-zezula/CascLib) (3.0, which publishes no binaries, so it
+  is built). `python tools/build_native.py --windows` fetches and builds both (needs git, CMake
+  and, off Windows, Zig: `pip install cmake ziglang`); without `--windows`, the Linux libraries
+  the tests use. The install is found by itself (its uninstall entry, the Battle.net app's list,
+  the usual folders).
 
 - In the game's options: **Display Mode: Windowed (Fullscreen)** (screenshots of exclusive
   fullscreen come out black), your monitor's native resolution, graphics on Ultra.
@@ -36,26 +37,26 @@ logged in; capture.py then hands the prepared map to the running game.
 `update.cmd` that refreshes the files and calls it needs no arguments. `update.cmd` is not
 tracked: it contains the machine's source path.
 
-The quick way is `render.cmd`, which runs all three steps at 3440x1440 (edit `SCREEN` at the top
-to change it) against the installed game, and installs what's needed on first run:
+`heroes-capture map` runs all three steps against the installed game, at the primary monitor's
+resolution, into `work\`:
 
 ```powershell
-render.cmd                          # Towers of Doom, structures kept
-render.cmd "Cursed Hollow" hide     # another map, bare terrain
+heroes-capture map "Towers of Doom"                       # structures kept
+heroes-capture map "Cursed Hollow" --structures hide      # bare terrain
 ```
 
-The steps it runs:
+(`py -m heroes_capture map ...` is the same.) The steps on their own:
 
 ```powershell
-# 1. Prepare: downloads the map, injects the capture script, plans the grid.
-python inject.py "Towers of Doom" --structures keep --screen 3840x2160
+# 1. Prepare: reads the map from the game, injects the capture script, plans the grid.
+heroes-capture prepare "Towers of Doom" --screen 3440x1440 --distance 214 --keep 0.4
 
 # 2. Capture: launches the map, waits for it to load and for the intro to finish; leave the
 #    mouse and keyboard alone.
-python capture.py work/towers-of-doom-structures.json
+heroes-capture capture work/towers-of-doom-structures.json
 
 # 3. Stitch: writes work/towers-of-doom-structures.png, a preview, and the geo file.
-python stitch.py work/towers-of-doom-structures.json --tiles
+heroes-capture stitch work/towers-of-doom-structures.json --tiles
 ```
 
 The screenshots are kept as raw `.npy` arrays (fast for the stitch to read; older runs' PNG tiles
@@ -67,7 +68,7 @@ Map names are as the game shows them (case and punctuation don't matter), or pas
 `.stormmap`. The battleground maps are `.s2ma` archives under content-hash names in the game's
 storage; the first run after a game update opens each to index them by name (about 20 s).
 
-### Options (inject.py)
+### Options (prepare; `map` passes them on)
 
 | Option                    | Default     | Effect                                                                                                         |
 | ------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------- |
@@ -75,17 +76,17 @@ storage; the first run after a game update opens each to index them by name (abo
 | `--px-per-cell <n>`       | `48`        | output resolution; a map is ~220 cells wide, so 48 gives ~10,600 px                                            |
 | `--screen <w>x<h>`        | `3840x2160` | the game's resolution while capturing; match your monitor                                                      |
 | `--fov <deg>`             | `20`        | field of view; narrower is flatter (less lean on tall objects) but puts the camera further away                |
-| `--distance <units>`      |             | camera distance instead of `--fov` (the field of view is then chosen to keep the scale); `render.cmd` uses 214 |
+| `--distance <units>`      |             | camera distance instead of `--fov` (the field of view is then chosen to keep the scale); `map` uses 214     |
 | `--keep <0..1>`           | `0.6`       | share of each screenshot used, centred; the rest is overlap, used to measure the scale                         |
 | `--refit-yaw <deg>`       | map's light | yaw of the lighting-refit look before each tile (by default it faces the map's main light)                     |
 | `--no-lens`               |             | don't set the field of view or clip planes (see troubleshooting)                                               |
 | `--margin <cells>`        | `0`         | also capture beyond the map's camera bounds (lifts them)                                                       |
 | `--crop-margin <cells>`   | `12`        | the stitched image reaches this far past the camera bounds (or past each arena's area)                         |
-| `--show-ui`               |             | diagnostic: leave the HUD up; `render.cmd` then launches the map and stops                                     |
+| `--show-ui`               |             | diagnostic: leave the HUD up; `map` then launches the map and stops                                           |
 | `--keep-intro`            |             | diagnostic: let the intro cutscene play out instead of skipping it                                             |
 | `--paint-texture <t> <c>` |             | diagnostic: paint one of the map's own sky textures a solid colour, or `clear` (sky probes; repeatable)       |
 
-Diagnostics `render.cmd` hands to capture.py instead of rendering:
+Diagnostics `map` runs instead of rendering:
 
 | Switch          | Effect                                                                                                                                                                                     |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -253,12 +254,14 @@ cell there is no more detail: that's the game's own texture resolution.
 
 | File                                       | What it does                                                                                  |
 | ------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `src/heroes_capture/`                      | the package; the modules below are in it                                                      |
+| `cli.py`                                   | the `heroes-capture` command: `map` (the three steps), `prepare`, `capture`, `stitch`          |
 | `inject.py`                                | prepares the map: reads it, plans the grid, injects the script, adds the textures, writes the manifest |
 | `capture_script.galaxy`, `capture_script.py` | the Galaxy script injected into the map (scene, opening, status strip, chat commands), and its values |
 | `sky.py`, `light_data.py`                  | the solid-colour skyboxes; the map's tileset, lighting and sky from the game's definitions     |
 | `stormlib.py`                              | MPQ archives through StormLib (ctypes)                                                        |
 | `casclib.py`, `game_data.py`               | the game's CASC storage through CascLib; the install, the maps, tilesets, light sets, models   |
-| `tools/build_casclib.py`                   | builds CascLib into `native/` (not in git)                                                    |
+| `native.py`, `tools/build_native.py`       | where StormLib and CascLib are; fills `native/` with them (not in git)                         |
 | `js_json.py`                               | JSON written as JavaScript writes it, so manifests match those the Node injector wrote        |
 | `opening-timers.json`                      | per map library, the timers between the gates and the first objective                          |
 | `capture.py`                               | the capture run: start-up, the tiles, recovery                                                |
@@ -286,7 +289,7 @@ cell there is no more detail: that's the game's own texture resolution.
   ```powershell
   mkdir "D:\Games\Heroes of the Storm\maps\heroes\singleplayermaps"
   copy work\towers-of-doom-structures.stormmap "D:\Games\Heroes of the Storm\maps\heroes\singleplayermaps\(10)trymemode.stormmap"
-  py capture.py work\towers-of-doom-structures.json --no-launch
+  heroes-capture capture work\towers-of-doom-structures.json --no-launch
   ```
 
   Delete that `(10)trymemode.stormmap` afterwards to get normal Try Mode back.
@@ -296,7 +299,7 @@ cell there is no more detail: that's the game's own texture resolution.
   3 minutes; `strip-missing.png` shows the screen's left edge.
 
 - **A "script failed to compile" error naming a `c_cameraValue…` constant:** re-run
-  inject.py with `--no-lens`. Without a narrow field of view, tall objects lean more at the
+  `map` with `--no-lens`. Without a narrow field of view, tall objects lean more at the
   screenshot edges; lower `--keep` (e.g. `0.4`) to use only the centre.
 
 - **HUD pieces still visible:** note which ones. There are more hide calls to try.
@@ -307,5 +310,5 @@ cell there is no more detail: that's the game's own texture resolution.
   distance. Raise `--px-per-cell` or `--fov` (both bring the camera closer).
 
 - **Minions flicker into some screenshots, or some screenshots have blurry textures:** raise
-  `--settle` in capture.py (the least time from a camera move to the kept screenshot, 0.1 s by
+  `--settle` of `heroes-capture capture` (the least time from a camera move to the kept screenshot, 0.1 s by
   default); units are swept four times a second.
