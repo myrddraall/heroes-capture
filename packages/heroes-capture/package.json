@@ -1,9 +1,11 @@
 {
-  "name": "map-capture",
+  "name": "@myrddraall/heroes-capture",
+  "version": "0.0.0-MAIN",
   "private": true,
-  "description": "Renders top-down images of Heroes of the Storm battlegrounds by driving the game client",
+  "description": "Captures Heroes of the Storm assets from the game client: battleground maps, sky layers, a parallax viewer",
   "type": "module",
   "scripts": {
+    "github.actions.pack": "gitflow pack",
     "inject": "node inject.mjs"
   },
   "dependencies": {
