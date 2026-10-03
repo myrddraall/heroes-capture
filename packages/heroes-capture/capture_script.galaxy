@@ -1,5 +1,5 @@
 //--------------------------------------------------------------------------------------------------
-// Map capture (injected by heroes-replay-stats tools/map-capture)
+// Map capture (injected by heroes-capture)
 // Chat "tile <n> <x> <y>" moves the camera to tile n; the status strip reports when it is done.
 //--------------------------------------------------------------------------------------------------
 const bool hrsCap_hideStructures = ${hide_structures};
@@ -64,7 +64,7 @@ const int hrsCap_statusCells = ${status_cells};
 const int hrsCap_statusCellW = ${status_cell_w};  // cell size in interface units
 const int hrsCap_statusCellH = ${status_cell_h};
 const int hrsCap_statusRows = ${status_rows};
-const int hrsCap_mapId = ${map_id};  // the prepared map's identity (inject.mjs)
+const int hrsCap_mapId = ${map_id};  // the prepared map's identity (inject.py)
 int hrsCap_status = c_invalidDialogId;
 int[${status_cells}] hrsCap_statusCtl;
 int hrsCap_statusBackdrop = c_invalidDialogControlId;
@@ -339,7 +339,7 @@ ${hero_ui_lines}            hrsCap_ApplyCamera(lv_p);
     }
 ${ui_lines}${bounds_line}
     hrsCap_LiftBounds();
-    GameSetBackground(0, "HrsSky${sky_model}", 100.0);  // the camera-fixed skybox (sky.mjs)
+    GameSetBackground(0, "HrsSky${sky_model}", 100.0);  // the camera-fixed skybox (sky.py)
     hrsCap_skyState = ${sky_state};${doodad_lines}
     UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
     // Every animation on the map paused (glows, fires, smoke, swaying trees, flags), the way
@@ -650,7 +650,7 @@ bool hrsCap_gt_KeyBlack_Func (bool testConds, bool runActions) {
     return true;
 }
 
-// "sky <colour> [<layer>]" (probes): the solid-colour skybox of that name (sky.mjs) on layer 0
+// "sky <colour> [<layer>]" (probes): the solid-colour skybox of that name (sky.py) on layer 0
 // (the camera-fixed skybox, the default) or 1 (c_backgroundTerrain, the terrain-relative
 // parallax layer, which Blizzard's arenas swap). "none" clears the layer, "heaven" is
 // HeavenSkybox, "mapsky" and "mapparallax" the map's own fixed and parallax sky models. At the

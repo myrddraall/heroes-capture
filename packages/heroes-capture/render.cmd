@@ -4,7 +4,7 @@ rem
 rem   render.cmd                                     Towers of Doom, structures kept
 rem   render.cmd "Cursed Hollow"                     another map
 rem   render.cmd "Cursed Hollow" hide                bare terrain, structures hidden
-rem   render.cmd "Towers of Doom" keep --fov 12      further options go to inject.mjs, except:
+rem   render.cmd "Towers of Doom" keep --fov 12      further options go to inject.py, except:
 rem     --show-ui      diagnostic: leave the HUD up, launch the map and stop
 rem     --probe-light  diagnostic: command sequences at chosen points, a shot after each
 rem     --probe-sky    diagnostic: one edge tile over each solid-colour skybox
@@ -28,7 +28,7 @@ set "DISTANCE=214"
 set "KEEP=0.4"
 set "GAME=D:\Games\Heroes of the Storm"
 
-rem Options after the map and structures go to inject.mjs as they are.
+rem Options after the map and structures go to inject.py as they are.
 set "ARGS="
 :collect
 if "%~3"=="" goto :collected
@@ -37,7 +37,7 @@ shift /3
 goto :collect
 :collected
 
-rem Diagnostic switches are handled here, not by inject.mjs.
+rem Diagnostic switches are handled here, not by inject.py.
 set "PROBE="
 echo %ARGS% | find "--probe-light" >nul && set "PROBE=--probe-light"
 echo %ARGS% | find "--probe-sky" >nul && set "PROBE=--probe-sky"
@@ -50,17 +50,12 @@ if defined PROBE set "ARGS=%ARGS:--probe-waits=%"
 set "SHOWUI="
 echo %ARGS% | find "--show-ui" >nul && set "SHOWUI=1"
 
-rem Install what the scripts need when it is missing (checked by the package itself: a
-rem node_modules left from another copy of the tool can lack it).
-if not exist node_modules\@jamiephan\stormlib\package.json (
-  call npm install || goto :error
-)
 py -c "import mss, pydirectinput, PIL, numpy, pyvips, scipy, dxcam" 2>nul || py -m pip install -r requirements.txt || goto :error
 
 echo.
 echo [1/3] Preparing %MAP% (structures: %STRUCTURES%, %SCREEN%)
 set "MANIFEST="
-for /f "usebackq delims=" %%m in (`node inject.mjs "%MAP%" --structures %STRUCTURES% --screen %SCREEN% --distance %DISTANCE% --keep %KEEP%%ARGS%`) do set "MANIFEST=%%m"
+for /f "usebackq delims=" %%m in (`py inject.py "%MAP%" --structures %STRUCTURES% --screen %SCREEN% --distance %DISTANCE% --keep %KEEP%%ARGS%`) do set "MANIFEST=%%m"
 if not defined MANIFEST goto :error
 
 if defined PROBE (

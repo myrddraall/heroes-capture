@@ -2,9 +2,10 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: the first run from the heroes-capture repo (the tool moved there; nothing in it
-rem changed): a full render of Dragon Shire, whose void is black terrain rather than sky.
-call "%~dp0render.cmd" "Dragon Shire" keep
+rem Current step: the first render with the Python injector (inject.py, the map archive written
+rem through StormLib; the Node one is gone). Battlefield of Eternity, as it writes the most into
+rem the map: the keyed sky copies and every sky texture. The first run downloads StormLib's DLL.
+call "%~dp0render.cmd" "Battlefield of Eternity" keep
 
 :copy
 rem Copy this run's output (everything in work\ except the map files) to the results folder,

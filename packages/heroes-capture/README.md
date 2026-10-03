@@ -1,4 +1,4 @@
-# map-capture
+# heroes-capture
 
 Renders top-down images of Heroes of the Storm battlegrounds by driving the game itself: a
 script injected into the map hides the HUD, the fog of war and the units, points the camera
@@ -11,13 +11,16 @@ logged in; capture.py then hands the prepared map to the running game.
 
 ## Setup (once)
 
-- [Node.js](https://nodejs.org) 20 or later, and [Python](https://www.python.org) 3.11 or later
+- [Python](https://www.python.org) 3.11 or later
 - In this folder:
 
   ```powershell
-  npm install
   pip install -r requirements.txt
   ```
+
+  The map archives are read and written with [StormLib](https://github.com/ladislav-zezula/StormLib):
+  its release DLL (v9.40) is downloaded on first use into
+  `%LOCALAPPDATA%\heroes-capture\cache` and checked against the release's SHA-256.
 
 - In the game's options: **Display Mode: Windowed (Fullscreen)** (screenshots of exclusive
   fullscreen come out black), your monitor's native resolution, graphics on Ultra.
@@ -41,7 +44,7 @@ The steps it runs:
 
 ```powershell
 # 1. Prepare: downloads the map, injects the capture script, plans the grid.
-node inject.mjs "Towers of Doom" --structures keep --screen 3840x2160
+python inject.py "Towers of Doom" --structures keep --screen 3840x2160
 
 # 2. Capture: launches the map, waits for it to load and for the intro to finish; leave the
 #    mouse and keyboard alone.
@@ -60,7 +63,7 @@ Map names are the file names in
 [jamiephan/HeroesOfTheStorm_S2MA/maps](https://github.com/jamiephan/HeroesOfTheStorm_S2MA/tree/main/maps)
 (kept current with the live game), or pass a path to any `.stormmap`.
 
-### Options (inject.mjs)
+### Options (inject.py)
 
 | Option                    | Default     | Effect                                                                                                         |
 | ------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------- |
@@ -120,9 +123,10 @@ cell there is no more detail: that's the game's own texture resolution.
 
 ## How it works
 
-- **inject.mjs** copies the `.stormmap` (an MPQ archive), reads the map size and camera bounds
-  from its `MapInfo`, plans a grid of camera positions, and appends the capture script
-  (`capture-script.mjs`) to `MapScript.galaxy`, called at the end of `InitMap`. It also adds
+- **inject.py** copies the `.stormmap` (an MPQ archive, written through StormLib), reads the map
+  size and camera bounds from its `MapInfo`, plans a grid of camera positions, and appends the
+  capture script (`capture_script.galaxy`, filled in by `capture_script.py`) to `MapScript.galaxy`,
+  called at the end of `InitMap`. It also adds
   the status strip's texture and the solid-colour skyboxes (see below). A map that is several arenas in one (Punisher Arena: one arena per round,
   stacked on the map, the camera bounds moved to the round's arena at run time) marks each
   with a region named `..._MapBounds` in its `Regions` file; with two or more, each gets its
@@ -148,11 +152,11 @@ cell there is no more detail: that's the game's own texture resolution.
   the latest look counts, and only a shallow look towards the light cleared every box. The
   light's direction comes from the map's tileset (`t3Terrain.xml`), the tileset's light set
   and that light set's "Key" light, with the map's own `TerrainData.xml` / `LightData.xml`
-  overriding; tilesets and light sets are in `light-sets.json` (`light-data.mjs` resolves
+  overriding; tilesets and light sets are in `light-sets.json` (`light_data.py` resolves
   them, `--refit-yaw` overrides). After a game update that adds tilesets, rebuild the table:
   extract every `mods/**/GameData/TerrainData.xml` and `LightData.xml` from the game's CASC
   storage into a folder (file names = CASC paths with `__` for the separators) and run
-  `node generate-light-sets.mjs <folder>`.
+  `python generate_light_sets.py <folder>`.
 - **Opening events first.** The gates open 3 s in (GameLib's `libCore_gv_bALOpenTheGatesDelay`
   and its countdown timer); then, for 8 real seconds, the map's own timers between the gates and
   its first objective are cut short as each starts (`opening-timers.json`, by the libraries the
@@ -172,7 +176,7 @@ cell there is no more detail: that's the game's own texture resolution.
   Depth precision goes with the far/near ratio; at the capture distance, flat decals lying on
   surfaces (road trim, lava cracks, low decorations) were z-fighting the ground and going
   missing in patches. Found with lighting probes that varied the clip planes.
-- **Transparent void (`sky.mjs`).** The void around and below a map is the skybox. The
+- **Transparent void (`sky.py`).** The void around and below a map is the skybox. The
   map gets four solid-colour skyboxes (white, black, magenta, lime): a skybox is a model on a stock mesh whose textures are
   referenced by path, and a file in the map at that path replaces the game's, so each colour is
   a stock mesh (the Braxis bowl and the "parallax" bowls; the big heaven/Luxoria bowl won't swap
@@ -247,10 +251,12 @@ cell there is no more detail: that's the game's own texture resolution.
 
 | File                                       | What it does                                                                                  |
 | ------------------------------------------ | --------------------------------------------------------------------------------------------- |
-| `inject.mjs`                               | prepares the map: reads it, plans the grid, injects the script, adds the textures, writes the manifest |
-| `capture-script.mjs`                       | the Galaxy script injected into the map (scene, opening, status strip, chat commands)          |
-| `sky.mjs`, `light-data.mjs`                | the solid-colour skyboxes; the map's tileset, lighting and sky from `light-sets.json`          |
-| `generate-light-sets.mjs`                  | rebuilds `light-sets.json` from the game's data                                               |
+| `inject.py`                                | prepares the map: reads it, plans the grid, injects the script, adds the textures, writes the manifest |
+| `capture_script.galaxy`, `capture_script.py` | the Galaxy script injected into the map (scene, opening, status strip, chat commands), and its values |
+| `sky.py`, `light_data.py`                  | the solid-colour skyboxes; the map's tileset, lighting and sky from `light-sets.json`          |
+| `stormlib.py`                              | MPQ archives through StormLib (ctypes)                                                        |
+| `js_json.py`                               | JSON written as JavaScript writes it, so manifests match those the Node injector wrote        |
+| `generate_light_sets.py`                   | rebuilds `light-sets.json` from the game's data                                               |
 | `opening-timers.json`                      | per map library, the timers between the gates and the first objective                          |
 | `capture.py`                               | the capture run: start-up, the tiles, recovery                                                |
 | `status.py`                                | reads the status strip                                                                        |
@@ -288,7 +294,7 @@ cell there is no more detail: that's the game's own texture resolution.
   3 minutes; `strip-missing.png` shows the screen's left edge.
 
 - **A "script failed to compile" error naming a `c_cameraValue…` constant:** re-run
-  inject.mjs with `--no-lens`. Without a narrow field of view, tall objects lean more at the
+  inject.py with `--no-lens`. Without a narrow field of view, tall objects lean more at the
   screenshot edges; lower `--keep` (e.g. `0.4`) to use only the centre.
 
 - **HUD pieces still visible:** note which ones. There are more hide calls to try.

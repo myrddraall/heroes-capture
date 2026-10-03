@@ -3,17 +3,10 @@
   "version": "0.0.0-MAIN",
   "private": true,
   "description": "Captures Heroes of the Storm assets from the game client: battleground maps, sky layers, a parallax viewer",
-  "type": "module",
   "scripts": {
     "build.exe": "python tools/build_exe.py",
     "github.actions.build": "python tools/build_exe.py",
     "github.actions.pack": "gitflow pack",
-    "inject": "node inject.mjs"
-  },
-  "dependencies": {
-    "@jamiephan/stormlib": "^0.3.0"
-  },
-  "engines": {
-    "node": ">=20"
+    "inject": "python inject.py"
   }
 }

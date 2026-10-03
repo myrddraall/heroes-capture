@@ -53,7 +53,9 @@ outputs are shared.
 - The release version is embedded in the executable's version resource (`VS_VERSIONINFO`), which
   the release checks (see the release section below).
 - StormLib (MPQ archives: the maps) and CascLib (the game's CASC storage) are called through
-  ctypes, their DLLs inside the executable. Both are MIT, both by Ladislav Zezula.
+  ctypes, their DLLs inside the executable. Both are MIT, both by Ladislav Zezula. StormLib is its
+  own release DLL (v9.40), checked against the release's published SHA-256: until stage 4 bundles
+  it, `stormlib.py` downloads it once into the cache.
 
 ### Assets at runtime
 
@@ -121,7 +123,9 @@ artifacts:
 Proposed; the boundaries are chosen before each starts.
 
 1. **Injector in Python.** Port `inject.mjs`, `capture-script.mjs`, `sky.mjs` and
-   `light-data.mjs`; MPQ writing through StormLib. Node leaves the package.
+   `light-data.mjs`; MPQ writing through StormLib. Node leaves the package. Ported and checked
+   against the Node injector (9 maps, 6 option sets: manifests and all 4,644 archive files
+   identical); the first real render with it is next.
 2. **Game data from CASC.** CascLib, local install first; a spike on its online storage for Heroes;
    light sets and the keyed sky models read at runtime; `light-sets.json`,
    `generate-light-sets.mjs` and `local-assets/` go.

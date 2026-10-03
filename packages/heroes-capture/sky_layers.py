@@ -9,7 +9,7 @@ it in the same position every time) each sky layer; phase correlation gives the 
 fixed skybox moves with the camera (rate 0 by definition).
 
 Layers: "parallax", the map's parallax model as it is (background art and haze together); and
-"haze", the keyed copy over black, when the map has one (sky.mjs PARALLAX_KEYS), which shows the
+"haze", the keyed copy over black, when the map has one (sky.py PARALLAX_KEYS), which shows the
 haze shells alone. Written to <id>/sky-layers.json.
 """
 
@@ -144,7 +144,7 @@ def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep:
     """The sky layers as images, for a parallax viewer: the camera steps across the map (steps
     sized so the sky, moving at its measured rate, moves `keep` of a screen between
     positions), the map clipped away, and at each position the keyed copies of the parallax
-    model are shot (sky.mjs KEY_VARIANTS: the background art alone; white without haze; the
+    model are shot (sky.py KEY_VARIANTS: the background art alone; white without haze; the
     haze over white; over black), then the background art over the map's own fixed skybox
     (where the art lets it through). The fixed skybox once, alone. Into <id>/sky/, with
     positions.json; stitch.py makes the layers and composites from them."""

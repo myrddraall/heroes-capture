@@ -2,7 +2,7 @@
 
     python capture.py work/towers-of-doom-structures.json [options]
 
-The injected map script (capture-script.mjs) takes chat commands and reports through its status
+The injected map script (capture_script.galaxy) takes chat commands and reports through its status
 strip (status.py) when each is done and where the camera really is. The capture:
 
   1. starts Heroes if needed and launches the map (game_control.py);
@@ -19,7 +19,7 @@ When the match is lost (the game closes, the map fails to load, another map is r
 is launched again and resumes from the first missing tile, three times at most.
 
 Captures the game window itself, on whichever monitor it is. Run the game in
-"Windowed (Fullscreen)" at the resolution given to inject.mjs, and leave the mouse and keyboard
+"Windowed (Fullscreen)" at the resolution given to inject.py, and leave the mouse and keyboard
 alone while it captures.
 """
 
@@ -67,7 +67,7 @@ def tile_command(tile: dict) -> str:
 
 
 def plan_grid(manifest: dict, bounds: dict) -> None:
-    """Re-plan the capture grid for other camera bounds (inject.mjs's planGrid, in Python), in
+    """Re-plan the capture grid for other camera bounds (inject.py's plan_grid), in
     place: tiles, area, cameraBounds, cols, rows, step. Camera targets stay inside the bounds
     (the game clamps any beyond them), first and last on the bounds, the rest spread evenly,
     at most `keep` of a screen apart."""
@@ -639,7 +639,7 @@ def extend_past_grid(manifest: dict, tiles: list, flagged: list, take, session, 
 
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("manifest", type=Path, help="the .json written by inject.mjs")
+    ap.add_argument("manifest", type=Path, help="the .json written by inject.py")
     ap.add_argument("--game", default=DEFAULT_GAME, help=f"Heroes of the Storm folder (default {DEFAULT_GAME})")
     ap.add_argument("--battlenet", default=os.environ.get("HRS_BATTLENET"), help="the Battle.net app (Battle.net.exe), used to start Heroes when it isn't running; found automatically if not given")
     ap.add_argument("--no-launch", action="store_true", help="the map is already running")
@@ -658,7 +658,7 @@ def main() -> None:
     args = parse_args()
     manifest = json.loads(args.manifest.read_text())
     if not manifest.get("status"):
-        sys.exit(f"{args.manifest} has no status strip: prepare the map again with inject.mjs")
+        sys.exit(f"{args.manifest} has no status strip: prepare the map again with inject.py")
     tiles = manifest["tiles"]
     out = args.manifest.parent / manifest["id"] / "tiles"
     out.mkdir(parents=True, exist_ok=True)
