@@ -5,7 +5,7 @@ textures are referenced by path. A file inside the map archive at that same path
 of the game's, so each colour gets its own stock mesh and a solid-colour DDS at every texture path
 that mesh uses. The map's tileset loses its parallax layer and its fog (which would tint the sky);
 the script sets the camera-fixed skybox with GameSetBackground: white at each tile, black for the
-second clean shot, chat "sky <colour>" for probes.
+second clean shot, command "sky <colour>" for probes.
 """
 
 import struct
@@ -22,7 +22,7 @@ SKYBOXES = "Assets\\Skyboxes\\"
 # sharing a texture must agree on its paint. A texture painted here is painted for every model in
 # the map that uses it, so none may be one a map's own sky uses: a cyan made from Hanamura's
 # parallax mesh blanked Hanamura's sky and the cloud textures of Battlefield of Eternity's parallax
-# sky (Storm_Heaven_SkyParallax_*). Chat "sky none" (no skybox at all) draws plain black too.
+# sky (Storm_Heaven_SkyParallax_*). Command "sky none" (no skybox at all) draws plain black too.
 SKIES = {
     "black": {
         "rgb": (0, 0, 0),
@@ -55,14 +55,14 @@ def model_id(colour: str) -> str:
     return f"HrsSky{colour[0].upper()}{colour[1:]}"
 
 
-# Our white and black skies again at larger scales (models HrsSkyWhitex3, ...; chat "sky whitex3"):
+# Our white and black skies again at larger scales (models HrsSkyWhitex3, ...; command "sky whitex3"):
 # a bigger shell sits further out, so it can be a key behind the map's own sky shells (the parallax
 # draws in front of a 4300-unit bowl, behind our 700-unit ones).
 SCALED = {"colours": ["white", "black"], "scales": [3, 10]}
 
 # The map's own parallax sky models we can make keyed copies of: the model file (read from the
 # game's storage) and its background texture.
-# Each copy points that texture at a white or a black one (chat "sky parallaxwhite" /
+# Each copy points that texture at a white or a black one (command "sky parallaxwhite" /
 # "sky parallaxblack") while sharing the haze textures, so the haze can be matted over white and
 # black within one match. The name is replaced by one of the same length, which leaves the rest of
 # the model file valid.
@@ -74,7 +74,7 @@ PARALLAX_KEYS = {
     },
 }
 
-# The keyed copies (chat "sky parallax<name>"): what each puts in place of the background art (None:
+# The keyed copies (command "sky parallax<name>"): what each puts in place of the background art (None:
 # the real art) and whether the haze stays. white/black: the haze over white and black (its matte);
 # bare: the background art without the haze (its own layer); whitebare: white without the haze (the
 # white level the game's lighting gives the key, for an exact matte).

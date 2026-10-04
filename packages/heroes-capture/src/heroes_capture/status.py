@@ -2,7 +2,7 @@
 
 The map script (capture_script.galaxy, hrsCap_Status*) draws a dialog in the top-left corner of
 the screen: two columns of black-or-white cells, wider than they are tall, redrawn at the end of
-every chat command and on every sweep. Reading it from a screenshot is a handful of pixel
+every command and on every sweep. Reading it from a screenshot is a handful of pixel
 averages, so the capture can poll it many times a second instead of judging the picture.
 
 Cells, top to bottom: 0 white and 1 black (the locator), then bits, least significant first:

@@ -5,6 +5,8 @@ import time
 import mss
 import numpy as np
 
+from .runlog import warn
+
 
 def _mss():
     return mss.MSS() if hasattr(mss, "MSS") else mss.mss()  # mss 10 renamed it
@@ -57,7 +59,7 @@ class ScreenGrabber:
                     self.camera, self.box = camera, (x, y, x + region["width"], y + region["height"])
                     break
         except Exception as e:  # not installed, or no DXGI output: fall back
-            print(f"(desktop duplication unavailable: {e}; using mss)", flush=True)
+            warn(f"desktop duplication unavailable: {e}; using mss")
 
     @property
     def method(self) -> str:

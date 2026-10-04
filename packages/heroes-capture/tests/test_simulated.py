@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from conftest import PACKAGE, simulate
+from conftest import PACKAGE, sim_slot, simulate
 
 RELAUNCH = "relaunch attempted: -m heroes_capture capture test-map.json --game game"
 
@@ -16,13 +16,16 @@ SCENARIOS = {
     # name: (mode, capture args, environment, the outcome, text the run log must show)
     "matte": ("matte", [], {}, "finished", "sky layer images: 4 positions"),
     "black": ("black", [], {}, "finished", "tile 12/12"),
-    "resume": ("matte", ["--no-launch", "--start", "9"], {"FAKE_START": "map"}, "finished", "tile 12/12"),
+    "resume": ("matte", ["--no-launch", "--start", "9"], {"FAKE_START": "map"}, "finished", "Test Map: 15 tiles, carrying on at tile 10"),
     "focus": ("matte", [], {"FAKE_FAULT": "focus", "FAKE_FAULT_AT": "30.5"}, "finished", "focus lost during tile"),
     "edges": ("matte", [], {"FAKE_BOUNDS": "22,26,42,38"}, "finished", "more beyond them (ring 1)"),
     "hidden world": ("matte", [], {"FAKE_HIDDEN": "1"}, "finished", "the sky work waits until the map is ready"),
     "wrong map": ("matte", [], {"FAKE_FAULT": "wrongmap"}, f"error RuntimeError: {RELAUNCH} (HRS_RECOVERIES=1)", "another map is running"),
-    "silent strip": ("matte", [], {"FAKE_FAULT": "silent", "FAKE_FAULT_AT": "35"}, f"error RuntimeError: {RELAUNCH} --start 9", "lost the match"),
-    "crash": ("matte", [], {"FAKE_FAULT": "crash", "FAKE_FAULT_AT": "36"}, f"error RuntimeError: {RELAUNCH}", "lost the match"),
+    "silent strip": ("matte", [], {"FAKE_FAULT": "silent", "FAKE_FAULT_AT": "28.85"}, f"error RuntimeError: {RELAUNCH} --start 9", "lost the match"),
+    "crash": ("matte", [], {"FAKE_FAULT": "crash", "FAKE_FAULT_AT": "27"}, f"error RuntimeError: {RELAUNCH} --start ", "lost the match"),  # carries on at the lost tile
+    "game menu": ("matte", [], {"FAKE_FAULT": "menu", "FAKE_FAULT_AT": "25"}, "finished", "a game menu is open"),  # waited out, not a lost match
+    "box focus": ("matte", [], {"FAKE_FAULT": "boxfocus", "FAKE_FAULT_AT": "25"}, "finished", ("giving the command box the keyboard back", "tile 12/12")),
+    "broken script": ("matte", [], {"FAKE_FAULT": "broken"}, "error ScriptBroken: the map's script failed to compile", ""),  # stops at once, no relaunch
     "probe sky": ("matte", ["--probe-sky"], {}, "finished", "05-none-layer0"),
     "probe depth": ("matte", ["--probe-depth"], {}, "finished", "sky layers: parallax rate"),
     "launch only": ("matte", ["--launch-only"], {}, "finished", ""),
@@ -34,17 +37,20 @@ def test_scenario(name, tmp_path):
     mode, args, env, outcome, shown = SCENARIOS[name]
     run = simulate(tmp_path, mode, *args, **env)
     assert run["outcome"].startswith(outcome), run["outcome"]
-    assert shown in run["log"], run["log"][-3000:]
+    for text in (shown,) if isinstance(shown, str) else shown:
+        assert text in run["log"], run["log"][-3000:]
 
 
 def test_stitch_of_a_simulated_render(tmp_path):
     run = simulate(tmp_path, "matte")
     assert run["outcome"] == "finished"
-    result = subprocess.run([sys.executable, "-m", "heroes_capture", "stitch", "test-map.json", "--tiles"], cwd=tmp_path,
-                            capture_output=True, text=True, env={"PYTHONPATH": str(PACKAGE / "src")})
+    with sim_slot():
+        result = subprocess.run([sys.executable, "-m", "heroes_capture", "stitch", "test-map.json", "--tiles"], cwd=tmp_path,
+                                capture_output=True, text=True, env={"PYTHONPATH": str(PACKAGE / "src")})
     assert result.returncode == 0, result.stderr[-3000:]
+    out = tmp_path / "maps" / "test-map"  # <output-dir>/<map id>, from the map's name "Test Map"
     for name in ("test-map.png", "test-map.geo.json", "test-map-layers.json", "test-map-composite.png",
                  "test-map-viewer/index.html", "test-map-tiles"):
-        assert (tmp_path / name).exists(), name
-    layers = json.loads((tmp_path / "test-map-layers.json").read_text())
+        assert (out / name).exists(), name
+    layers = json.loads((out / "test-map-layers.json").read_text())
     assert {"map", "fixed", "background", "haze"} <= set(layers)

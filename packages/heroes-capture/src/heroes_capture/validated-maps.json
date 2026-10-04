@@ -1,0 +1,17 @@
+{
+  "_comment": "The maps whose renders have been reviewed and, where needed, tuned for: map name as the game names it -> the heroes-capture version it was validated with, and what was checked. Hand-curated: add a map once its render has been looked over. heroes-capture map list shows the rest as not yet validated.",
+  "maps": {
+    "Battlefield of Eternity": {
+      "version": "0.1.0",
+      "note": "sky layers (background art, haze), composites, the arches past the top edge"
+    },
+    "Dragon Shire": {
+      "version": "0.1.0",
+      "note": "black-terrain void made transparent"
+    },
+    "Punisher Arena": {
+      "version": "0.1.0",
+      "note": "three arenas, one image each without the others' edges; sky layers; quit ends the match"
+    }
+  }
+}

@@ -153,7 +153,7 @@ def bring_game_to_front() -> bool:
 
 
 # ------------------------------------------------------------------------------------------------
-# Keyboard input (SendInput with scan codes, which the game accepts)
+# Keyboard input: keys as scan codes (which the game accepts), text as Unicode (never a hotkey)
 # ------------------------------------------------------------------------------------------------
 
 
@@ -180,20 +180,22 @@ class INPUT(ctypes.Structure):
 
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_SCANCODE = 0x0008
-EXTRA_KEYS = {"numpad5": 0x4C}  # scan codes pydirectinput leaves out (its number pad entries are commented out)
 
 
 def _key_event(key: str, up: bool) -> INPUT:
-    code = EXTRA_KEYS.get(key) or pydirectinput.KEYBOARD_MAPPING[key]
+    code = pydirectinput.KEYBOARD_MAPPING[key]
     return INPUT(type=1, ki=KEYBDINPUT(0, code, KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if up else 0), 0, 0))
 
 
-def type_burst(keys: list[str]) -> None:
-    """Press and release each key, all in one SendInput call: the game gets them in order with
-    nothing else in between, as fast as it reads them. Only for characters typed into the open
-    chat box: the game can miss a hotkey (such as the Enter that opens and sends chat) pressed
-    and released in the same instant; see hold_key."""
-    events = [_key_event(key, up) for key in keys for up in (False, True)]
+KEYEVENTF_UNICODE = 0x0004
+
+
+def type_unicode(text: str) -> None:
+    """Characters as text input (KEYEVENTF_UNICODE) rather than key presses, all in one SendInput
+    call: a text field takes them, and the game never takes them as keys (the input probe found a
+    key it counted every press of counted no Unicode text), so a miss can't set off a hotkey."""
+    events = [INPUT(type=1, ki=KEYBDINPUT(0, ord(ch), KEYEVENTF_UNICODE | (KEYEVENTF_KEYUP if up else 0), 0, 0))
+              for ch in text for up in (False, True)]
     batch = (INPUT * len(events))(*events)
     ctypes.windll.user32.SendInput(len(events), batch, ctypes.sizeof(INPUT))
 

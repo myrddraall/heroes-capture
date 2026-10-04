@@ -23,7 +23,8 @@ import numpy as np
 
 from .frames import save_frame
 from .game_control import settle, step
-from .runlog import log
+from . import ui
+from .runlog import log, warn
 
 SKY_SETTLE = 0.1  # real seconds for a sky swap to be drawn before its shot (was 1; the waits probe found shots within one level down to 0.05)
 MAP_SETTLE = 0.1  # real seconds after a camera move before a shot of the map (as the tiles' settle)
@@ -73,7 +74,7 @@ def consistent(name: str, rate: list, strength: list) -> None:
     if not any(usable):
         return
     best = max((axis for axis in (0, 1) if usable[axis]), key=lambda axis: strength[axis] or 0.0)
-    log(f"  sky layers: {name}'s rates {rate} disagree (matches {strength}); taking axis {'xy'[best]}'s {rate[best]} for both")
+    warn(f"sky layers: {name}'s rates {rate} disagree (matches {strength}); taking axis {'xy'[best]}'s {rate[best]} for both")
     rate[0] = rate[1] = rate[best]
 
 
@@ -115,7 +116,7 @@ def measure(session, manifest: dict, out_dir: Path, area: dict | None = None) ->
 
     base = shoot(*centre)
     if base is None:
-        log("  sky layers: the map didn't answer; not measured")
+        warn("sky layers: the map didn't answer; not measured")
         return None
     result = {"cameraDistance": manifest["distance"], "nearClip": clip, "measured": time.strftime("%Y-%m-%d %H:%M"),
               "layers": {"fixed": {"model": models.get("fixed"), "rate": [0.0, 0.0], "note": "moves with the camera"}}}
@@ -125,12 +126,12 @@ def measure(session, manifest: dict, out_dir: Path, area: dict | None = None) ->
     for axis, (ox, oy) in enumerate(OFFSETS):
         moved = shoot(centre[0] + ox, centre[1] + oy)
         if moved is None:
-            log(f"  sky layers: no answer at offset {ox, oy}; that axis not measured")
+            warn(f"sky layers: no answer at offset {ox, oy}; that axis not measured")
             continue
         map_dx, map_dy, map_strength = phase_offset(base["map"], moved["map"])
         map_shift = map_dx if axis == 0 else map_dy
         if abs(map_shift) < 20 or map_strength < 0.05:
-            log(f"  sky layers: the map didn't move measurably ({map_shift:.1f} px, strength {map_strength:.2f}); axis {axis} skipped")
+            warn(f"sky layers: the map didn't move measurably ({map_shift:.1f} px, strength {map_strength:.2f}); axis {axis} skipped")
             continue
         moved_cells = moved["camera"][axis] - base["camera"][axis]
         if abs(moved_cells) > 1:
@@ -176,7 +177,7 @@ def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep:
     rate_xy = [max([r[axis] for r in rates if r[axis]], default=None) for axis in (0, 1)]
     scale = [s for s in measured.get("mapPxPerCell", []) if s]
     if not any(rate_xy) or not scale:
-        log("  sky layer images: no measured rate; skipped")
+        warn("sky layer images: no measured rate; skipped")
         return
     rate_xy = [r or max(r2 for r2 in rate_xy if r2) for r in rate_xy]  # an axis not measured: the other's
     scale = float(np.mean(scale))
@@ -225,32 +226,34 @@ def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep:
         saver.shutdown(wait=True)
         return
     n = 0
-    for y in reversed(ys):  # north first, like the tiles
-        for x in xs:
-            name = f"p{n:03d}"
+    with ui.bar(len(xs) * len(ys), "sky positions") as advance:
+        for y in reversed(ys):  # north first, like the tiles
+            for x in xs:
+                name = f"p{n:03d}"
 
-            def one() -> None:
-                camera = at(x, y, clip)
-                if camera is None:
-                    raise RuntimeError("the map didn't answer")
-                for variant in ("bare", "whitebare", "white", "black"):
-                    if session.send(f"sky parallax{variant} 1") is None:
+                def one() -> None:
+                    camera = at(x, y, clip)
+                    if camera is None:
                         raise RuntimeError("the map didn't answer")
-                    settle(SKY_SETTLE)  # drawn; set anew at speed 1, the haze is at the same frozen moment each time
-                    save(session.grab(dark_ok=True), f"{name}-{variant}")
-                # The background art over the map's own fixed skybox: where it lets the skybox through.
-                for command in ("sky mapsky 0", "sky parallaxbare 1"):
-                    if session.send(command) is None:
-                        raise RuntimeError("the map didn't answer")
-                settle(SKY_SETTLE)
-                save(session.grab(dark_ok=True), f"{name}-bareoverfixed")
-                record["positions"][name] = {"camera": list(camera)}
+                    for variant in ("bare", "whitebare", "white", "black"):
+                        if session.send(f"sky parallax{variant} 1") is None:
+                            raise RuntimeError("the map didn't answer")
+                        settle(SKY_SETTLE)  # drawn; set anew at speed 1, the haze is at the same frozen moment each time
+                        save(session.grab(dark_ok=True), f"{name}-{variant}")
+                    # The background art over the map's own fixed skybox: where it lets the skybox through.
+                    for command in ("sky mapsky 0", "sky parallaxbare 1"):
+                        if session.send(command) is None:
+                            raise RuntimeError("the map didn't answer")
+                    settle(SKY_SETTLE)
+                    save(session.grab(dark_ok=True), f"{name}-bareoverfixed")
+                    record["positions"][name] = {"camera": list(camera)}
 
-            try:
-                step(one, f"sky layer images {n + 1}/{len(xs) * len(ys)}")
-            except RuntimeError as e:
-                log(f"  sky position {n + 1}: {e}; skipped")
-            n += 1
+                try:
+                    step(one, f"sky layer images {n + 1}/{len(xs) * len(ys)}")
+                except RuntimeError as e:
+                    warn(f"sky position {n + 1}: {e}; skipped")
+                n += 1
+                advance()
     step(lambda: session.send("sky mapparallax 1"), "putting the map's own parallax back")
     saver.shutdown(wait=True)
     (folder / "positions.json").write_text(json.dumps(record, indent=2))

@@ -4,11 +4,16 @@
 
 Fakes ctypes.windll (process, window and input calls), pydirectinput, mss and subprocess, and a
 virtual clock (time.time/time.sleep), then runs heroes_capture.capture.main() on
-<work dir>/test-map.json (written by makemanifest.py). The fake game decodes the keys typed into
-chat, carries out the capture script's commands, and draws frames with the status strip the way
-capture_script.galaxy does. Environment: FAKE_FAULT (focus, wrongmap, silent, crash) and
-FAKE_FAULT_AT (virtual seconds), FAKE_START=map (the map already running), FAKE_BOUNDS,
-FAKE_HIDDEN (the world hidden until the map is ready), FAKE_NO_KEY, FAKE_SKY_RATE.
+<work dir>/test-map.json (written by makemanifest.py). The fake game has the map's command box
+(capture_script.galaxy): it has the keyboard from the match's start, takes typed text (Unicode or
+keys; Enter does nothing while it has the keyboard) and carries out the last complete ";"-ended
+command as the text arrives; the chat box, open when the box hasn't the keyboard, only answers
+"focus", which gives it back. It draws frames with the status strip the way the script does.
+Environment: FAKE_FAULT (focus, wrongmap, silent, crash, menu: the Esc menu open for 6 s, taking
+the keys; boxfocus: the box loses the keyboard; broken: the map's script failed to compile, every
+interface panel showing) and FAKE_FAULT_AT (virtual seconds),
+FAKE_START=map (the map already running), FAKE_BOUNDS, FAKE_HIDDEN (the world hidden until the
+map is ready), FAKE_SKY_RATE.
 """
 
 import ctypes
@@ -21,6 +26,7 @@ import types
 from pathlib import Path
 
 import numpy as np
+from menus import broken_interface, game_menu
 from PIL import Image
 
 TOOL, WORK = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
@@ -41,11 +47,10 @@ def _sleep(s):
 time.sleep = _sleep
 
 # ---------------------------------------------------------------- keys
-KEYS = {"enter": 28, "space": 57, "backspace": 14, "alt": 56, "esc": 1}
+KEYS = {"enter": 28, "space": 57, "backspace": 14, "alt": 56, "esc": 1, "tab": 15, "\\": 43}
 for i, ch in enumerate("abcdefghijklmnopqrstuvwxyz0123456789.-:,@_"):
     KEYS[ch] = 100 + i
 CODE_TO_KEY = {v: k for k, v in KEYS.items()}
-CODE_TO_KEY[0x4C] = "numpad5"
 pdi = types.ModuleType("pydirectinput")
 pdi.KEYBOARD_MAPPING = KEYS
 pdi.PAUSE = 0.0
@@ -79,6 +84,7 @@ class Game:
         self.haze_alpha = np.asarray(Image.fromarray((haze * 255).astype(np.uint8)).resize((64 * 48, 64 * 48), Image.BILINEAR), np.float32) / 255
         self.sky_rate = float(os.environ.get("FAKE_SKY_RATE", "0.4"))
         self.menu = self._menu_frame()
+        self.box, self.box_focus, self.box_lost = "", True, False  # the map's command box
 
     def _menu_frame(self):
         frame = np.full((H, W, 3), 60, np.uint8)
@@ -97,6 +103,7 @@ class Game:
 
     def launch(self, path):
         self.map_id = MAP_ID
+        self.box, self.box_focus = "", True  # a new match: the map's box, with the keyboard
         self.set_state("loading")
         self.pending.append((_now[0] + 6.0, lambda: self.set_state("map")))
 
@@ -105,6 +112,25 @@ class Game:
         self.pending = [p for p in self.pending if p[0] > _now[0]]
         for _, fn in sorted(due, key=lambda p: p[0]):
             fn()
+        if _fault("boxfocus") and not self.box_lost:  # something took the keyboard from the box
+            self.box_lost, self.box_focus = True, False
+
+    def box_typed(self, ch):
+        """Text into the command box: its last complete command carried out, the box emptied."""
+        self.box += ch
+        if ";" in self.box:
+            text = self.box.rsplit(";", 1)[0].split(";")[-1]
+            self.box = ""
+            self.command(text)
+
+    def char(self, ch):
+        """Unicode text: into the chat box or the command box, never a key to the game."""
+        if _menu_open():
+            return
+        if self.chat is not None:
+            self.chat += ch
+        elif self.box_focus:
+            self.box_typed(ch)
 
     # match timeline (seconds since the map state began)
     def t(self):
@@ -117,13 +143,12 @@ class Game:
         return 0 if t < 3 else 1 if t < 13 else 2
 
     def key(self, code, up):
-        if up:
-            return
         k = CODE_TO_KEY[code]
-        if k == "numpad5":
-            if self.chat is None and self.state == "map" and not os.environ.get("FAKE_NO_KEY"):
-                self.log.append(f"{_now[0] - START:.2f} key numpad5")
-                self.pending.append((_now[0] + 0.05, lambda: setattr(self, "sky", 2)))
+        if up or _menu_open():
+            return  # with the Esc menu open, keys go to it
+        if self.chat is None and self.box_focus:
+            if k != "enter":  # Enter doesn't open the chat box while the command box has the keyboard
+                self.box_typed(" " if k == "space" else k)
             return
         if k == "enter":
             if self.chat is None:
@@ -131,18 +156,20 @@ class Game:
             else:
                 text, self.chat = self.chat, None
                 if text:
-                    self.command(text)
+                    self.command(text, chat=True)
         elif self.chat is not None:
             if k == "backspace":
                 self.chat = self.chat[:-1]
             else:
                 self.chat += " " if k == "space" else k
 
-    def command(self, text):
-        self.log.append(f"{_now[0] - START:.2f} chat {text!r}")
+    def command(self, text, chat=False):
+        self.log.append(f"{_now[0] - START:.2f} {'chat' if chat else 'box'} {text!r}")
         if self.state != "map":
             return
-        words = text.split()
+        words = text.replace(";", " ").split()
+        if not words or (chat and words[0] != "focus"):
+            return  # through the chat, the map answers only "focus"
         try:
             seq = int(float(words[-1])) & 255
         except ValueError:
@@ -187,6 +214,9 @@ class Game:
             ack(0.05)
         elif cmd in ("clean", "pause", "bgspeed", "refitwait", "hidemap"):
             ack(0.05)
+        elif cmd == "focus":
+            self.box_focus = True
+            ack(0.05)
         elif cmd == "quit":
             self.leaving = True
             self.pending.append((_now[0] + 4.0, lambda: self.set_state("loading")))
@@ -209,6 +239,15 @@ class Game:
         return bits
 
     def frame(self):
+        if self.state == "map" and FAULT == "broken":  # the map's script failed to compile: no strip, every panel showing
+            if "broken" not in self.cache:
+                self.cache["broken"] = broken_interface(np.full((H, W, 3), 90, np.uint8))
+            return self.cache["broken"]
+        if self.state == "map" and _menu_open():
+            return game_menu(self.match_frame(), "esc")
+        return self.match_frame()
+
+    def match_frame(self):
         if self.state == "menu":
             return self.menu
         if self.state == "loading" or (self.state == "map" and self.t() < 2 and not self.leaving):
@@ -289,7 +328,11 @@ def _send_input(n, events, size):
     events = _obj(events)
     seq = [events] if not hasattr(events, "__len__") else list(events)
     for e in seq[:n]:
-        GAME.key(e.ki.wScan, bool(e.ki.dwFlags & 0x0002))
+        if e.ki.dwFlags & 0x0004:  # Unicode text
+            if not e.ki.dwFlags & 0x0002:
+                GAME.char(chr(e.ki.wScan))
+        else:
+            GAME.key(e.ki.wScan, bool(e.ki.dwFlags & 0x0002))
     return n
 
 
@@ -314,13 +357,25 @@ def _fault(name):
     return FAULT == name and _now[0] - START >= FAULT_AT
 
 
+def _menu_open():
+    return FAULT == "menu" and FAULT_AT <= _now[0] - START < FAULT_AT + 6
+
+
 def _crashed():
     return _fault("crash")
 
 
+FOREGROUND = [100]  # the window in front: the game (100), or another after an alt-tab
+
+
+def _to_front(*a):
+    FOREGROUND[0] = 100
+    return 1
+
+
 def _foreground():
     t = _now[0] - START
-    return 200 if FAULT == "focus" and FAULT_AT <= t < FAULT_AT + 3 else 100
+    return 200 if FAULT == "focus" and FAULT_AT <= t < FAULT_AT + 3 else FOREGROUND[0]
 
 
 def _enum_processes(pids, size, used):
@@ -347,8 +402,8 @@ class User32:
     IsWindowVisible = Fn(lambda hwnd: 1)
     EnumWindows = Fn(lambda visit, lp: visit(100, None))
     ShowWindow = Fn(lambda *a: 1)
-    SwitchToThisWindow = Fn(lambda *a: 1)
-    SetForegroundWindow = Fn(lambda *a: 1)
+    SwitchToThisWindow = Fn(_to_front)
+    SetForegroundWindow = Fn(_to_front)
     SetCursorPos = Fn(lambda x, y: 1)
     SetProcessDPIAware = Fn(lambda: 1)
 

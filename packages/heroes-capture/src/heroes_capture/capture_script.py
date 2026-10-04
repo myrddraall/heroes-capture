@@ -3,8 +3,8 @@ filled in (inject.py appends it before InitMap and calls hrsCap_Init at InitMap'
 the map's intro cutscene, opens the gates early and cuts the map's opening timers short, reveals
 the whole map, hides the HUD, removes units (and keeps removing them as they spawn), keeps or hides
 structures, pauses the map's animations, sets the solid-colour skybox and points the camera
-straight down. capture.py drives it through chat commands ("tile <n> <x> <y>", "clean", "black",
-"quit", ...) and reads its status strip, drawn in the screen's top-left corner, to know when each
+straight down. capture.py drives it through commands typed into its command box ("tile <n> <x> <y>;",
+"clean;", "black;", "quit;", ...) and reads its status strip, drawn in the screen's top-left corner, to know when each
 is done.
 
 Galaxy is single-pass: every function must be defined before its first use (inject.py checks),
@@ -115,7 +115,7 @@ def capture_script(
         f'\n    libNtve_gf_ShowHideDoodadsInRegion(false, RegionEntireMap(), "{kind}");  // a cloud layer, placed as doodads'
         for kind in hide_doodads
     )
-    arena_quit_line = ("    libAREN_gv_aRM_RoundScore[libGame_gf_EnemyTeam(libGame_gf_TeamNumberOfPlayer(EventPlayer()))]"
+    arena_quit_line = ("    libAREN_gv_aRM_RoundScore[libGame_gf_EnemyTeam(libGame_gf_TeamNumberOfPlayer(hrsCap_cmdPlayer))]"
                        " = libAREN_gv_victoriesCount - 1;\n") if arena else ""
     values = {
         "hide_structures": "true" if hide_structures else "false",
