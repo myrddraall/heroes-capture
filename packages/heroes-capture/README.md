@@ -17,7 +17,7 @@ included; nothing to install), and its `.sha256`. The newest is always at
 
 ```powershell
 heroes-capture-win-x64.exe map render "Battlefield of Eternity"
-heroes-capture-win-x64.exe map list     # the game's maps, and which have been validated
+heroes-capture-win-x64.exe map list     # the game's maps by category, and which have been validated
 ```
 
 It writes into `work\` in the folder it runs from, including `heroes-capture.log` with every
@@ -64,9 +64,12 @@ heroes-capture map render "Cursed Hollow" --structures hide # bare terrain
 ```
 
 (`py -m heroes_capture map render ...` is the same.) `heroes-capture map list` lists the game's
-maps and which have been validated: their render reviewed and, where needed, tuned for. They're
-in `validated-maps.json`; add a map there once its render has been looked over. The steps on
-their own:
+maps by category and which have been validated: their render reviewed and, where needed, tuned
+for. They're in `validated-maps.json`; add a map there once its render has been looked over. The
+categories come from the mods each map builds on: Battleground (the 5v5 maps; the game's data
+doesn't tell the ranked pool from the custom-game-only ones), Arena, Brawl, and Other (the
+sandboxes, and Try Me Mode and the tutorials, listed as unsupported: the game keeps them as
+folders rather than map archives, and the capture builds on an archive). The steps on their own:
 
 ```powershell
 # 1. Prepare: reads the map from the game, injects the capture script, plans the grid.

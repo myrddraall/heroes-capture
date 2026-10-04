@@ -169,45 +169,68 @@ def validated_maps() -> dict[str, dict]:
     return json.loads(VALIDATED.read_text(encoding="utf-8"))["maps"]
 
 
-def map_rows(game_maps: list[str], validated: dict[str, dict]) -> list[tuple[str, str, str, str]]:
-    """(map, status, validated with, note) for the game's maps, alphabetically, then the validated
-    maps the game no longer has. Status: "validated", "not yet" or "not in the game"."""
+GONE = "No longer in the game"
+
+
+def map_rows(game_maps: dict[str, str], unsupported: list[str], validated: dict[str, dict]) -> list[tuple[str, str, str, str, str]]:
+    """(category, map, status, validated with, note) for the game's maps (name -> category), by
+    category and then alphabetically; the maps that can't be rendered, under Other; then the
+    validated maps the game no longer has. Status: "validated", "not yet", "unsupported" or
+    "not in the game"."""
+    from .game_data import CATEGORIES
+
+    def row(category, name, status):
+        entry = validated.get(name, {})
+        return (category, name, status, entry.get("version", ""), entry.get("note", ""))
+
     rows = []
-    for name in sorted(game_maps, key=str.casefold):
-        entry = validated.get(name)
-        rows.append((name, "validated" if entry else "not yet", (entry or {}).get("version", ""), (entry or {}).get("note", "")))
-    for name in sorted(set(validated) - set(game_maps), key=str.casefold):
-        rows.append((name, "not in the game", validated[name].get("version", ""), validated[name].get("note", "")))
+    for category in CATEGORIES:
+        names = [n for n, c in game_maps.items() if c == category] + (unsupported if category == "Other" else [])
+        for name in sorted(names, key=str.casefold):
+            status = "unsupported" if name in unsupported else "validated" if name in validated else "not yet"
+            rows.append(row(category, name, status))
+    for name in sorted(set(validated) - set(game_maps) - set(unsupported), key=str.casefold):
+        rows.append(row(GONE, name, "not in the game"))
     return rows
 
 
-STATUS_STYLE = {"validated": "[green]✓ validated[/]", "not yet": "[yellow]not yet[/]", "not in the game": "[red]not in the game[/]"}
+STATUS_STYLE = {"validated": "[green]✓ validated[/]", "not yet": "[yellow]not yet[/]", "unsupported": "[dim]unsupported[/]",
+                "not in the game": "[red]not in the game[/]"}
 
 
 @map_app.command("list")
 def list_maps() -> None:
-    """The game's battlegrounds, and which have been validated.
+    """The game's maps by category, and which have been validated.
+
+    Battleground: the game's 5v5 maps (the ranked pool and the custom-game-only ones alike; its data doesn't tell them apart). Arena and Brawl: the brawl modes' maps. Other: sandboxes, and Try Me Mode and the tutorials, which are unsupported (the game keeps them as folders, not map archives).
 
     Validated: the map's render has been reviewed and, where needed, tuned for (validated-maps.json). The rest render with the defaults, unchecked.
     """
-    from .game_data import find_install, map_index, open_storage
+    from .game_data import find_install, folder_maps, map_index, open_storage
 
     log_to(Path("work"))
     with ui.step("Reading the game's maps"):
         with open_storage(find_install()) as storage:
-            game_maps = list(map_index(storage))
-    rows = map_rows(game_maps, validated_maps())
-    table = Table(title="Battlegrounds", title_justify="left")
+            game_maps = {name: entry["category"] for name, entry in map_index(storage).items()}
+            unsupported = folder_maps(storage)
+    rows = map_rows(game_maps, unsupported, validated_maps())
+    table = Table(title="Maps", title_justify="left")
     table.add_column("Map", no_wrap=True)
     table.add_column("Status", no_wrap=True)
     table.add_column("Validated with", no_wrap=True)
     table.add_column("Checked", overflow="fold")
-    for name, status, validated_with, note in rows:
-        table.add_row(name, STATUS_STYLE[status], validated_with, note)
+    shown = None
+    for category, name, status, validated_with, note in rows:
+        if category != shown:
+            if shown:
+                table.add_section()
+            table.add_row(f"[bold]{category}[/]")
+            shown = category
+        table.add_row("  " + name, STATUS_STYLE[status], validated_with, note)
     console = Console()
     console.print(table)
-    done = sum(status == "validated" for _, status, _, _ in rows)
-    console.print(f"{done} of {len(game_maps)} maps validated")
+    done = sum(status == "validated" for _, _, status, _, _ in rows)
+    console.print(f"{done} of {len(game_maps)} maps validated; {len(unsupported)} unsupported")
 
 
 # ------------------------------------------------------------------------------------------------

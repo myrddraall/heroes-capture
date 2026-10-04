@@ -54,12 +54,32 @@ def test_map_render_runs_the_three_steps_with_the_defaults(monkeypatch, tmp_path
 
 def test_map_rows():
     validated = {"Dragon Shire": {"version": "0.1.0", "note": "void"}, "Old Map": {"version": "0.1.0", "note": ""}}
-    assert cli.map_rows(["Towers of Doom", "dragon cave", "Dragon Shire"], validated) == [
-        ("dragon cave", "not yet", "", ""),
-        ("Dragon Shire", "validated", "0.1.0", "void"),
-        ("Towers of Doom", "not yet", "", ""),
-        ("Old Map", "not in the game", "0.1.0", ""),
+    game_maps = {"Towers of Doom": "Battleground", "dragon cave": "Battleground", "Dragon Shire": "Battleground",
+                 "Pull Party": "Brawl", "Sandbox (Cursed Hollow)": "Other"}
+    assert cli.map_rows(game_maps, ["Try Me Mode"], validated) == [
+        ("Battleground", "dragon cave", "not yet", "", ""),
+        ("Battleground", "Dragon Shire", "validated", "0.1.0", "void"),
+        ("Battleground", "Towers of Doom", "not yet", "", ""),
+        ("Brawl", "Pull Party", "not yet", "", ""),
+        ("Other", "Sandbox (Cursed Hollow)", "not yet", "", ""),
+        ("Other", "Try Me Mode", "unsupported", "", ""),
+        (cli.GONE, "Old Map", "not in the game", "0.1.0", ""),
     ]
+
+
+@pytest.mark.parametrize("dependencies, category", [
+    (["Mods\\heroesmapmods/battlegroundmapmods/alteracpass.stormmod"], "Battleground"),
+    (["Mods\\HeroesMapMods\\BattlegroundMapMods\\Hanamura.StormMod"], "Battleground"),
+    (["Mods\\heroesbrawlmods/arenamodemods/punisherarena.stormmod"], "Arena"),
+    (["Mods\\heroesbrawlmods\\brawlmapmods\\onelane\\braxisoutpost.stormmod", "Mods\\heroesbrawlmods/heroselectionmods/ingameheroselection.stormmod"], "Brawl"),
+    (["Mods/HeroesData.StormMod", "Mods\\heroesbrawlmods/mutatormods/snowbrawl-ext.stormmod"], "Brawl"),
+    (["Mods\\heroesmapmods/battlegroundmapmods/sandbox-ext.stormmod", "Mods\\heroesmapmods/battlegroundmapmods/cursedhollow.stormmod"], "Other"),
+    (["Mods/HeroesData.StormMod"], "Other"),
+])
+def test_map_category(dependencies, category):
+    from heroes_capture.game_data import map_category
+
+    assert map_category(dependencies) == category
 
 
 def test_validated_maps_file():
@@ -74,4 +94,7 @@ def test_map_list_against_the_game():
     result = runner.invoke(cli.app, ["map", "list"], env={"COLUMNS": "200"})
     assert result.exit_code == 0, result.output
     assert "✓ validated" in result.output and "Battlefield of Eternity" in result.output and "Alterac Pass" in result.output
-    assert "maps validated" in result.output
+    for category in ("Battleground", "Arena", "Brawl", "Other"):
+        assert category in result.output
+    assert "Try Me Mode" in result.output and "unsupported" in result.output
+    assert "maps validated; 4 unsupported" in result.output
