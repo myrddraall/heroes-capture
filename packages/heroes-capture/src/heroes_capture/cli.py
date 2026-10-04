@@ -4,6 +4,7 @@
     heroes-capture map render "Cursed Hollow" --structures hide   bare terrain
     heroes-capture map render "Dragon Shire" -o D:\\renders        into D:\\renders\\dragon-shire
     heroes-capture map list                                     the game's maps, and which are validated
+    heroes-capture clean-up                                     remove the working files a failed render left in tmp\\
     heroes-capture --version
 
 `prepare`, `capture` and `stitch` are the render's steps on their own; they keep their own option
@@ -13,6 +14,7 @@ parsers for now (`heroes-capture prepare --help`).
 import json
 import shutil
 import sys
+from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Optional
@@ -103,22 +105,59 @@ def log_to(folder: Path) -> None:
     ui.set_log_file(folder / "heroes-capture.log")
 
 
-def clean_up(paths: list[Path], keep: bool) -> None:
-    """A finished command's working files removed, and their folder too once empty; with keep
-    (--keep-tmp), left for diagnosis. A failed command doesn't get here: its files stay."""
-    if keep:
-        ui.done(f"Working files kept in {paths[0].parent}")
-        return
-    ui.close_log_file()
+def remove(paths: list[Path]) -> None:
+    """Files and folders removed (what can't be, such as a file still open, stays)."""
     for path in paths:
         if path.is_dir():
             shutil.rmtree(path, ignore_errors=True)
         else:
             path.unlink(missing_ok=True)
+
+
+def clean_up(paths: list[Path], keep: bool) -> None:
+    """A finished command's working files removed, and their folder too once empty; with keep
+    (--keep-tmp), left for diagnosis. A failed command doesn't get here: its files stay (see
+    kept_on_failure), for clean-up to remove later."""
+    if keep:
+        ui.done(f"Working files kept in {paths[0].parent} (heroes-capture clean-up removes them)")
+        return
+    ui.close_log_file()
+    remove(paths)
     try:
         paths[0].parent.rmdir()
     except OSError:
         pass  # other files in it
+
+
+@contextmanager
+def kept_on_failure(folder: Path):
+    """A command whose working files stay in `folder` if it fails, saying so."""
+    try:
+        yield
+    except BaseException:
+        ui.warn(f"the working files are left in {folder} for diagnosis; heroes-capture clean-up removes them")
+        raise
+
+
+def working_files(folder: Path) -> list[Path]:
+    """What heroes-capture wrote in a working folder: each prepared map's manifest (<id>.json, a
+    manifest by its id and tiles), its prepared map (<id>.stormmap) and its folder of screenshots
+    and logs (<id>), any prepared map left without a manifest (a preparation that failed), and the
+    command log. Anything else in the folder isn't the tool's."""
+    if not folder.is_dir():
+        return []
+    found = []
+    for manifest in sorted(folder.glob("*.json")):
+        try:
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and data.get("id") == manifest.stem and "tiles" in data:
+            found += [manifest, *(p for p in (manifest.with_suffix(".stormmap"), manifest.with_suffix("")) if p.exists())]
+    found += [p for p in sorted(folder.glob("*.stormmap")) if p not in found]
+    if (folder / "heroes-capture.log").exists():
+        found.append(folder / "heroes-capture.log")
+    return found
 
 
 # ------------------------------------------------------------------------------------------------
@@ -155,42 +194,43 @@ def render(
     prepare_options = list(ctx.args)
     work = Path(prepare_options[prepare_options.index("--out") + 1]) if "--out" in prepare_options else TMP
     log_to(work)
-    prepare = [map_name, "--structures", structures.value, *prepare_options]
-    if "--out" not in prepare_options:
-        prepare += ["--out", str(TMP)]
-    if "--screen" not in prepare_options and screen_size():
-        prepare += ["--screen", screen_size()]
-    if not {"--distance", "--fov"} & set(prepare_options):
-        prepare += ["--distance", DISTANCE]
-    if "--keep" not in prepare_options:
-        prepare += ["--keep", KEEP]
-    if show_ui:
-        prepare.append("--show-ui")
-    with ui.step(f"Preparing {map_name}"):
-        manifest_path = inject.main(prepare)
-    manifest = str(manifest_path)
-    planned = json.loads(manifest_path.read_text())
-    ui.done(f"{planned['map']} ({structures.value} structures): {len(planned['tiles'])} tiles planned, "
-            + ("void shot over white and black" if planned["sky"]["mode"] == "matte" else "black void"))
-    capture_options = ["--game", game] if game else []
-    chosen = {"probe_light": probe_light, "probe_sky": probe_sky, "probe_depth": probe_depth, "probe_waits": probe_waits}
-    probe = next((f"--{name.replace('_', '-')}" for name in PROBES if chosen[name]), None)
-    if probe:
-        with ui.step(f"Probe {probe}"):
-            run_capture([manifest, probe, *capture_options])
-        return
-    if show_ui:
-        with ui.step("Launching the map with the HUD up (diagnostic; stops there)"):
-            run_capture([manifest, "--launch-only", *capture_options])
-        return
-    shutil.rmtree(Path(manifest).with_suffix("") / "tiles", ignore_errors=True)  # old screenshots would mix in
-    with ui.step(f"Capturing {planned['map']} in the game"):
-        run_capture([manifest, *capture_options])
-    with ui.step("Stitching"):
-        stitch.main([manifest, "--tiles", "--output-dir", str(output_dir)])
-    working = [manifest_path, manifest_path.with_suffix(".stormmap"), manifest_path.with_suffix(""), work / "heroes-capture.log"]
-    clean_up(working, keep_tmp)
-    ui.done(f"The map is in {stitch.output_folder(output_dir, planned)}")
+    with kept_on_failure(work):
+        prepare = [map_name, "--structures", structures.value, *prepare_options]
+        if "--out" not in prepare_options:
+            prepare += ["--out", str(TMP)]
+        if "--screen" not in prepare_options and screen_size():
+            prepare += ["--screen", screen_size()]
+        if not {"--distance", "--fov"} & set(prepare_options):
+            prepare += ["--distance", DISTANCE]
+        if "--keep" not in prepare_options:
+            prepare += ["--keep", KEEP]
+        if show_ui:
+            prepare.append("--show-ui")
+        with ui.step(f"Preparing {map_name}"):
+            manifest_path = inject.main(prepare)
+        manifest = str(manifest_path)
+        planned = json.loads(manifest_path.read_text())
+        ui.done(f"{planned['map']} ({structures.value} structures): {len(planned['tiles'])} tiles planned, "
+                + ("void shot over white and black" if planned["sky"]["mode"] == "matte" else "black void"))
+        capture_options = ["--game", game] if game else []
+        chosen = {"probe_light": probe_light, "probe_sky": probe_sky, "probe_depth": probe_depth, "probe_waits": probe_waits}
+        probe = next((f"--{name.replace('_', '-')}" for name in PROBES if chosen[name]), None)
+        if probe:
+            with ui.step(f"Probe {probe}"):
+                run_capture([manifest, probe, *capture_options])
+            return
+        if show_ui:
+            with ui.step("Launching the map with the HUD up (diagnostic; stops there)"):
+                run_capture([manifest, "--launch-only", *capture_options])
+            return
+        shutil.rmtree(Path(manifest).with_suffix("") / "tiles", ignore_errors=True)  # old screenshots would mix in
+        with ui.step(f"Capturing {planned['map']} in the game"):
+            run_capture([manifest, *capture_options])
+        with ui.step("Stitching"):
+            stitch.main([manifest, "--tiles", "--output-dir", str(output_dir)])
+        working = [manifest_path, manifest_path.with_suffix(".stormmap"), manifest_path.with_suffix(""), work / "heroes-capture.log"]
+        clean_up(working, keep_tmp)
+        ui.done(f"The map is in {stitch.output_folder(output_dir, planned)}")
 
 
 def validated_maps() -> dict[str, dict]:
@@ -240,7 +280,7 @@ def list_maps(
     from .game_data import find_install, folder_maps, map_index, open_storage
 
     log_to(TMP)
-    with ui.step("Reading the game's maps"):
+    with kept_on_failure(TMP), ui.step("Reading the game's maps"):
         with open_storage(find_install()) as storage:
             game_maps = {name: entry["category"] for name, entry in map_index(storage).items()}
             unsupported = folder_maps(storage)
@@ -298,6 +338,29 @@ def stitch(ctx: typer.Context) -> None:
     if args and Path(args[0]).suffix == ".json":
         log_to(Path(args[0]).parent)
     stitching.main(args)
+
+
+@app.command("clean-up")
+def clean_up_command() -> None:
+    """Remove the working files a failed or --keep-tmp run left in tmp\\ (only the ones heroes-capture wrote)."""
+    found = working_files(TMP)
+    if not found:
+        ui.done(f"Nothing to clean up in {TMP}")
+        return
+    size = sum(f.stat().st_size for p in found for f in ([p] if p.is_file() else p.rglob("*")) if f.is_file())
+    runs = sum(p.suffix == ".json" for p in found)
+    remove(found)
+    try:
+        TMP.rmdir()
+    except OSError:
+        pass
+    left = [p for p in found if p.exists()]
+    for path in left:
+        ui.warn(f"couldn't remove {path} (still open?)")
+    renders = f"{runs} render{'s' if runs != 1 else ''}, " if runs else ""
+    others = f"; the other files in {TMP} aren't heroes-capture's and are left alone" if TMP.exists() and not left else ""
+    amount = f"{size / 1e9:.1f} GB" if size >= 1e9 else f"{size / 1e6:.0f} MB"
+    ui.done(f"Removed the working files in {TMP} ({renders}{amount}){others}")
 
 
 @app.command("ui-demo", hidden=True)

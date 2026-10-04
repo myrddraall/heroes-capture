@@ -97,6 +97,34 @@ def test_a_failed_map_render_leaves_the_working_files(monkeypatch, tmp_path):
     assert (tmp_path / "tmp" / "dragon-shire-terrain.json").exists() and (tmp_path / "tmp" / "heroes-capture.log").exists()
 
 
+def test_the_clean_up_command_removes_only_what_the_tool_wrote(tmp_path):
+    tmp = tmp_path / "tmp"
+    (tmp / "dragon-shire-terrain" / "tiles").mkdir(parents=True)
+    (tmp / "dragon-shire-terrain" / "tiles" / "tile_0001.npy").write_bytes(b"x" * 1000)
+    (tmp / "dragon-shire-terrain.json").write_text(json.dumps({"id": "dragon-shire-terrain", "tiles": []}))
+    (tmp / "dragon-shire-terrain.stormmap").write_text("map")
+    (tmp / "cursed-hollow-structures.stormmap").write_text("map")  # a preparation that failed before its manifest
+    (tmp / "heroes-capture.log").write_text("run")
+    (tmp / "notes.json").write_text(json.dumps({"mine": True}))  # not the tool's
+    (tmp / "setup.log").write_text("pip")
+    result = runner.invoke(cli.app, ["clean-up"])
+    assert result.exit_code == 0, result.output
+    assert sorted(p.name for p in tmp.iterdir()) == ["notes.json", "setup.log"]
+    assert "1 render" in result.output and "left alone" in result.output
+    (tmp / "notes.json").unlink()
+    (tmp / "setup.log").unlink()
+    (tmp / "heroes-capture.log").write_text("run")
+    assert runner.invoke(cli.app, ["clean-up"]).exit_code == 0
+    assert not tmp.exists()  # emptied, so removed
+    assert "Nothing to clean up" in runner.invoke(cli.app, ["clean-up"]).output
+
+
+def test_a_failed_map_render_says_how_to_clean_up(monkeypatch, tmp_path):
+    render_steps(monkeypatch, tmp_path, fail_stitch=True)
+    result = runner.invoke(cli.app, ["--log", "map", "render", "dragon shire"])
+    assert "heroes-capture clean-up removes them" in result.output
+
+
 def test_clean_up_leaves_other_files_in_tmp(tmp_path):
     (tmp_path / "tmp").mkdir()
     (tmp_path / "tmp" / "setup.log").write_text("pip")

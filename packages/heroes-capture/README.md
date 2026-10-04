@@ -24,6 +24,7 @@ A render's images go to `maps\<map id>\` in the folder it runs from (`maps\battl
 `-o` / `--output-dir` picks another folder for them). Its working files (the screenshots, the
 prepared map, `heroes-capture.log` with every message) go to `tmp\` and are removed when the render
 finishes; `--keep-tmp` leaves them for diagnosis, and a failed render leaves them too.
+`heroes-capture clean-up` removes them afterwards (only what heroes-capture wrote in `tmp\`).
 
 On a terminal the output is a live view (the step, its status, progress bars; warnings print
 above it); `--log` gives plain log lines instead, the default in CI or when the output isn't a
@@ -67,6 +68,7 @@ heroes-capture map render "Towers of Doom"                  # structures kept, i
 heroes-capture map render "Cursed Hollow" --structures hide # bare terrain
 heroes-capture map render "Dragon Shire" -o D:\renders      # into D:\renders\dragon-shire
 heroes-capture map render "Dragon Shire" --keep-tmp         # tmp\ left for diagnosis
+heroes-capture clean-up                                     # removes what a failed or --keep-tmp render left in tmp\
 ```
 
 (`py -m heroes_capture map render ...` is the same.) `heroes-capture map list` lists the game's
