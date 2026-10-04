@@ -202,7 +202,7 @@ STATUS_STYLE = {"validated": "[green]✓ validated[/]", "not yet": "[yellow]not 
 def list_maps() -> None:
     """The game's maps by category, and which have been validated.
 
-    Battleground: the game's 5v5 maps (the ranked pool and the custom-game-only ones alike; its data doesn't tell them apart). Arena and Brawl: the brawl modes' maps. Other: sandboxes, and Try Me Mode and the tutorials, which are unsupported (the game keeps them as folders, not map archives).
+    Battleground: the game's 5v5 maps, the Versus AI / Quick Match / Storm League pool (with the custom-game-only ones: the game's data doesn't tell them apart). Arena and Brawl: the brawl modes' maps. Other: sandboxes, and Try Me Mode and the tutorials, which are unsupported (the game keeps them as folders, not map archives).
 
     Validated: the map's render has been reviewed and, where needed, tuned for (validated-maps.json). The rest render with the defaults, unchecked.
     """

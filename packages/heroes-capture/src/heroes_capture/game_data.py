@@ -109,8 +109,9 @@ CATEGORIES = ("Battleground", "Arena", "Brawl", "Other")
 def map_category(dependencies: list[str]) -> str:
     """A map's category, from the mods its DocumentHeader names: Arena (heroesbrawlmods'
     arenamodemods), Brawl (the rest of heroesbrawlmods), Battleground (battlegroundmapmods; the
-    game's data doesn't tell the ranked pool from the custom-game-only maps) and Other (the
-    sandboxes, which add sandbox-ext to a battleground, and anything else)."""
+    game's data doesn't tell the Versus AI / Quick Match / Storm League pool from the
+    custom-game-only maps) and Other (the sandboxes, which add sandbox-ext to a battleground, and
+    anything else)."""
     paths = [d.replace("\\", "/").lower() for d in dependencies]
     if any("heroesbrawlmods/arenamodemods/" in d for d in paths):
         return "Arena"

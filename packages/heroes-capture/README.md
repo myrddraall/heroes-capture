@@ -66,8 +66,9 @@ heroes-capture map render "Cursed Hollow" --structures hide # bare terrain
 (`py -m heroes_capture map render ...` is the same.) `heroes-capture map list` lists the game's
 maps by category and which have been validated: their render reviewed and, where needed, tuned
 for. They're in `validated-maps.json`; add a map there once its render has been looked over. The
-categories come from the mods each map builds on: Battleground (the 5v5 maps; the game's data
-doesn't tell the ranked pool from the custom-game-only ones), Arena, Brawl, and Other (the
+categories come from the mods each map builds on: Battleground (the 5v5 maps of the Versus AI /
+Quick Match / Storm League pool, with the custom-game-only ones: the game's data doesn't tell them
+apart), Arena, Brawl, and Other (the
 sandboxes, and Try Me Mode and the tutorials, listed as unsupported: the game keeps them as
 folders rather than map archives, and the capture builds on an archive). The steps on their own:
 
