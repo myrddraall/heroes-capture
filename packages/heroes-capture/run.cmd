@@ -29,9 +29,10 @@ if not exist "%~dp0logs" if not exist "%~dp0tmp" if not exist "%~dp0maps" (
 echo.
 echo Copying results to %HRS_RESULTS% ...
 set "FAILED="
-rem /XX: don't list the files already in the results folder that this run didn't make.
+rem /XX: don't list the files already in the results folder that this run didn't make. /NJS: no
+rem summary table per folder (errors still print); the one line below says how it went.
 for %%F in (logs tmp maps) do if exist "%~dp0%%F" (
-  robocopy "%~dp0%%F" "%HRS_RESULTS%\%%F" /E /XX /XF *.stormmap /NFL /NDL /NJH /NP
+  robocopy "%~dp0%%F" "%HRS_RESULTS%\%%F" /E /XX /XF *.stormmap /NFL /NDL /NJH /NJS /NP
   if errorlevel 8 set "FAILED=1"
 )
 if defined FAILED (
