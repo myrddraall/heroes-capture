@@ -51,31 +51,37 @@ outputs are shared.
 - PyInstaller, one-file. It bundles numpy, scipy and libvips, so expect 150 to 250 MB, and a few
   seconds to start.
 - The release version is embedded in the executable's version resource (`VS_VERSIONINFO`), which
-  the release checks (see the plugin below).
+  the release checks (see the release section below).
 - StormLib (MPQ archives: the maps) and CascLib (the game's CASC storage) are called through
-  ctypes, their DLLs inside the executable. Both are MIT, both by Ladislav Zezula.
+  ctypes, their DLLs inside the executable. Both are MIT, both by Ladislav Zezula. StormLib is its
+  own release DLL (v9.40), checked against the release's published SHA-256: until stage 4 bundles
+  it, `stormlib.py` downloads it once into the cache.
 
 ### Assets at runtime
 
 Nothing generated is checked in: the program reads or downloads what it needs when it runs.
 
-- Game data comes from the local game install's CASC storage: the light sets (today the generated
-  `light-sets.json`), the sky models for the keyed copies (today the uncommitted `local-assets/`),
-  the map libraries. It always matches the installed build, and a capture needs the game
-  installed anyway.
-- Maps come from the local install's CASC too, if the battleground `.stormmap` files are there.
+- Game data comes from the local game install's CASC storage (the install found by itself: its
+  uninstall entry, the Battle.net app's list, the usual folders): the tilesets and light sets,
+  the sky models for the keyed copies, and the maps. It always matches the installed build, and a
+  capture needs the game installed anyway.
+- The battleground maps are `.s2ma` archives under content-hash names in the storage's depot
+  cache; each is opened once per game update to index them by name (a map has a map script; its
+  name is `DocInfo/Name` in its game strings).
 - Without an install (CI, the simulated-game tests on Linux), the same data comes from Blizzard's
-  CDN through CascLib's online storage (`CascOpenOnlineStorage`, product code `hero`).
-  The GitHub mirror `jamiephan/HeroesOfTheStorm_S2MA` stays only if that does not work.
-- Cache: `%LOCALAPPDATA%\heroes-capture\cache`, keyed by game build.
+  CDN through CascLib's online storage (`CascOpenOnlineStorage`, product code `hero`). No
+  mirror is needed.
+- Cache: `%LOCALAPPDATA%\heroes-capture\cache` (the map index, keyed by the list of depot
+  files; the CDN's files).
 - `opening-timers.json` stays in the code: it is hand-curated knowledge, not generated data.
 
 ## Repository
 
 On the [cpdevtools git-flow template](https://github.com/cpdevtools/git-flow-template):
 
-- the root `package.json` holds git-flow, versioning, husky, and root aliases for the commands
-  people run (`verb.noun`, e.g. `pnpm run build.exe`, `pnpm run test.harness`);
+- the root `package.json` holds git-flow (1.2.1 or later: the `executable` artifact type and
+  Windows runners), versioning, husky, and root aliases for the commands people run (`verb.noun`,
+  e.g. `pnpm run build.exe`, `pnpm test`);
 - `packages/heroes-capture/` holds the Python project (`pyproject.toml`, managed with uv), a
   `package.json` with `github.actions.build` (PyInstaller at the release version) and
   `github.actions.test`, and a `release-artifacts.yml` declaring the executable;
@@ -88,49 +94,74 @@ On the [cpdevtools git-flow template](https://github.com/cpdevtools/git-flow-tem
 ## Release: git-flow, built on Windows
 
 `build-pack` runs on Ubuntu by default, and PyInstaller cannot cross-compile, so this repository's
-`build-pack-publish.yml` runs `build-pack` on `windows-latest`. That needs the `build-pack` action
-to work there: its bash steps, zx calls and paths under Git Bash on Windows runners, with no
-Docker assumed.
+`build-pack-publish.yml` runs the `build-pack` job on `windows-latest` (the `publish-release` job
+stays on Ubuntu). git-flow 1.2.1 supports that: zx and pnpm's scripts run under Git for Windows'
+bash, and nothing needs `zip` or Docker. Project scripts are therefore written for bash, as on
+Linux.
 
-### Plugin: `@cpdevtools/git-flow-plugin-executable`
+### The `executable` artifact type
 
-Discovered by the `git-flow-plugin-*` naming convention. Artifact type `executable`:
+Built into git-flow; `release-artifacts.yml` declares it:
 
-| Field         | Meaning                                                                             |
-| ------------- | ----------------------------------------------------------------------------------- |
-| `name`        | Asset file name; `${VERSION}` allowed, e.g. `heroes-capture-${VERSION}-win-x64.exe` |
-| `path`        | The built file, relative to the project                                             |
-| `platform`    | e.g. `win-x64`, shown in the release asset's label                                  |
-| `checksum`    | Attach `<name>.sha256` (default `true`)                                             |
-| `contentType` | Default `application/vnd.microsoft.portable-executable`                             |
+```yaml
+artifacts:
+  - type: executable
+    name: heroes-capture
+    path: dist/heroes-capture.exe
+    platform: win-x64
+```
 
-- `pack`: check the file exists; read the PE `VS_VERSIONINFO` ProductVersion by parsing the file,
-  not running it, and fail unless it equals `ctx.version` (a stale build, as `ng-lib` checks for
-  npm); copy it to `artifactOutputDir` under the resolved name; write the sha256 file.
-- `upload`: attach the executable and its checksum to the draft release, as `release-attachment`
-  does.
-- `publish`, `packDeploy`: nothing. `getRegistries` returns `[]`; `getVersion` returns the
-  project version.
+- The release gets `heroes-capture-win-x64.exe` and `heroes-capture-win-x64.exe.sha256`. The
+  version is not in the file name (the release tag carries it), so
+  `releases/latest/download/heroes-capture-win-x64.exe` stays a permanent link.
+- Pack verifies rather than builds: for an `.exe` it reads the version resource's
+  `ProductVersion` string without running the file, and refuses the binary unless it equals the
+  release version, so a stale `dist` can't ship under a new tag.
+- So `github.actions.build` stamps `PROJECT_VERSION` into PyInstaller's version file as the
+  `ProductVersion` string (the four-part numeric version can't hold a prerelease such as
+  `0.2.0-beta.1`, and isn't read).
 
 ## Stages
 
 Proposed; the boundaries are chosen before each starts.
 
 1. **Injector in Python.** Port `inject.mjs`, `capture-script.mjs`, `sky.mjs` and
-   `light-data.mjs`; MPQ writing through StormLib. Node leaves the package.
+   `light-data.mjs`; MPQ writing through StormLib. Node leaves the package. Ported and checked
+   against the Node injector (9 maps, 6 option sets: manifests and all 4,644 archive files
+   identical), and rendered Battlefield of Eternity in the game. **Done.**
 2. **Game data from CASC.** CascLib, local install first; a spike on its online storage for Heroes;
    light sets and the keyed sky models read at runtime; `light-sets.json`,
-   `generate-light-sets.mjs` and `local-assets/` go.
+   `generate-light-sets.mjs` and `local-assets/` go. Built (`casclib.py`, `game_data.py`;
+   CascLib from `tools/build_casclib.py`, cross-compiled for Windows with Zig until stage 4
+   builds it there) and checked against stage 1's output from the CDN: identical on 9 maps;
+   rendered Battlefield of Eternity from the local install. **Done.**
 3. **Package and tests.** The `heroes-capture` command, `pyproject.toml`, the package scripts; the
-   simulated game and regression scripts into `tests/`, run by `test.yml`.
-4. **Release.** PyInstaller build with the version resource; `build-pack` on Windows; the plugin;
-   the first release.
+   simulated game and regression scripts into `tests/`, run by `test.yml`. Built: the package in
+   `src/heroes_capture`, `heroes-capture map|prepare|capture|stitch`, 53 tests (units, the
+   simulated game, the game's data from the CDN) passing locally; the command rendered Battlefield of
+   Eternity on the PC, and the test workflow passes (53 tests,
+   about 3 minutes with a cold CDN cache). **Done.**
+4. **Release.** PyInstaller build with the version resource; `build-pack` on Windows; the
+   `executable` artifact; the first release. Built: `tools/build_exe.py` makes the one-file program
+   from the package (Python, the dependencies, the data files, StormLib and CascLib; on the runner
+   CascLib is built with Visual Studio, its runtime linked in); checked as a Linux binary (77 MB,
+   0.8 s to start; prepare and stitch work from it); every build runs `heroes-capture self-check`
+   on the fresh executable. The pre-release `0.1.0-feature.injector-python.alpha.0.build.14` (67 MB)
+   rendered Battlefield of Eternity on the PC from the download alone. **Done.**
 5. **Switch over.** The development loop on the PC points here; `tools/map-capture` leaves
    `heroes-replay-stats`.
 
+## Verified
+
+- CascLib's online storage works for Heroes (product `hero`), and the battleground maps are in
+  the game's storage (as `.s2ma` files): all 35 found, Battlefield of Eternity byte-identical to
+  the mirror's copy.
+- The release pipeline end to end, with a stand-in exe (`release-stub/`, since replaced; built by
+  `tools/build_exe.py`): `build-pack` on `windows-latest` built it with PyInstaller, pack's PE check
+  read the release version from its `ProductVersion`, and the pre-release
+  `v0.1.0-feature.release-pipeline.alpha.0` carries `heroes-capture-win-x64.exe` and its `.sha256`
+  (git-flow 1.2.2, which fixed the `executable` type's missing output folder).
+
 ## To verify
 
-- CascLib's online storage works for Heroes (product `hero`).
-- The battleground `.stormmap` files are in the local CASC storage.
-- The `build-pack` action runs on `windows-latest`.
 - The executable's size and start-up time, and whether antivirus flags the one-file build.

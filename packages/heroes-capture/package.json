@@ -1,15 +1,13 @@
 {
-  "name": "map-capture",
+  "name": "@myrddraall/heroes-capture",
+  "version": "0.0.0-MAIN",
   "private": true,
-  "description": "Renders top-down images of Heroes of the Storm battlegrounds by driving the game client",
-  "type": "module",
+  "description": "Captures Heroes of the Storm assets from the game client: battleground maps, sky layers, a parallax viewer",
   "scripts": {
-    "inject": "node inject.mjs"
-  },
-  "dependencies": {
-    "@jamiephan/stormlib": "^0.3.0"
-  },
-  "engines": {
-    "node": ">=20"
+    "build.exe": "python tools/build_exe.py",
+    "github.actions.build": "python tools/build_exe.py",
+    "github.actions.pack": "gitflow pack",
+    "github.actions.test": "(test -f native/libstorm.so && test -f native/libcasc.so || python3 tools/build_native.py) && uv run pytest -n auto --dist loadgroup",
+    "test": "uv run pytest -n auto --dist loadgroup"
   }
 }

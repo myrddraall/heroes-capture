@@ -1,8 +1,8 @@
 """Launch a prepared battleground and screenshot every tile of its capture grid.
 
-    python capture.py work/towers-of-doom-structures.json [options]
+    heroes-capture capture work/towers-of-doom-structures.json [options]   (heroes-capture map runs it)
 
-The injected map script (capture-script.mjs) takes chat commands and reports through its status
+The injected map script (capture_script.galaxy) takes chat commands and reports through its status
 strip (status.py) when each is done and where the camera really is. The capture:
 
   1. starts Heroes if needed and launches the map (game_control.py);
@@ -19,7 +19,7 @@ When the match is lost (the game closes, the map fails to load, another map is r
 is launched again and resumes from the first missing tile, three times at most.
 
 Captures the game window itself, on whichever monitor it is. Run the game in
-"Windowed (Fullscreen)" at the resolution given to inject.mjs, and leave the mouse and keyboard
+"Windowed (Fullscreen)" at the resolution given to inject.py, and leave the mouse and keyboard
 alone while it captures.
 """
 
@@ -36,10 +36,10 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-import probes
-import sky_layers
-from frames import frame_exists, load_frame, save_frame
-from game_control import (
+from . import probes
+from . import sky_layers
+from .frames import frame_exists, load_frame, save_frame
+from .game_control import (
     FocusLost,
     Recoverable,
     dismiss_failed_dialog,
@@ -51,13 +51,13 @@ from game_control import (
     step,
     wait_for_map_load,
 )
-from game_state import IN_MAP, LOADING, MAP_FAILED, MENU, NOT_RUNNING, PHASES, game_state
-from game_window import game_region, hold_key
-from runlog import log, log_timings, set_log_file, stage
-from screen import ScreenGrabber, disagree, looks_black, same_view, view_shift
-from status import Status, StatusStrip
+from .game_data import find_install
+from .game_state import IN_MAP, LOADING, MAP_FAILED, MENU, NOT_RUNNING, PHASES, game_state
+from .game_window import game_region, hold_key
+from .runlog import log, log_timings, set_log_file, stage
+from .screen import ScreenGrabber, disagree, looks_black, same_view, view_shift
+from .status import Status, StatusStrip
 
-DEFAULT_GAME = r"D:\Games\Heroes of the Storm"
 
 
 def tile_command(tile: dict) -> str:
@@ -67,7 +67,7 @@ def tile_command(tile: dict) -> str:
 
 
 def plan_grid(manifest: dict, bounds: dict) -> None:
-    """Re-plan the capture grid for other camera bounds (inject.mjs's planGrid, in Python), in
+    """Re-plan the capture grid for other camera bounds (inject.py's plan_grid), in
     place: tiles, area, cameraBounds, cols, rows, step. Camera targets stay inside the bounds
     (the game clamps any beyond them), first and last on the bounds, the rest spread evenly,
     at most `keep` of a screen apart."""
@@ -637,10 +637,10 @@ def extend_past_grid(manifest: dict, tiles: list, flagged: list, take, session, 
 # ------------------------------------------------------------------------------------------------
 
 
-def parse_args() -> argparse.Namespace:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("manifest", type=Path, help="the .json written by inject.mjs")
-    ap.add_argument("--game", default=DEFAULT_GAME, help=f"Heroes of the Storm folder (default {DEFAULT_GAME})")
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    ap = argparse.ArgumentParser(prog="heroes-capture capture", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("manifest", type=Path, help="the .json written by inject.py")
+    ap.add_argument("--game", help="Heroes of the Storm folder (found from the install by default)")
     ap.add_argument("--battlenet", default=os.environ.get("HRS_BATTLENET"), help="the Battle.net app (Battle.net.exe), used to start Heroes when it isn't running; found automatically if not given")
     ap.add_argument("--no-launch", action="store_true", help="the map is already running")
     ap.add_argument("--launch-only", action="store_true", help="launch the map and stop (to try chat commands by hand)")
@@ -651,14 +651,14 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--settle", type=float, default=0.1, help="least seconds from a move to the kept screenshot (default 0.1; the waits probe found differences only where the scene animates anyway, as at 0.5)")
     ap.add_argument("--start", type=int, default=0, help="first tile, to resume a run (default 0)")
     ap.add_argument("--monitor", type=int, help="capture this mss monitor number instead of the game window")
-    return ap.parse_args()
+    return ap.parse_args(argv)
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv: list[str]) -> None:
+    args = parse_args(argv)
     manifest = json.loads(args.manifest.read_text())
     if not manifest.get("status"):
-        sys.exit(f"{args.manifest} has no status strip: prepare the map again with inject.mjs")
+        sys.exit(f"{args.manifest} has no status strip: prepare the map again with inject.py")
     tiles = manifest["tiles"]
     out = args.manifest.parent / manifest["id"] / "tiles"
     out.mkdir(parents=True, exist_ok=True)
@@ -677,7 +677,10 @@ def main() -> None:
     positions: dict = json.loads(positions_path.read_text()) if args.start and positions_path.exists() else {}
 
     if not args.no_launch:
-        launch_map(manifest, args.game, args.battlenet)
+        game = args.game or find_install()
+        if not game:
+            sys.exit("Heroes of the Storm's install wasn't found (uninstall entries, the Battle.net app's list, the usual folders); pass --game")
+        launch_map(manifest, str(game), args.battlenet)
     if args.launch_only:
         print("\nLaunched. In the game, chat commands: 'tile <n>' moves to a tile, 'clean', 'black', 'sky <colour>', 'pause'.")
         return
@@ -757,19 +760,20 @@ def main() -> None:
         quit_match(wait=False)  # the stitch runs while the game leaves; the next launch waits for the menu
     log(f"camera positions recorded for {len(positions)} screenshots")
     log_timings("capture")
-    print(f"\n{len(manifest['tiles']) - args.start} screenshots in {out}\nnext: python stitch.py {args.manifest}")
+    print(f"\n{len(manifest['tiles']) - args.start} screenshots in {out}")
 
 
-def recover(e: Recoverable) -> None:
+def recover(e: Recoverable, argv: list[str]) -> int:
     """Start the run again in a fresh launch, from where it was lost: the match is left (or the
     game started again through Battle.net if it closed), the map launched anew and the tiles
     resumed from `resume_at` (screenshots and camera positions taken so far are kept). Three
-    times at most per run (HRS_RECOVERIES counts them across the relaunches)."""
+    times at most per run (HRS_RECOVERIES counts them across the relaunches). Returns the fresh
+    run's exit code."""
     done = int(os.environ.get("HRS_RECOVERIES", "0"))
     log(f"\nlost the match: {e.why}")
     if done >= 3:
         sys.exit(f"\nStopped: {e.why}; already recovered 3 times in this run.")
-    argv = [a for a in sys.argv[1:] if a != "--no-launch"]
+    argv = [a for a in argv if a != "--no-launch"]
     if e.resume_at is not None:
         if "--start" in argv:
             i = argv.index("--start")
@@ -781,19 +785,6 @@ def recover(e: Recoverable) -> None:
         pass
     log(f"recovering ({done + 1} of 3): launching the map again" + (f" and resuming at tile {e.resume_at + 1}" if e.resume_at is not None else ""))
     env = dict(os.environ, HRS_RECOVERIES=str(done + 1))
-    sys.exit(subprocess.call([sys.executable, sys.argv[0], *argv], env=env))
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except Recoverable as e:
-        recover(e)
-    except SystemExit:
-        raise
-    except Exception:
-        import traceback
-
-        # Into the log too, so a failed run can be diagnosed from the copied results.
-        log(traceback.format_exc())
-        raise
+    # The same program again: the exe itself, or Python running the package.
+    program = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, "-m", "heroes_capture"]
+    return subprocess.call([*program, "capture", *argv], env=env)

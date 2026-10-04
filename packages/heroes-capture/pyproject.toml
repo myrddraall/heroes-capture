@@ -1,0 +1,33 @@
+[project]
+name = "heroes-capture"
+version = "0.0.0"
+description = "Captures Heroes of the Storm assets from the game client: battleground maps, sky layers, a parallax viewer"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26",
+  "pillow>=10",
+  "pyvips[binary]>=2.2",
+  "scipy>=1.11",
+  # Windows only: screen grabbing and input to the game.
+  "dxcam>=0.3; sys_platform == 'win32'",
+  "mss>=9; sys_platform == 'win32'",
+  "pydirectinput>=1.0.4; sys_platform == 'win32'",
+]
+
+[project.scripts]
+heroes-capture = "heroes_capture.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-xdist>=3"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/heroes_capture"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["game_data: reads the game's data from Blizzard's CDN (deselect with -m \"not game_data\")"]

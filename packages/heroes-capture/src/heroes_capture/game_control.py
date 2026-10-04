@@ -10,8 +10,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from game_state import IN_MAP, LOADING, MAP_FAILED, MENU, NOT_RUNNING, game_state, menu_matches
-from game_window import (
+from .game_state import IN_MAP, LOADING, MAP_FAILED, MENU, NOT_RUNNING, game_state, menu_matches
+from .game_window import (
     bring_game_to_front,
     foreground_is_game,
     foreground_program,
@@ -21,9 +21,9 @@ from game_window import (
     park_cursor,
     type_burst,
 )
-from runlog import log
-from screen import ScreenGrabber
-from status import StatusStrip
+from .runlog import log
+from .screen import ScreenGrabber
+from .status import StatusStrip
 
 
 class Recoverable(Exception):
