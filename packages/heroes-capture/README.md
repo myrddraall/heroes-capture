@@ -292,9 +292,11 @@ cell there is no more detail: that's the game's own texture resolution.
   each tile with its position (`tile <n> <x> <y>`), records where the camera really went
   (`positions.json`), and for each tile takes the kept image once `tile` has been carried out, then (number pad 5, or the `black` command if the key went
   missing)
-  the same view over the black skybox. It only types while the game is in front;
-  if the game loses focus part way through a tile, that tile is dropped and redone from its
-  start once the game is back in front; black frames are retaken; where map content reaches an
+  the same view over the black skybox. It only types while the game is in front, and puts the
+  game in front only as the run starts (or as it starts the game): alt-tabbing away pauses the
+  run until you click back into the game. Opening the game's own menu (Esc, Options, the Alt+F4
+  dialog) pauses it the same way, until the menu is closed. Either way the tile in progress is
+  dropped and redone from its start; black frames are retaken; where map content reaches an
   outer tile's outer edge (Battlefield of Eternity's arches run past the camera bounds), it lifts
   the camera bounds and adds tiles beyond, outwards until the edge is clear (three at most); it stops early if the map stops responding, and
   leaves the match at the end (`quit`; the stitch runs while the game leaves, and the next launch
@@ -331,6 +333,7 @@ cell there is no more detail: that's the game's own texture resolution.
 | `status.py`                                | reads the status strip                                                                        |
 | `game_control.py`                          | drives the game: focus, chat, launching, waiting for the map, leaving the match                |
 | `game_state.py`                            | tells the game's states apart from a screen grab (`menu-reference/` holds the menu's templates) |
+| `game_menus.py`                            | recognises the game's menus over a match (Esc, Options, the exit dialog) at any screen size    |
 | `game_window.py`                           | Windows calls: the game's process and window, keyboard and cursor                              |
 | `screen.py`                                | screen grabbing and frame comparisons                                                         |
 | `probes.py`                                | the `--probe-light` and `--probe-sky` diagnostics                                             |
@@ -354,8 +357,11 @@ uv run pytest -n auto --dist loadgroup   # or pnpm test from the workspace root
   numbers, the grid, lighting, sky textures, the sky measurement's consistency rule).
 - `tests/test_simulated.py`: the capture end to end against a simulated game and desktop
   (`tests/sim/fakegame.py`: a virtual clock, the chat commands carried out, frames with the
-  status strip): renders in both void modes, a resumed run, lost focus, a silent strip, a crash,
-  the wrong map, the probes; and the stitch of a simulated render.
+  status strip): renders in both void modes, a resumed run, lost focus, the game's menu opened
+  part way, a silent strip, a crash, the wrong map, the probes; and the stitch of a simulated
+  render.
+- `tests/test_game_menus.py`: the game's menus told from the map at screen sizes from 600 to
+  2160 rows and 16:9 to 32:9 (`tests/sim/menus.py` draws them).
 - `tests/test_game_data.py` (marker `game_data`): the game's own data from Blizzard's CDN (no
   install needed): the maps by name, the tilesets and light sets, the sky models, and three maps
   prepared from it, whose injected script may use only names Blizzard's own Galaxy code has. The

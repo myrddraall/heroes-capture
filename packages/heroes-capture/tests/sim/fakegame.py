@@ -6,7 +6,8 @@ Fakes ctypes.windll (process, window and input calls), pydirectinput, mss and su
 virtual clock (time.time/time.sleep), then runs heroes_capture.capture.main() on
 <work dir>/test-map.json (written by makemanifest.py). The fake game decodes the keys typed into
 chat, carries out the capture script's commands, and draws frames with the status strip the way
-capture_script.galaxy does. Environment: FAKE_FAULT (focus, wrongmap, silent, crash) and
+capture_script.galaxy does. Environment: FAKE_FAULT (focus, wrongmap, silent, crash, menu: the
+Esc menu open for 6 s, taking the keys) and
 FAKE_FAULT_AT (virtual seconds), FAKE_START=map (the map already running), FAKE_BOUNDS,
 FAKE_HIDDEN (the world hidden until the map is ready), FAKE_NO_KEY, FAKE_SKY_RATE.
 """
@@ -21,6 +22,7 @@ import types
 from pathlib import Path
 
 import numpy as np
+from menus import game_menu
 from PIL import Image
 
 TOOL, WORK = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
@@ -117,8 +119,8 @@ class Game:
         return 0 if t < 3 else 1 if t < 13 else 2
 
     def key(self, code, up):
-        if up:
-            return
+        if up or _menu_open():
+            return  # with the Esc menu open, keys go to it
         k = CODE_TO_KEY[code]
         if k == "numpad5":
             if self.chat is None and self.state == "map" and not os.environ.get("FAKE_NO_KEY"):
@@ -209,6 +211,11 @@ class Game:
         return bits
 
     def frame(self):
+        if self.state == "map" and _menu_open():
+            return game_menu(self.match_frame(), "esc")
+        return self.match_frame()
+
+    def match_frame(self):
         if self.state == "menu":
             return self.menu
         if self.state == "loading" or (self.state == "map" and self.t() < 2 and not self.leaving):
@@ -312,6 +319,10 @@ FAULT_AT = float(os.environ.get("FAKE_FAULT_AT", "1e9"))
 
 def _fault(name):
     return FAULT == name and _now[0] - START >= FAULT_AT
+
+
+def _menu_open():
+    return FAULT == "menu" and FAULT_AT <= _now[0] - START < FAULT_AT + 6
 
 
 def _crashed():

@@ -10,6 +10,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from .game_menus import game_menu_open
 from .game_state import IN_MAP, LOADING, MAP_FAILED, MENU, NOT_RUNNING, game_state, menu_matches
 from .game_window import (
     bring_game_to_front,
@@ -35,6 +36,11 @@ class Recoverable(Exception):
         self.why, self.resume_at = why, resume_at
 
 
+class GamePaused(Exception):
+    """One of the game's menus is open over the match (Esc, Options, the exit dialog): the step is
+    redone from its start once it's closed (see step)."""
+
+
 class FocusLost(Exception):
     """The game lost focus part way through a step; the step is redone from its start."""
 
@@ -44,7 +50,17 @@ class FocusLost(Exception):
 # ------------------------------------------------------------------------------------------------
 
 _chat_open = False  # the chat box was opened and not yet sent (a step was interrupted mid-command)
+_brought_to_front = False  # Heroes is put in front once, as the run starts; after that the run waits for it
 CHAT_OPEN_WAIT = 0.06  # seconds for the chat box to open before the text is typed (0.15 until the waits probe: 30 of 30 commands taken even at 0.03)
+
+
+def bring_to_front_at_start() -> None:
+    """Put Heroes in front, once per run (as it starts, or as the run starts it): after that, a
+    window put in front of it (alt-tabbing away to pause) is waited out, never pushed aside."""
+    global _brought_to_front
+    if not _brought_to_front and not foreground_is_game():
+        bring_game_to_front()
+    _brought_to_front = True
 
 
 def require_focus() -> None:
@@ -66,17 +82,37 @@ def wait_for_game() -> None:
     time.sleep(1.0)
 
 
+def wait_for_menu_closed() -> None:
+    """Block while one of the game's menus is open over the match, looking twice a second while the
+    game is in front; two looks without it in a row and the run carries on. The game closing
+    meanwhile (Leave in the exit dialog) is a lost match."""
+    with ScreenGrabber(game_region(), duplication=False) as screen:
+        clear = 0
+        while clear < 2:
+            if not game_running():
+                raise Recoverable("the game isn't running any more (it was closed from its menu?)")
+            if foreground_is_game():
+                clear = 0 if game_menu_open(screen.grab()) else clear + 1
+            time.sleep(0.5)
+    park_cursor()
+
+
 def step(action, what: str):
     """Run one step (a tile, a probe shot, a start-up attempt) with the game in front the whole
-    time. If it loses focus part way, the step is abandoned, and redone from its start once the
-    game is back in front: half-done steps are never continued."""
+    time. If it loses focus part way, or one of the game's menus opens over the map, the step is
+    abandoned, and redone from its start once the game is back in front and the menu closed:
+    half-done steps are never continued."""
     global _chat_open
     while True:
         wait_for_game()
         try:
             return action()
-        except FocusLost:
-            warn(f"focus lost during {what} (in front: {foreground_program()}); redoing it from the start")
+        except (FocusLost, GamePaused) as e:
+            if isinstance(e, GamePaused):
+                warn(f"a game menu is open (Esc, Options or the exit dialog) during {what}; waiting for it to close, then redoing it")
+                wait_for_menu_closed()
+            else:
+                warn(f"focus lost during {what} (in front: {foreground_program()}); redoing it from the start")
             wait_for_game()
             if _chat_open:
                 # A half-typed line may be in the chat box: empty it and close it (Enter on an
@@ -180,10 +216,12 @@ def ensure_game_running(battlenet: str | None, game: str) -> None:
         if time.time() > deadline:
             sys.exit("Heroes didn't start within 3 minutes")
         time.sleep(1.0)
-    while not bring_game_to_front():
+    while not bring_game_to_front():  # Heroes starting up: put in front as its window appears
         if time.time() > deadline:
             sys.exit("Heroes started, but its window didn't appear within 3 minutes")
         time.sleep(1.0)
+    global _brought_to_front
+    _brought_to_front = True
     # Logging in comes between the window and the menu; a map launched during it leaves the
     # game at the login screen afterwards. Arrived: the menu's fixed interface is on screen,
     # two looks in a row.
@@ -192,9 +230,9 @@ def ensure_game_running(battlenet: str | None, game: str) -> None:
     with ScreenGrabber(game_region(), duplication=False) as screen:
         while time.time() < deadline + 180:
             time.sleep(2.0)
-            if not foreground_is_game():
-                if not bring_game_to_front() and time.time() - last_note > 10:
-                    log(f"  can't bring Heroes in front ({foreground_program()} is in front); click into the game")
+            if not foreground_is_game():  # waited for, not taken back: the user may have stepped away from it on purpose
+                if time.time() - last_note > 10:
+                    log(f"  Heroes isn't in front ({foreground_program()} is); click into the game to carry on")
                     last_note = time.time()
                 continue
             parts = menu_matches(screen.grab())
@@ -300,8 +338,7 @@ def wait_for_menu(quit_sent: bool = False, until_leaving: bool = False) -> None:
     ending."""
     # A live reading of the screen (mss): the end of the match is a display transition, after
     # which desktop duplication can keep handing back the last frame of the match.
-    if not foreground_is_game():
-        bring_game_to_front()
+    bring_to_front_at_start()
     strip = StatusStrip()
     with ScreenGrabber(game_region(), duplication=False) as screen:
         started = time.time()

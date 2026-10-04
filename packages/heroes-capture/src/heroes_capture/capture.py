@@ -42,6 +42,7 @@ from . import ui
 from .frames import frame_exists, load_frame, save_frame
 from .game_control import (
     FocusLost,
+    GamePaused,
     Recoverable,
     dismiss_failed_dialog,
     launch_map,
@@ -53,6 +54,7 @@ from .game_control import (
     wait_for_map_load,
 )
 from .game_data import find_install
+from .game_menus import game_menu_open
 from .game_state import IN_MAP, LOADING, MAP_FAILED, MENU, NOT_RUNNING, PHASES, game_state
 from .game_window import game_region, hold_key
 from .runlog import done, log, log_timings, set_log_file, stage, warn
@@ -98,6 +100,7 @@ class Session:
         self.strip = StatusStrip()
         self.strip_width = strip_width
         self._seq = 0
+        self._menu_checked = 0.0
 
     def raw_grab(self) -> np.ndarray:
         """The screen as it is. The grab copies whatever is on screen there, so the game must be
@@ -121,8 +124,20 @@ class Session:
             time.sleep(0.3)
         return None
 
+    def read(self, raw: np.ndarray, waited: bool = False) -> Status | None:
+        """The strip's status in a raw frame; None if it can't be read. When it can't (at most
+        twice a second), or a command went unanswered (`waited`), and one of the game's menus is
+        open (Esc, Options, the exit dialog), the step stops: GamePaused, which waits for the menu
+        to close and redoes the step, as a lost focus does."""
+        status = self.strip.read(raw)
+        if (status is None and time.time() >= self._menu_checked) or waited:
+            self._menu_checked = time.time() + 0.5
+            if game_menu_open(raw):
+                raise GamePaused
+        return status
+
     def status(self) -> Status | None:
-        return self.strip.read(self.raw_grab())
+        return self.read(self.raw_grab())
 
     @property
     def last_seq(self) -> int:
@@ -134,10 +149,11 @@ class Session:
         deadline = time.time() + timeout
         while time.time() < deadline:
             raw = self.raw_grab()
-            status = self.strip.read(raw)
+            status = self.read(raw)
             if status is not None and status.seq == self._seq:
                 return raw
             time.sleep(0.02)
+        self.read(self.raw_grab(), waited=True)
         return None
 
     def wait_for(self, check, timeout: float = 1.0) -> np.ndarray | None:
@@ -145,10 +161,11 @@ class Session:
         deadline = time.time() + timeout
         while time.time() < deadline:
             raw = self.raw_grab()
-            status = self.strip.read(raw)
+            status = self.read(raw)
             if status is not None and check(status):
                 return raw
             time.sleep(0.02)
+        self.read(self.raw_grab(), waited=True)
         return None
 
     def send(self, command: str, timeout: float = 2.0, sends: int = 4) -> tuple[Status, np.ndarray] | None:
@@ -157,15 +174,17 @@ class Session:
         status and that raw frame; None when the map never answered (sent `sends` times,
         `timeout` seconds each)."""
         for _ in range(sends):
+            self.read(self.raw_grab())  # a menu opened since the last command: wait, rather than type into it
             self._seq = self._seq % 255 + 1  # 1..255; 0 is what the strip shows before any command
             send_chat(f"{command} {self._seq}")
             deadline = time.time() + timeout
             while time.time() < deadline:
                 raw = self.raw_grab()
-                status = self.strip.read(raw)
+                status = self.read(raw)
                 if status is not None and status.seq == self._seq:
                     return status, raw
                 time.sleep(0.02)
+            self.read(self.raw_grab(), waited=True)  # unanswered: a menu open over the map takes the keys
         return None
 
 
