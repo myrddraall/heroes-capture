@@ -9,7 +9,6 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from . import game_control
 from . import sky_layers
 from .game_control import quit_match, send_command, settle, step
 from .runlog import done, log, warn
