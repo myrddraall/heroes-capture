@@ -25,15 +25,15 @@ trigger hrsCap_gt_Unbound;
 trigger hrsCap_gt_RefitWait;
 trigger hrsCap_gt_HideMap;
 trigger hrsCap_gt_Quiet;
-fixed hrsCap_refitWait = 0.1;  // real seconds the lighting-refit look is held before each tile (chat "refitwait"; 0.25 until the waits probe showed shorter changes nothing but the effects that animate anyway)
-bool hrsCap_unbound = false;  // chat "unbound": the camera may go anywhere on the map (tiles past the camera bounds)
+fixed hrsCap_refitWait = 0.1;  // real seconds the lighting-refit look is held before each tile (command "refitwait"; 0.25 until the waits probe showed shorter changes nothing but the effects that animate anyway)
+bool hrsCap_unbound = false;  // command "unbound": the camera may go anywhere on the map (tiles past the camera bounds)
 trigger hrsCap_gt_Quit;
 trigger hrsCap_gt_Sweep;
 trigger hrsCap_gt_FastForward;
 
 // The map's state.
 int hrsCap_skyState = 0;  // 1 white, 2 black, 0 other
-fixed hrsCap_bgSpeed = 100.0;  // animation speed (percent) "sky" gives a background; chat "bgspeed"
+fixed hrsCap_bgSpeed = 100.0;  // animation speed (percent) "sky" gives a background; command "bgspeed"
 const string hrsCap_mapSky = "${map_sky}";  // the map's own sky models (probes)
 const string hrsCap_mapParallax = "${map_parallax}";
 bool hrsCap_paused = false;  // the map's animations have been paused (once the game started)
@@ -49,7 +49,7 @@ const fixed hrsCap_readySeconds = 18.0;  // real seconds from the gates opening 
 
 //--------------------------------------------------------------------------------------------------
 // The status strip: a dialog in the top-left corner, two columns of ${status_rows} black-or-white cells
-// (wide and short), redrawn at the end of every chat command and every sweep. The capture reads
+// (wide and short), redrawn at the end of every command and every sweep. The capture reads
 // it from the screen far faster than it can judge the picture, so it knows when a command has
 // been carried out and rendered. Cells: 0 white, 1 black (locator), then bits: command sequence
 // number (8), game clock since the gates opened in seconds (10), camera target x and y in 1/64
@@ -400,7 +400,7 @@ void hrsCap_ClearUnits () {
     }
 }
 
-// The camera bounds lifted to the whole map, after chat "unbound" (the capture's tiles past the
+// The camera bounds lifted to the whole map, after the command "unbound" (the capture's tiles past the
 // camera bounds, where map content runs on past the edge of the grid). Before every pan: the map
 // may put its own bounds back at any time.
 void hrsCap_LiftBounds () {
@@ -655,7 +655,7 @@ ${skip_intro_line}    hrsCap_HideLabels();
 }
 
 //--------------------------------------------------------------------------------------------------
-// Chat commands. Each ends with hrsCap_Ack once its work is done, so the strip shows the
+// Commands (typed into the command box). Each ends with hrsCap_Ack once its work is done, so the strip shows the
 // sequence number the capture appended to it.
 //--------------------------------------------------------------------------------------------------
 

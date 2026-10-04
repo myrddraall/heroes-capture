@@ -144,7 +144,6 @@ storage; the first run after a game update opens each to index them by name (abo
 | `--crop-margin <cells>`   | `12`        | the stitched image reaches this far past the camera bounds (or past each arena's area)                         |
 | `--show-ui`               |             | diagnostic: leave the HUD up; `map render` then launches the map and stops                                    |
 | `--keep-intro`            |             | diagnostic: let the intro cutscene play out instead of skipping it                                             |
-| `--input-probe`           |             | diagnostic: the input probe's edit box and commands in the map script (`map render --probe-input` adds it)     |
 | `--paint-texture <t> <c>` |             | diagnostic: paint one of the map's own sky textures a solid colour, or `clear` (sky probes; repeatable)       |
 
 Diagnostics `map render` runs instead of rendering:
@@ -154,7 +153,6 @@ Diagnostics `map render` runs instead of rendering:
 | `--probe-light` | command sequences at chosen points, two shots after each (`HRS_PROBE_POINTS="x,y;x,y"`, `HRS_PROBE_TILE_PATH="tile:0.5;tile,black:0.5"`; see `probes.py`), to see what each step does to the picture |
 | `--probe-sky`   | one edge tile over each skybox; the sky part of each shot is measured (mean colour, spread); `HRS_SKY_SEQUENCE` scripts the swaps                                                           |
 | `--probe-waits` | the fixed waits (lighting-refit look, settle before the kept shot, sky swaps) tried shorter on sample tiles and compared with the current ones; and the sky pass with positions further apart (`sky-keep08/`) |
-| `--probe-input` | ways to send commands that a chat box knocked open or shut by an alt-tab can't upset, each timed against the chat: the map's own edit box (in the script only of a map prepared with `--input-probe`, which `map render --probe-input` adds), typed as key presses or Unicode text, read every 1/16 s or on its dialog events; whether Unicode text reaches the game as key presses; whether the box keeps the keyboard after an alt-tab. Findings in `probe-input/input-probe.json`, a shot of the box in `box.png` |
 
 Higher `--px-per-cell` means more screenshots and a closer camera. Past about 64–128 px per
 cell there is no more detail: that's the game's own texture resolution.
@@ -205,7 +203,13 @@ cell there is no more detail: that's the game's own texture resolution.
   the round, so `quit` first leaves the other team one round win short of the match.
 - **The capture script** reveals the whole map, removes every unit except structures (and
   keeps removing them as they spawn), hides health bars, keeps or hides structures, hides the
-  HUD, and sets a straight-down camera. Typing `tile <n>` in chat moves the camera to tile n.
+  HUD, and sets a straight-down camera. Commands go into an edit box of the map's own in the
+  strip's column (blanked from every shot), typed as Unicode text ending in `;`: `tile <n>;`
+  moves the camera to tile n. Text input never acts as a hotkey wherever it lands, and unlike the
+  chat box (which opens and closes on Enter, and lost its state when the game lost focus) the box
+  has no state to lose; a command takes about 90 ms against about 230 ms through chat (measured
+  with a probe). If a command goes unanswered, the chat command `focus` gives the box the
+  keyboard back.
   Structures are hidden rather than removed, since removing a core could end the game. Camera
   positions stay inside the map's camera bounds, where the game would otherwise clamp them.
   The map's intro cutscene is skipped the way the game's own skip works: the script stops the
@@ -260,7 +264,7 @@ cell there is no more detail: that's the game's own texture resolution.
   outside transparent. `--probe-sky` shows each colour on one edge tile.
 - **The status strip (`status.py`).** How the capture knows a command has been carried out:
   the map script draws a dialog in the top-left corner, two columns of black-or-white cells on
-  a black backdrop down the whole left edge, redrawn at the end of every chat command and every
+  a black backdrop down the whole left edge, redrawn at the end of every command and every
   sweep. It carries a locator, the sequence number of the last command carried out (the
   capture appends one to each command it sends), the camera's actual target (so clamping at
   the map's edge is known, and the camera bounds are measured by sending the camera to two
@@ -292,8 +296,7 @@ cell there is no more detail: that's the game's own texture resolution.
   meanwhile: Punisher Arena), measures the camera bounds the game really applies (an arena's are far tighter than its map file says)
   from where the camera stops when sent to two corners, re-plans the grid from them, sends
   each tile with its position (`tile <n> <x> <y>`), records where the camera really went
-  (`positions.json`), and for each tile takes the kept image once `tile` has been carried out, then (number pad 5, or the `black` command if the key went
-  missing)
+  (`positions.json`), and for each tile takes the kept image once `tile` has been carried out, then (`black`)
   the same view over the black skybox. It only types while the game is in front, and puts the
   game in front only as the run starts (or as it starts the game): alt-tabbing away pauses the
   run until you click back into the game. Opening the game's own menu (Esc, Options, the Alt+F4
@@ -323,7 +326,7 @@ cell there is no more detail: that's the game's own texture resolution.
 | `validated-maps.json`                      | the maps whose renders have been reviewed (`map list`)                                        |
 | `ui.py`                                    | the output: the live view or log lines, warnings, progress bars, the log file                 |
 | `inject.py`                                | prepares the map: reads it, plans the grid, injects the script, adds the textures, writes the manifest |
-| `capture_script.galaxy`, `capture_script.py` | the Galaxy script injected into the map (scene, opening, status strip, chat commands), and its values |
+| `capture_script.galaxy`, `capture_script.py` | the Galaxy script injected into the map (scene, opening, status strip, command box), and its values |
 | `sky.py`, `light_data.py`                  | the solid-colour skyboxes; the map's tileset, lighting and sky from the game's definitions     |
 | `stormlib.py`                              | MPQ archives through StormLib (ctypes)                                                        |
 | `casclib.py`, `game_data.py`               | the game's CASC storage through CascLib; the install, the maps, tilesets, light sets, models   |
@@ -333,13 +336,12 @@ cell there is no more detail: that's the game's own texture resolution.
 | `opening-timers.json`                      | per map library, the timers between the gates and the first objective                          |
 | `capture.py`                               | the capture run: start-up, the tiles, recovery                                                |
 | `status.py`                                | reads the status strip                                                                        |
-| `game_control.py`                          | drives the game: focus, chat, launching, waiting for the map, leaving the match                |
+| `game_control.py`                          | drives the game: focus, commands, launching, waiting for the map, leaving the match            |
 | `game_state.py`                            | tells the game's states apart from a screen grab (`menu-reference/` holds the menu's templates) |
 | `game_menus.py`                            | recognises the game's menus over a match (Esc, Options, the exit dialog) at any screen size    |
 | `game_window.py`                           | Windows calls: the game's process and window, keyboard and cursor                              |
 | `screen.py`                                | screen grabbing and frame comparisons                                                         |
 | `probes.py`                                | the `--probe-*` diagnostics                                                                   |
-| `input_probe.galaxy`                       | the input probe's part of the map script (only with `--input-probe`)                          |
 | `sky_layers.py` | measures the map's sky layers' speeds and shoots them across the map |
 | `sky_stitch.py` | the sky layer images, the composites and `-layers.json` |
 | `stitch.py`                                | stitches the screenshots and writes the outputs                                               |
@@ -359,9 +361,9 @@ uv run pytest -n auto --dist loadgroup   # or pnpm test from the workspace root
 - `tests/test_units.py`: the pieces with exact rules (JSON as JavaScript writes it, the script's
   numbers, the grid, lighting, sky textures, the sky measurement's consistency rule).
 - `tests/test_simulated.py`: the capture end to end against a simulated game and desktop
-  (`tests/sim/fakegame.py`: a virtual clock, the chat commands carried out, frames with the
-  status strip): renders in both void modes, a resumed run, lost focus, the game's menu opened
-  part way, a silent strip, a crash, the wrong map, the probes; and the stitch of a simulated
+  (`tests/sim/fakegame.py`: a virtual clock, the command box and its commands carried out,
+  frames with the status strip): renders in both void modes, a resumed run, lost focus, the
+  game's menu opened part way, the command box losing the keyboard, a silent strip, a crash, the wrong map, the probes; and the stitch of a simulated
   render.
 - `tests/test_game_menus.py`: the game's menus told from the map at screen sizes from 600 to
   2160 rows and 16:9 to 32:9 (`tests/sim/menus.py` draws them).
@@ -397,8 +399,8 @@ between runs.
   screenshot edges; lower `--keep` (e.g. `0.4`) to use only the centre.
 
 - **HUD pieces still visible:** note which ones. There are more hide calls to try.
-- **The camera doesn't move when `tile` is typed:** check the chat opens with Enter; the
-  script matches any message containing `tile`.
+- **The camera doesn't move when `tile <n>;` is typed:** the command box needs the keyboard
+  (it has it from the match's start; chat `focus 0 ;` gives it back) and the command its `;`.
 
 - **Trees or props missing or low-detail:** the camera is too far away for the game's detail
   distance. Raise `--px-per-cell` or `--fov` (both bring the camera closer).

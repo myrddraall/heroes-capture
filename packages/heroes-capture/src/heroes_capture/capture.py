@@ -2,16 +2,17 @@
 
     heroes-capture capture tmp/towers-of-doom-structures.json [options]   (heroes-capture map render runs it)
 
-The injected map script (capture_script.galaxy) takes chat commands and reports through its status
-strip (status.py) when each is done and where the camera really is. The capture:
+The injected map script (capture_script.galaxy) takes commands typed into its command box and
+reports through its status strip (status.py) when each is done and where the camera really is.
+The capture:
 
   1. starts Heroes if needed and launches the map (game_control.py);
   2. waits for the strip and checks it is the map prepared for this run; while the map gets ready
      (gates open, opening timers cut short, animations paused) it measures and shoots the map's
      own sky layers, where there are any (sky_layers.py);
   3. measures the camera bounds the game applies and re-plans the grid from them;
-  4. for each tile: `tile <n> <x> <y>` and the kept shot, and with matting number pad 5 and the
-     same view over the black skybox; the camera positions go to positions.json;
+  4. for each tile: `tile <n> <x> <y>` and the kept shot, and with matting `black` and the same
+     view over the black skybox; the camera positions go to positions.json;
   5. leaves the match without waiting for the menu (the stitch runs meanwhile; the next launch
      waits for it).
 
@@ -674,7 +675,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--game", help="Heroes of the Storm folder (found from the install by default)")
     ap.add_argument("--battlenet", default=os.environ.get("HRS_BATTLENET"), help="the Battle.net app (Battle.net.exe), used to start Heroes when it isn't running; found automatically if not given")
     ap.add_argument("--no-launch", action="store_true", help="the map is already running")
-    ap.add_argument("--launch-only", action="store_true", help="launch the map and stop (to try chat commands by hand)")
+    ap.add_argument("--launch-only", action="store_true", help="launch the map and stop (to try the commands by hand)")
     ap.add_argument("--probe-light", action="store_true", help="diagnostic: command sequences at chosen points (HRS_PROBE_POINTS, HRS_PROBE_TILE_PATH), a shot after each")
     ap.add_argument("--probe-sky", action="store_true", help="diagnostic: one edge tile over each solid-colour skybox, to check the colour shows and is uniform")
     ap.add_argument("--probe-waits", action="store_true", help="diagnostic: the fixed waits tried shorter on sample tiles and a sky swap, compared with the current ones; and the sky pass with positions further apart")
@@ -713,7 +714,7 @@ def main(argv: list[str]) -> None:
             sys.exit("Heroes of the Storm's install wasn't found (uninstall entries, the Battle.net app's list, the usual folders); pass --game")
         launch_map(manifest, str(game), args.battlenet)
     if args.launch_only:
-        done("Launched. In the game, chat commands: 'tile <n>' moves to a tile, 'clean', 'black', 'sky <colour>', 'pause'.")
+        done("Launched. In the game, type commands ending in ';' (the map's command box has the keyboard): 'tile <n>;' moves to a tile, 'clean;', 'black;', 'sky <colour>;', 'pause;'.")
         return
 
     if args.probe_light:

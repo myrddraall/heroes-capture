@@ -210,24 +210,6 @@ def probe_waits(session, manifest: dict, out: Path) -> None:
         step(run, f"waits probe, tile {t['index'] + 1}")
     session.send("refitwait 0.1")
 
-    # The chat box: how long it needs to open before the text is typed. Each wait, 30 commands
-    # sent once each: how many the map took, and how long a command took on average.
-    def chat_run() -> None:
-        current = game_control.CHAT_OPEN_WAIT
-        try:
-            for wait in (0.06, 0.04, 0.03, 0.02):
-                game_control.CHAT_OPEN_WAIT = wait
-                taken, started = 0, time.time()
-                for _ in range(30):
-                    taken += session.send("clean", timeout=1.0, sends=1) is not None
-                log(f"  chat box wait {wait:.2f} s: {taken}/30 commands taken first time, {(time.time() - started) / 30:.2f} s per command")
-                if taken < 30:
-                    break  # shorter still would lose more (and letters typed before the box opens reach the game as hotkeys)
-        finally:
-            game_control.CHAT_OPEN_WAIT = current
-
-    step(chat_run, "waits probe, chat box")
-
     sky = manifest.get("sky") or {}
     measured = None
     if sky.get("keys") and (sky.get("mapSky") or {}).get("parallax"):

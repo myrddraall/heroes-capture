@@ -293,7 +293,7 @@ def main(argv: list[str]) -> Path:
         # terrain drawn black; one shot over black, and the stitch makes that black transparent.
         sky_mode = "matte" if has_sky(map_data, light_sets) else "black"
         sky_start = "white" if sky_mode == "matte" else "black"
-        # The map's own sky models, for probes that show them (chat "sky mapsky" / "sky mapparallax").
+        # The map's own sky models, for probes that show them (command "sky mapsky" / "sky mapparallax").
         map_sky = sky_models(map_data, light_sets)
         log(f"map's own sky: fixed {map_sky['fixed'] or 'none'}, parallax {map_sky['parallax'] or 'none'}")
         log("void: sky (each tile shot over white and black)" if sky_mode == "matte" else "void: black terrain (one shot over black)")
@@ -355,7 +355,7 @@ def main(argv: list[str]) -> Path:
         key_spec = PARALLAX_KEYS.get(map_sky["parallax"])
         if key_spec and models.get(key_spec["file"]):
             keys = parallax_keys(map_sky["parallax"], models[key_spec["file"]])
-            log(f'keyed copies of {map_sky["parallax"]}: chat "sky parallaxwhite", "parallaxblack", "parallaxbare", "parallaxwhitebare"')
+            log(f'keyed copies of {map_sky["parallax"]}: command "sky parallaxwhite", "parallaxblack", "parallaxbare", "parallaxwhitebare"')
         for name, data in sky_files(tileset, sky_start, read, keys):
             archive.write(name, data)
         for name, data in painted_texture_files(opts["paintTextures"]):

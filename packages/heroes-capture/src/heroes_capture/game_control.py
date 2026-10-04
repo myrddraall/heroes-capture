@@ -1,4 +1,5 @@
-"""Driving the game: keys only while it is in front, chat commands, starting Heroes, launching the
+"""Driving the game: input only while it is in front, commands typed into the map's command box,
+starting Heroes, launching the
 map, waiting for it to load, and leaving the match.
 """
 
