@@ -9,6 +9,19 @@ hidden, so each map can be rendered both ways.
 Runs on Windows with the game installed. Start Heroes from the Battle.net app first, so it's
 logged in; the capture then hands the prepared map to the running game.
 
+## The release
+
+Each release on GitHub has `heroes-capture-win-x64.exe`, the whole tool in one file (Python
+included; nothing to install), and its `.sha256`. The newest is always at
+`https://github.com/myrddraall/heroes-capture/releases/latest/download/heroes-capture-win-x64.exe`.
+
+```powershell
+heroes-capture-win-x64.exe map "Battlefield of Eternity"
+```
+
+It writes into `work\` in the folder it runs from. The rest of this page is for working on the
+tool itself.
+
 ## Setup (once)
 
 - [Python](https://www.python.org) 3.11 or later
@@ -262,6 +275,7 @@ cell there is no more detail: that's the game's own texture resolution.
 | `stormlib.py`                              | MPQ archives through StormLib (ctypes)                                                        |
 | `casclib.py`, `game_data.py`               | the game's CASC storage through CascLib; the install, the maps, tilesets, light sets, models   |
 | `native.py`, `tools/build_native.py`       | where StormLib and CascLib are; fills `native/` with them (not in git)                         |
+| `tools/build_exe.py`                       | builds the one-file `heroes-capture.exe` (PyInstaller) at the release version                 |
 | `js_json.py`                               | JSON written as JavaScript writes it, so manifests match those the Node injector wrote        |
 | `opening-timers.json`                      | per map library, the timers between the gates and the first objective                          |
 | `capture.py`                               | the capture run: start-up, the tiles, recovery                                                |

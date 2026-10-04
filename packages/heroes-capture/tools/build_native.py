@@ -94,6 +94,10 @@ def main() -> None:
         if cross:
             options += zig_toolchain(work / "zig")
             options += ["-DCMAKE_SHARED_LINKER_FLAGS=-lws2_32"]  # Visual Studio links the sockets library by a pragma
+        elif windows:
+            # Visual Studio's C and C++ runtime linked in, so the DLL needs only Windows' own (the
+            # policy that lets CMake choose the runtime is newer than CascLib's CMake minimum).
+            options += ["-DCMAKE_POLICY_DEFAULT_CMP0091=NEW", "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"]
         cmake(clone(CASCLIB, work / "casclib"), work / "casclib-build", options)
         pattern = "**/*CascLib*.dll" if windows else "libcasc.so.*.*.*"
         shutil.copyfile(next((work / "casclib-build").glob(pattern)), NATIVE / ("CascLib.dll" if windows else "libcasc.so"))

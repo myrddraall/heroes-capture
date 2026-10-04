@@ -142,7 +142,11 @@ Proposed; the boundaries are chosen before each starts.
    Eternity on the PC, and the test workflow passes (53 tests,
    about 3 minutes with a cold CDN cache). **Done.**
 4. **Release.** PyInstaller build with the version resource; `build-pack` on Windows; the
-   `executable` artifact; the first release.
+   `executable` artifact; the first release. Built: `tools/build_exe.py` makes the one-file program
+   from the package (Python, the dependencies, the data files, StormLib and CascLib; on the runner
+   CascLib is built with Visual Studio, its runtime linked in); checked as a Linux binary (77 MB,
+   0.8 s to start; prepare and stitch work from it). The first pre-release and a run on the PC are
+   next.
 5. **Switch over.** The development loop on the PC points here; `tools/map-capture` leaves
    `heroes-replay-stats`.
 
@@ -151,7 +155,7 @@ Proposed; the boundaries are chosen before each starts.
 - CascLib's online storage works for Heroes (product `hero`), and the battleground maps are in
   the game's storage (as `.s2ma` files): all 35 found, Battlefield of Eternity byte-identical to
   the mirror's copy.
-- The release pipeline end to end, with a stand-in exe (`release-stub/`, built by
+- The release pipeline end to end, with a stand-in exe (`release-stub/`, since replaced; built by
   `tools/build_exe.py`): `build-pack` on `windows-latest` built it with PyInstaller, pack's PE check
   read the release version from its `ProductVersion`, and the pre-release
   `v0.1.0-feature.release-pipeline.alpha.0` carries `heroes-capture-win-x64.exe` and its `.sha256`

@@ -1,11 +1,16 @@
-"""Builds dist/heroes-capture.exe with PyInstaller (one file), at the release version.
+"""Builds dist/heroes-capture.exe (one file, PyInstaller) at the release version.
 
     python tools/build_exe.py
 
 The version comes from PROJECT_VERSION, which git-flow sets for `github.actions.build`
-(0.0.0-dev without it). It goes into the executable's version resource as the ProductVersion
-string, which git-flow's `executable` artifact reads to refuse a stale build, and into the
-program itself for `--version`. Windows only: PyInstaller can't cross-compile.
+(0.0.0-dev without it). It goes into the program (heroes_capture/_version.py, for --version) and
+into the executable's version resource as the ProductVersion string, which git-flow's
+`executable` artifact reads to refuse a stale build. The executable bundles Python, the package
+with its data files (the Galaxy template, the menu templates, the viewer page), its dependencies,
+and StormLib and CascLib from native/ (built first by tools/build_native.py when missing).
+
+On Windows it builds heroes-capture.exe; elsewhere the same program as a native binary, which is
+how the build is checked without Windows (PyInstaller can't cross-compile).
 """
 
 import os
@@ -18,9 +23,10 @@ from pathlib import Path
 PACKAGE = Path(__file__).resolve().parent.parent
 BUILD = PACKAGE / "build"
 DIST = PACKAGE / "dist"
-ENTRY = PACKAGE / "release-stub" / "heroes_capture_stub.py"
+VERSION_MODULE = PACKAGE / "src" / "heroes_capture" / "_version.py"
 NAME = "heroes-capture"
 PYINSTALLER = "pyinstaller>=6.10,<7"
+LIBRARIES = ("StormLib.dll", "CascLib.dll") if sys.platform == "win32" else ("libstorm.so", "libcasc.so")
 
 
 def numeric(version: str) -> tuple[int, int, int, int]:
@@ -53,23 +59,33 @@ def version_resource(version: str) -> str:
 """
 
 
+def run(*command: str) -> None:
+    subprocess.run(command, check=True, cwd=PACKAGE)
+
+
 def main() -> None:
     version = os.environ.get("PROJECT_VERSION") or "0.0.0-dev"
-    print(f"building {NAME}.exe {version}")
+    print(f"building {NAME} {version}")
     for folder in (BUILD, DIST):
         shutil.rmtree(folder, ignore_errors=True)
     BUILD.mkdir()
+    if not all((PACKAGE / "native" / name).exists() for name in LIBRARIES):
+        run(sys.executable, "tools/build_native.py", *(["--windows"] if sys.platform == "win32" else []))
+    VERSION_MODULE.write_text(f'VERSION = "{version}"\n', encoding="utf-8")
     (BUILD / "version_info.txt").write_text(version_resource(version), encoding="utf-8")
-    (BUILD / "_version.py").write_text(f"VERSION = {version!r}\n", encoding="utf-8")
-    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", PYINSTALLER], check=True)
-    subprocess.run(
-        [sys.executable, "-m", "PyInstaller", "--onefile", "--noconfirm", "--name", NAME,
-         "--version-file", str(BUILD / "version_info.txt"), "--paths", str(BUILD),
-         "--distpath", str(DIST), "--workpath", str(BUILD / "pyinstaller"), "--specpath", str(BUILD),
-         str(ENTRY)],
-        check=True,
-    )
-    print(f"-> {DIST / (NAME + '.exe')}")
+    (BUILD / "entry.py").write_text("from heroes_capture.cli import main\n\nmain()\n", encoding="utf-8")
+    run(sys.executable, "-m", "pip", "install", "--quiet", PYINSTALLER, ".")
+    binaries = [arg for name in LIBRARIES for arg in ("--add-binary", f"{PACKAGE / 'native' / name}{os.pathsep}.")]
+    run(sys.executable, "-m", "PyInstaller", "--onefile", "--noconfirm", "--console", "--name", NAME,
+        "--version-file", str(BUILD / "version_info.txt"),
+        "--collect-data", "heroes_capture",  # the Galaxy template, menu templates, viewer page, opening timers
+        "--collect-submodules", "heroes_capture",  # imported lazily by the command
+        "--hidden-import", "_libvips",  # pyvips' compiled binding, imported inside a try
+        *binaries,
+        "--distpath", str(DIST), "--workpath", str(BUILD / "pyinstaller"), "--specpath", str(BUILD),
+        str(BUILD / "entry.py"))
+    built = next(DIST.iterdir())
+    print(f"-> {built} ({built.stat().st_size / 1e6:.0f} MB)")
 
 
 if __name__ == "__main__":

@@ -23,5 +23,6 @@ __pycache__/
 /tmp/
 packages/heroes-capture/work/
 packages/heroes-capture/build/
+packages/heroes-capture/src/heroes_capture/_version.py
 packages/heroes-capture/local-assets/
 packages/heroes-capture/native/
