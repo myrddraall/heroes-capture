@@ -791,6 +791,8 @@ def recover(e: Recoverable, argv: list[str]) -> int:
         pass
     warn(f"recovering ({done + 1} of 3): launching the map again" + (f" and resuming at tile {e.resume_at + 1}" if e.resume_at is not None else ""))
     env = dict(os.environ, HRS_RECOVERIES=str(done + 1))
+    if ui.log_file():
+        env["HRS_DIAG_LOG"] = str(ui.log_file())  # the fresh run carries on in this run's diagnostic log
     # The same program again: the exe itself, or Python running the package.
     program = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, "-m", "heroes_capture"]
     return subprocess.call([*program, "capture", *argv], env=env)

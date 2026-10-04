@@ -30,9 +30,10 @@ Two logs:
 
 - `logs\heroes-capture.log`: the output as `--log` prints it (plain text, no colours), whichever
   view was on screen; kept, each command's run after a dated `=====` line.
-- `tmp\heroes-capture.log` and `tmp\<id>\log.txt`: the diagnostic logs, with every message,
-  the detail ones included, and every line a library printed, time-stamped; working files, so
-  removed with the rest.
+- `tmp\heroes-capture-<date>-<time>.log` (one per run) and `tmp\<id>\log.txt`: the diagnostic
+  logs, with every message, the detail ones included, and every line a library printed,
+  time-stamped; working files, so removed with the rest. A run removes only its own: a failed
+  run's stay until `clean-up`. A capture restarted after a lost match carries on in its run's.
 
 On a terminal the output is a live view (the step, its status, progress bars; warnings print
 above it); `--log` gives plain log lines instead, the default in CI or when the output isn't a

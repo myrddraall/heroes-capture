@@ -30,6 +30,22 @@ def test_prepare_passes_its_options_through(monkeypatch, tmp_path):
     assert result.exit_code == 0 and seen == [["Dragon Shire", "--screen", "3440x1440", "--help"]]
 
 
+@pytest.fixture
+def ui_state():
+    """The output module's state put back after a test that changes it by hand (a log file left
+    closed, or the live view's mode, would break the next test that prints)."""
+    from heroes_capture import ui
+
+    saved = dict(vars(ui._s))
+    yield
+    if ui._s.plain and ui._s.plain is not saved.get("plain"):
+        ui._s.plain.close()
+    for name in [n for n in vars(ui._s) if n not in saved]:
+        delattr(ui._s, name)
+    for name, value in saved.items():
+        setattr(ui._s, name, value)
+
+
 @pytest.fixture(autouse=True)
 def in_a_scratch_folder(monkeypatch, tmp_path):
     """Commands write tmp\\ and maps\\ in the current folder."""
@@ -89,15 +105,38 @@ def test_map_render_keeps_the_working_files_when_asked(monkeypatch, tmp_path):
     result = runner.invoke(cli.app, ["map", "render", "dragon shire", "--keep-tmp", "-o", "renders"])
     assert result.exit_code == 0, result.output
     assert (tmp_path / "renders" / "dragon-shire" / "dragon-shire-terrain.png").exists()
-    for name in ("dragon-shire-terrain.json", "dragon-shire-terrain.stormmap", "dragon-shire-terrain", "heroes-capture.log"):
+    for name in ("dragon-shire-terrain.json", "dragon-shire-terrain.stormmap", "dragon-shire-terrain"):
         assert (tmp_path / "tmp" / name).exists(), name
+    assert len(list((tmp_path / "tmp").glob("heroes-capture-*.log"))) == 1
 
 
 def test_a_failed_map_render_leaves_the_working_files(monkeypatch, tmp_path):
     render_steps(monkeypatch, tmp_path, fail_stitch=True)
     result = runner.invoke(cli.app, ["map", "render", "dragon shire"])
     assert result.exit_code != 0
-    assert (tmp_path / "tmp" / "dragon-shire-terrain.json").exists() and (tmp_path / "tmp" / "heroes-capture.log").exists()
+    assert (tmp_path / "tmp" / "dragon-shire-terrain.json").exists() and list((tmp_path / "tmp").glob("heroes-capture-*.log"))
+
+
+def test_a_later_run_leaves_a_failed_runs_diagnostic_log(monkeypatch, tmp_path):
+    render_steps(monkeypatch, tmp_path, fail_stitch=True)
+    assert runner.invoke(cli.app, ["map", "render", "dragon shire"]).exit_code != 0
+    [failed] = (tmp_path / "tmp").glob("heroes-capture-*.log")
+    render_steps(monkeypatch, tmp_path)
+    assert runner.invoke(cli.app, ["map", "render", "dragon shire", "-o", "again"]).exit_code == 0
+    assert failed.exists() and "left in tmp for diagnosis" in failed.read_text()  # its own was removed, not this one
+    assert list((tmp_path / "tmp").glob("heroes-capture-*.log")) == [failed]
+
+
+def test_a_restarted_capture_carries_on_in_its_runs_logs(monkeypatch, tmp_path):
+    from heroes_capture import ui
+
+    monkeypatch.setenv("HRS_DIAG_LOG", str(tmp_path / "tmp" / "heroes-capture-run.log"))
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "heroes-capture.log").write_text("===== the run's dated line\n")
+    cli.log_to(tmp_path / "tmp")
+    ui.done("tile 9 again")
+    assert ui.log_file() == tmp_path / "tmp" / "heroes-capture-run.log"
+    assert (tmp_path / "logs" / "heroes-capture.log").read_text() == "===== the run's dated line\ntile 9 again\n"
 
 
 def test_the_clean_up_command_removes_only_what_the_tool_wrote(tmp_path):
@@ -107,7 +146,8 @@ def test_the_clean_up_command_removes_only_what_the_tool_wrote(tmp_path):
     (tmp / "dragon-shire-terrain.json").write_text(json.dumps({"id": "dragon-shire-terrain", "tiles": []}))
     (tmp / "dragon-shire-terrain.stormmap").write_text("map")
     (tmp / "cursed-hollow-structures.stormmap").write_text("map")  # a preparation that failed before its manifest
-    (tmp / "heroes-capture.log").write_text("run")
+    (tmp / "heroes-capture-20261004-120000.log").write_text("run")
+    (tmp / "heroes-capture.log").write_text("an older version's run")
     (tmp / "notes.json").write_text(json.dumps({"mine": True}))  # not the tool's
     (tmp / "setup.log").write_text("pip")
     result = runner.invoke(cli.app, ["clean-up"])
@@ -116,7 +156,7 @@ def test_the_clean_up_command_removes_only_what_the_tool_wrote(tmp_path):
     assert "1 render" in result.output and "left alone" in result.output
     (tmp / "notes.json").unlink()
     (tmp / "setup.log").unlink()
-    (tmp / "heroes-capture.log").write_text("run")
+    (tmp / "heroes-capture-20261004-130000-2.log").write_text("run")
     assert runner.invoke(cli.app, ["clean-up"]).exit_code == 0
     assert not tmp.exists()  # emptied, so removed
     assert "Nothing to clean up" in runner.invoke(cli.app, ["clean-up"]).output
@@ -184,7 +224,7 @@ def test_map_list_against_the_game():
     assert "maps validated; 4 unsupported" in result.output
 
 
-def test_the_plain_log_is_what_log_mode_prints_in_either_mode(tmp_path):
+def test_the_plain_log_is_what_log_mode_prints_in_either_mode(tmp_path, ui_state):
     """logs/heroes-capture.log reads the same whether the screen showed the live view or log lines."""
     from heroes_capture import ui
 
@@ -199,8 +239,34 @@ def test_the_plain_log_is_what_log_mode_prints_in_either_mode(tmp_path):
             print("a library's line")
         ui.done("2 screenshots")
         ui.show("1 of 2 maps validated")
-        ui._s.plain.close()
         return (tmp_path / f"{mode}.log").read_text().splitlines()[1:]  # after the dated line
 
     assert run("pretty") == run("log") == ["", "Capturing", "tile 1/2", "warning: focus lost", "a library's line",
                                             "2 screenshots", "1 of 2 maps validated"]
+
+
+def test_library_warnings_show_once_however_often_the_output_is_configured(ui_state, capsys):
+    import logging
+
+    from heroes_capture import ui
+
+    ui.configure(log=True)
+    ui.configure(log=True)
+    capsys.readouterr()
+    logging.getLogger("dxcam").warning("a library's warning")
+    assert capsys.readouterr().out.count("a library's warning") == 1
+
+
+def test_map_list_shows_names_and_notes_as_written(monkeypatch):
+    from contextlib import nullcontext
+
+    from heroes_capture import game_data
+
+    monkeypatch.setattr(game_data, "find_install", lambda: None)
+    monkeypatch.setattr(game_data, "open_storage", lambda install: nullcontext())
+    monkeypatch.setattr(game_data, "map_index", lambda storage: {"Dragon Shire": {"file": "x", "category": "Battleground"}})
+    monkeypatch.setattr(game_data, "folder_maps", lambda storage: [])
+    monkeypatch.setattr(cli, "validated_maps", lambda: {"Dragon Shire": {"version": "0.1.0", "note": "void [bold] edges [/]"}})
+    result = runner.invoke(cli.app, ["map", "list"], env={"COLUMNS": "200"})
+    assert result.exit_code == 0, result.output
+    assert "void [bold] edges [/]" in result.output

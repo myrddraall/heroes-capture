@@ -37,6 +37,7 @@ class _State:
     verbose = False
     console: Console | None = None
     file = None
+    file_path: Path | None = None
     pending: list[str] = []
     plain = None
     plain_pending: list[str] = []
@@ -45,6 +46,7 @@ class _State:
     status = ""
     bars: Progress | None = None
     started = 0.0
+    handler: logging.Handler | None = None
 
 
 _s = _State()
@@ -127,9 +129,10 @@ def configure(log: bool = False, verbose: bool = False) -> None:
     _s.verbose = verbose
     warnings.showwarning = lambda message, category, filename, lineno, file=None, line=None: warn(
         f"{category.__name__}: {message} ({Path(filename).name}:{lineno})")
-    handler = logging.Handler(logging.WARNING)
-    handler.emit = lambda record: warn(f"{record.name}: {record.getMessage()}")
-    logging.getLogger().addHandler(handler)
+    if _s.handler is None:  # once: configured again (as tests do), it would show each warning twice
+        _s.handler = logging.Handler(logging.WARNING)
+        _s.handler.emit = lambda record: warn(f"{record.name}: {record.getMessage()}")
+        logging.getLogger().addHandler(_s.handler)
 
 
 def _console() -> Console:
@@ -141,11 +144,16 @@ def _console() -> Console:
 def set_log_file(path: Path) -> None:
     """Where every message goes too (appended: a restarted capture keeps writing to it)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    _s.file = open(path, "a", encoding="utf-8")
+    _s.file, _s.file_path = open(path, "a", encoding="utf-8"), path
     for line in _s.pending:
         _s.file.write(line)
     _s.pending.clear()
     _s.file.flush()
+
+
+def log_file() -> Path | None:
+    """The diagnostic log's path, once set."""
+    return _s.file_path
 
 
 def close_log_file() -> None:
@@ -155,11 +163,13 @@ def close_log_file() -> None:
         _s.file = None
 
 
-def set_plain_log(path: Path) -> None:
-    """Where the output goes as log mode prints it, appended after a dated line with the command."""
+def set_plain_log(path: Path, header: bool = True) -> None:
+    """Where the output goes as log mode prints it, appended after a dated line with the command
+    (header=False: a run carrying on, as a restarted capture, without a line of its own)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     _s.plain = open(path, "a", encoding="utf-8")
-    _s.plain.write(f"===== {time.strftime('%Y-%m-%d %H:%M:%S')} heroes-capture {' '.join(sys.argv[1:])}\n")
+    if header:
+        _s.plain.write(f"===== {time.strftime('%Y-%m-%d %H:%M:%S')} heroes-capture {' '.join(sys.argv[1:])}\n")
     for line in _s.plain_pending:
         _s.plain.write(line)
     _s.plain_pending.clear()

@@ -12,8 +12,10 @@ parsers for now (`heroes-capture prepare --help`).
 """
 
 import json
+import os
 import shutil
 import sys
+import time
 from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
@@ -21,6 +23,7 @@ from typing import Annotated, Optional
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from . import ui
@@ -103,10 +106,25 @@ def _options(
 
 def log_to(folder: Path) -> None:
     """The output also into logs/heroes-capture.log, as --log prints it (kept, every command's run
-    after a dated line), and every message with its details into the diagnostic log,
-    <folder>/heroes-capture.log (a working file)."""
-    ui.set_plain_log(LOGS / "heroes-capture.log")
-    ui.set_log_file(folder / "heroes-capture.log")
+    after a dated line), and every message with its details into the run's own diagnostic log,
+    <folder>/heroes-capture-<date>-<time>.log (a working file: the run removes its own when it
+    finishes, never an earlier one's). A capture restarted after a lost match carries on in its
+    run's diagnostic log (capture.recover passes it as HRS_DIAG_LOG), and in the plain log without
+    a dated line of its own."""
+    carried_on = os.environ.get("HRS_DIAG_LOG")
+    ui.set_plain_log(LOGS / "heroes-capture.log", header=not carried_on)
+    ui.set_log_file(Path(carried_on) if carried_on else diagnostic_log(folder))
+
+
+def diagnostic_log(folder: Path) -> Path:
+    """A new run's diagnostic log in `folder`: heroes-capture-<date>-<time>.log (-2, -3 ... after
+    it when a run that began in the same second has one)."""
+    stem = f"heroes-capture-{time.strftime('%Y%m%d-%H%M%S')}"
+    path, n = folder / f"{stem}.log", 1
+    while path.exists():
+        n += 1
+        path = folder / f"{stem}-{n}.log"
+    return path
 
 
 def remove(paths: list[Path]) -> None:
@@ -147,7 +165,7 @@ def working_files(folder: Path) -> list[Path]:
     """What heroes-capture wrote in a working folder: each prepared map's manifest (<id>.json, a
     manifest by its id and tiles), its prepared map (<id>.stormmap) and its folder of screenshots
     and logs (<id>), any prepared map left without a manifest (a preparation that failed), and the
-    command log. Anything else in the folder isn't the tool's."""
+    runs' diagnostic logs. Anything else in the folder isn't the tool's."""
     if not folder.is_dir():
         return []
     found = []
@@ -159,8 +177,7 @@ def working_files(folder: Path) -> list[Path]:
         if isinstance(data, dict) and data.get("id") == manifest.stem and "tiles" in data:
             found += [manifest, *(p for p in (manifest.with_suffix(".stormmap"), manifest.with_suffix("")) if p.exists())]
     found += [p for p in sorted(folder.glob("*.stormmap")) if p not in found]
-    if (folder / "heroes-capture.log").exists():
-        found.append(folder / "heroes-capture.log")
+    found += sorted(folder.glob("heroes-capture*.log"))
     return found
 
 
@@ -232,8 +249,7 @@ def render(
             run_capture([manifest, *capture_options])
         with ui.step("Stitching"):
             stitch.main([manifest, "--tiles", "--output-dir", str(output_dir)])
-        working = [manifest_path, manifest_path.with_suffix(".stormmap"), manifest_path.with_suffix(""), work / "heroes-capture.log"]
-        clean_up(working, keep_tmp)
+        clean_up([manifest_path, manifest_path.with_suffix(".stormmap"), manifest_path.with_suffix(""), ui.log_file()], keep_tmp)
         ui.done(f"The map is in {stitch.output_folder(output_dir, planned)}")
 
 
@@ -299,13 +315,13 @@ def list_maps(
         if category != shown:
             if shown:
                 table.add_section()
-            table.add_row(f"[bold]{category}[/]")
+            table.add_row(f"[bold]{escape(category)}[/]")
             shown = category
-        table.add_row("  " + name, STATUS_STYLE[status], validated_with, note)
+        table.add_row("  " + escape(name), STATUS_STYLE[status], escape(validated_with), escape(note))  # as written, brackets too
     ui.show(table)
     done = sum(status == "validated" for _, _, status, _, _ in rows)
     ui.show(f"{done} of {len(game_maps)} maps validated; {len(unsupported)} unsupported")
-    clean_up([TMP / "heroes-capture.log"], keep_tmp)
+    clean_up([ui.log_file()], keep_tmp)
 
 
 # ------------------------------------------------------------------------------------------------
