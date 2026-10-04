@@ -22,9 +22,17 @@ heroes-capture-win-x64.exe map list     # the game's maps by category, and which
 
 A render's images go to `maps\<map id>\` in the folder it runs from (`maps\battlefield-of-eternity\`;
 `-o` / `--output-dir` picks another folder for them). Its working files (the screenshots, the
-prepared map, `heroes-capture.log` with every message) go to `tmp\` and are removed when the render
-finishes; `--keep-tmp` leaves them for diagnosis, and a failed render leaves them too.
-`heroes-capture clean-up` removes them afterwards (only what heroes-capture wrote in `tmp\`).
+prepared map, the diagnostic logs) go to `tmp\` and are removed when the render finishes;
+`--keep-tmp` leaves them for diagnosis, and a failed render leaves them too. `heroes-capture
+clean-up` removes them afterwards (only what heroes-capture wrote in `tmp\`).
+
+Two logs:
+
+- `logs\heroes-capture.log`: the output as `--log` prints it (plain text, no colours), whichever
+  view was on screen; kept, each command's run after a dated `=====` line.
+- `tmp\heroes-capture.log` and `tmp\<id>\log.txt`: the diagnostic logs, with every message,
+  the detail ones included, and every line a library printed, time-stamped; working files, so
+  removed with the rest.
 
 On a terminal the output is a live view (the step, its status, progress bars; warnings print
 above it); `--log` gives plain log lines instead, the default in CI or when the output isn't a

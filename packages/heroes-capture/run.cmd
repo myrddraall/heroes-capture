@@ -2,8 +2,8 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: map list, with tmp\ kept so its log comes back (pip, when it runs, writes
-rem tmp\setup.log).
+rem Current step: map list, with tmp\ kept so its diagnostic log comes back too (pip, when it
+rem runs, writes tmp\setup.log).
 setlocal
 pushd "%~dp0"
 set "PYTHONPATH=%~dp0src"
@@ -14,23 +14,23 @@ if errorlevel 1 echo.& echo Stopped: the step above failed.
 popd
 
 :copy
-rem Copy this run's output (maps\ and tmp\, without the prepared map files) to the results
+rem Copy this run's output (logs\, maps\ and tmp\, without the prepared map files) to the results
 rem folder, which update.cmd points at the development machine's tmp\ folder.
 if not defined HRS_RESULTS (
   echo.
   echo Results not copied back: HRS_RESULTS is not set. Run this through update.cmd.
   exit /b 0
 )
-if not exist "%~dp0tmp" if not exist "%~dp0maps" (
+if not exist "%~dp0logs" if not exist "%~dp0tmp" if not exist "%~dp0maps" (
   echo.
-  echo Nothing to copy back: the run left no tmp or maps folder.
+  echo Nothing to copy back: the run left no logs, tmp or maps folder.
   exit /b 1
 )
 echo.
 echo Copying results to %HRS_RESULTS% ...
 set "FAILED="
 rem /XX: don't list the files already in the results folder that this run didn't make.
-for %%F in (tmp maps) do if exist "%~dp0%%F" (
+for %%F in (logs tmp maps) do if exist "%~dp0%%F" (
   robocopy "%~dp0%%F" "%HRS_RESULTS%\%%F" /E /XX /XF *.stormmap /NFL /NDL /NJH /NP
   if errorlevel 8 set "FAILED=1"
 )

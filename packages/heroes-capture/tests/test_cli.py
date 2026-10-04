@@ -79,6 +79,9 @@ def test_map_render_runs_the_three_steps_with_the_defaults(monkeypatch, tmp_path
     assert (tmp_path / "maps" / "dragon-shire" / "dragon-shire-terrain.png").exists()
     assert "The map is in maps" in result.output
     assert not (tmp_path / "tmp").exists()  # the working files removed, and their folder
+    plain = (tmp_path / "logs" / "heroes-capture.log").read_text()  # the plain log stays
+    assert plain.startswith("===== ") and "\nPreparing dragon shire\n" in plain and "3 tiles planned" in plain
+    assert "\x1b[" not in plain
 
 
 def test_map_render_keeps_the_working_files_when_asked(monkeypatch, tmp_path):
@@ -179,3 +182,25 @@ def test_map_list_against_the_game():
         assert category in result.output
     assert "Try Me Mode" in result.output and "unsupported" in result.output
     assert "maps validated; 4 unsupported" in result.output
+
+
+def test_the_plain_log_is_what_log_mode_prints_in_either_mode(tmp_path):
+    """logs/heroes-capture.log reads the same whether the screen showed the live view or log lines."""
+    from heroes_capture import ui
+
+    def run(mode: str) -> list[str]:
+        ui.configure(log=True)
+        ui._s.mode = mode  # pretty can't be picked on a test's (non-terminal) output
+        ui.set_plain_log(tmp_path / f"{mode}.log")
+        with ui.step("Capturing"):
+            ui.info("tile 1/2")
+            ui.warn("focus lost")
+            ui.detail("hidden without --verbose")
+            print("a library's line")
+        ui.done("2 screenshots")
+        ui.show("1 of 2 maps validated")
+        ui._s.plain.close()
+        return (tmp_path / f"{mode}.log").read_text().splitlines()[1:]  # after the dated line
+
+    assert run("pretty") == run("log") == ["", "Capturing", "tile 1/2", "warning: focus lost", "a library's line",
+                                            "2 screenshots", "1 of 2 maps validated"]

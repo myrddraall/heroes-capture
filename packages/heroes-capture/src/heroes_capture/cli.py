@@ -29,7 +29,8 @@ PROBES = ("probe_light", "probe_sky", "probe_depth", "probe_waits")
 DISTANCE = "214"  # camera distance: far, so tall objects lean little at the seams
 KEEP = "0.4"  # share of each screenshot used, centred
 VALIDATED = Path(__file__).with_name("validated-maps.json")
-TMP = Path("tmp")  # the working files, in the current folder
+TMP = Path("tmp")  # the working files and the diagnostic log, in the current folder
+LOGS = Path("logs")  # the plain log: the output as --log prints it, kept
 MAPS = Path("maps")  # the default output folder
 PASS_THROUGH = {"allow_extra_args": True, "ignore_unknown_options": True}
 
@@ -101,7 +102,10 @@ def _options(
 
 
 def log_to(folder: Path) -> None:
-    """Every message also into <folder>/heroes-capture.log."""
+    """The output also into logs/heroes-capture.log, as --log prints it (kept, every command's run
+    after a dated line), and every message with its details into the diagnostic log,
+    <folder>/heroes-capture.log (a working file)."""
+    ui.set_plain_log(LOGS / "heroes-capture.log")
     ui.set_log_file(folder / "heroes-capture.log")
 
 
@@ -176,7 +180,7 @@ def render(
     map: Annotated[str, typer.Argument(help="The map as the game names it (case and punctuation don't matter), or a path to a .stormmap.", show_default=False)],  # noqa: A002
     structures: Annotated[Structures, typer.Option(help="Keep or hide forts, towers, cores and gates.")] = Structures.keep,
     output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Where the map's folder goes: <output-dir>/<map id>, e.g. maps/dragon-shire.")] = MAPS,
-    keep_tmp: Annotated[bool, typer.Option("--keep-tmp", help="Leave the working files (screenshots, the prepared map, logs) in tmp\\ for diagnosis.")] = False,
+    keep_tmp: Annotated[bool, typer.Option("--keep-tmp", help="Leave the working files (screenshots, the prepared map, diagnostic logs) in tmp\\ for diagnosis.")] = False,
     game: Annotated[Optional[str], typer.Option(hidden=True)] = None,  # the install, when it isn't found by itself
     probe_light: Annotated[bool, typer.Option(hidden=True)] = False,  # diagnostics instead of the tiles
     probe_sky: Annotated[bool, typer.Option(hidden=True)] = False,
@@ -186,7 +190,7 @@ def render(
 ) -> None:
     """Prepare, capture and stitch a battleground.
 
-    The images go to <output-dir>/<map id> (maps\\<map id> in the current folder). The working files go to tmp\\ and are removed once the render finishes, unless --keep-tmp; a failed render leaves them. Options after the map that aren't listed here go to the preparing step (heroes-capture prepare --help).
+    The images go to <output-dir>/<map id> (maps\\<map id> in the current folder). The working files and the diagnostic log go to tmp\\ and are removed once the render finishes, unless --keep-tmp; a failed render leaves them. The output, as --log prints it, goes to logs\\heroes-capture.log and stays. Options after the map that aren't listed here go to the preparing step (heroes-capture prepare --help).
     """
     map_name = map
     from . import inject, stitch
@@ -269,7 +273,7 @@ STATUS_STYLE = {"validated": "[green]✓ validated[/]", "not yet": "[yellow]not 
 
 @map_app.command("list")
 def list_maps(
-    keep_tmp: Annotated[bool, typer.Option("--keep-tmp", help="Leave the run's log in tmp\\ for diagnosis.")] = False,
+    keep_tmp: Annotated[bool, typer.Option("--keep-tmp", help="Leave the run's diagnostic log in tmp\\.")] = False,
 ) -> None:
     """The game's maps by category, and which have been validated.
 
@@ -298,10 +302,9 @@ def list_maps(
             table.add_row(f"[bold]{category}[/]")
             shown = category
         table.add_row("  " + name, STATUS_STYLE[status], validated_with, note)
-    console = Console()
-    console.print(table)
+    ui.show(table)
     done = sum(status == "validated" for _, _, status, _, _ in rows)
-    console.print(f"{done} of {len(game_maps)} maps validated; {len(unsupported)} unsupported")
+    ui.show(f"{done} of {len(game_maps)} maps validated; {len(unsupported)} unsupported")
     clean_up([TMP / "heroes-capture.log"], keep_tmp)
 
 

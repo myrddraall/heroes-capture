@@ -1,4 +1,4 @@
-"""The tool's output, in one of two modes, with everything also written to a log file.
+"""The tool's output, in one of two modes, with everything also written to two log files.
 
 pretty (the default on a terminal): a live view with Rich: the current step with a spinner, its
 latest status line, progress bars for the long loops, and a ✓ line per finished step. Routine
@@ -9,8 +9,11 @@ warnings; anything a library prints straight to stdout or stderr shows dimmed ab
 log (--log; the default when CI is set or the output isn't a terminal): every message on its own
 line, as plain text.
 
---verbose adds the detail messages in both modes. The log file (set_log_file) always gets every
-message, detail included, and every line libraries printed, with a time stamp.
+--verbose adds the detail messages in both modes.
+
+The plain log (set_plain_log) gets the output as log mode prints it, whatever the mode on screen:
+the run to read back. The diagnostic log (set_log_file) gets every message, detail included, and
+every line libraries printed, each with a time stamp and its kind.
 """
 
 import io
@@ -35,6 +38,8 @@ class _State:
     console: Console | None = None
     file = None
     pending: list[str] = []
+    plain = None
+    plain_pending: list[str] = []
     live: Live | None = None
     title = ""
     status = ""
@@ -67,6 +72,7 @@ class _Tee(io.TextIOBase):
 
     def _line(self, line: str) -> None:
         _record(self.kind, line)
+        _plain_log(line)
         if _s.live:
             _console().print(Text(line, style="dim"))
         else:
@@ -149,6 +155,26 @@ def close_log_file() -> None:
         _s.file = None
 
 
+def set_plain_log(path: Path) -> None:
+    """Where the output goes as log mode prints it, appended after a dated line with the command."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _s.plain = open(path, "a", encoding="utf-8")
+    _s.plain.write(f"===== {time.strftime('%Y-%m-%d %H:%M:%S')} heroes-capture {' '.join(sys.argv[1:])}\n")
+    for line in _s.plain_pending:
+        _s.plain.write(line)
+    _s.plain_pending.clear()
+    _s.plain.flush()
+
+
+def _plain_log(text: str) -> None:
+    line = text + "\n"
+    if _s.plain:
+        _s.plain.write(line)
+        _s.plain.flush()
+    else:
+        _s.plain_pending.append(line)
+
+
 def _record(kind: str, text: str) -> None:
     line = f"{time.strftime('%H:%M:%S')} {kind:<7} {text}\n"
     if _s.file:
@@ -162,9 +188,20 @@ def _plain(text: str) -> None:
     _console().print(text, markup=False, soft_wrap=True)
 
 
+def show(renderable) -> None:
+    """Something to show as it is (a table): on screen, and as plain text in the plain log."""
+    _console().print(renderable)
+    text = io.StringIO()
+    Console(file=text, width=_console().width, color_system=None, highlight=False).print(renderable)
+    for line in text.getvalue().splitlines():
+        _record("show", line.rstrip())
+        _plain_log(line.rstrip())
+
+
 def info(text: str) -> None:
     """A routine message: a line in log mode, the status line in the live view."""
     _record("info", text)
+    _plain_log(text)
     if _s.mode == "log":
         _plain(text)
     elif _s.live:
@@ -177,6 +214,7 @@ def detail(text: str) -> None:
     _record("detail", text)
     if not _s.verbose:
         return
+    _plain_log("  " + text)
     if _s.mode == "pretty":
         _console().print(Text("  " + text, style="dim"))
     else:
@@ -186,6 +224,7 @@ def detail(text: str) -> None:
 def warn(text: str) -> None:
     """Something to notice: shown in both modes (above the live view, which carries on)."""
     _record("warning", text)
+    _plain_log(f"warning: {text}")
     if _s.mode == "log":
         _plain(f"warning: {text}")
     else:
@@ -195,6 +234,7 @@ def warn(text: str) -> None:
 def done(text: str) -> None:
     """An outcome worth keeping on screen."""
     _record("done", text)
+    _plain_log(text)
     if _s.mode == "log":
         _plain(text)
     else:
@@ -227,6 +267,7 @@ def _refresh() -> None:
 def step(title: str):
     """A step of the run: the live view while it runs, then a ✓ (or ✗) line with its time."""
     _record("step", title)
+    _plain_log(f"\n{title}")
     _s.started = time.time()
     if _s.mode == "log":
         _plain(f"\n{title}")

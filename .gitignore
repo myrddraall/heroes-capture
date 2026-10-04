@@ -22,6 +22,7 @@ __pycache__/
 # heroes-capture working and output folders, and game files fetched locally
 /tmp/
 packages/heroes-capture/tmp/
+packages/heroes-capture/logs/
 packages/heroes-capture/maps/
 packages/heroes-capture/build/
 packages/heroes-capture/src/heroes_capture/_version.py
