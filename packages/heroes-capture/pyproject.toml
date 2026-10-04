@@ -8,7 +8,9 @@ dependencies = [
   "numpy>=1.26",
   "pillow>=10",
   "pyvips[binary]>=2.2",
+  "rich>=14",
   "scipy>=1.11",
+  "typer>=0.17",
   # Windows only: screen grabbing and input to the game.
   "dxcam>=0.3; sys_platform == 'win32'",
   "mss>=9; sys_platform == 'win32'",

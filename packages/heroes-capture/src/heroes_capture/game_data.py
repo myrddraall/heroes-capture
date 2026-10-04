@@ -105,7 +105,7 @@ def open_storage(install: Path | None) -> Storage:
 # ------------------------------------------------------------------------------------------------
 
 
-def _map_index(storage: Storage) -> dict[str, str]:
+def map_index(storage: Storage) -> dict[str, str]:
     """Map name (as the game shows it) -> its .s2ma file in the storage. Battleground maps are
     .s2ma archives under content-hash names in the storage's depot cache; each is opened to tell
     maps (a map script) from mods and to read its name. The names are hashes of the contents, so
@@ -139,7 +139,7 @@ def _map_index(storage: Storage) -> dict[str, str]:
 def map_file(storage: Storage, map_name: str) -> tuple[str, bytes]:
     """A battleground's .stormmap, by the name the game shows (case and punctuation aside): its
     name as the game spells it, and its bytes."""
-    index = _map_index(storage)
+    index = map_index(storage)
     plain = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())  # noqa: E731
     match = next((name for name in index if plain(name) == plain(map_name)), None)
     if not match:

@@ -16,7 +16,8 @@ included; nothing to install), and its `.sha256`. The newest is always at
 `https://github.com/myrddraall/heroes-capture/releases/latest/download/heroes-capture-win-x64.exe`.
 
 ```powershell
-heroes-capture-win-x64.exe map "Battlefield of Eternity"
+heroes-capture-win-x64.exe map render "Battlefield of Eternity"
+heroes-capture-win-x64.exe map list     # the game's maps, and which have been validated
 ```
 
 It writes into `work\` in the folder it runs from. The rest of this page is for working on the
@@ -50,15 +51,18 @@ tool itself.
 `update.cmd` that refreshes the files and calls it needs no arguments. `update.cmd` is not
 tracked: it contains the machine's source path.
 
-`heroes-capture map` runs all three steps against the installed game, at the primary monitor's
-resolution, into `work\`:
+`heroes-capture map render` runs all three steps against the installed game, at the primary
+monitor's resolution, into `work\`:
 
 ```powershell
-heroes-capture map "Towers of Doom"                       # structures kept
-heroes-capture map "Cursed Hollow" --structures hide      # bare terrain
+heroes-capture map render "Towers of Doom"                  # structures kept
+heroes-capture map render "Cursed Hollow" --structures hide # bare terrain
 ```
 
-(`py -m heroes_capture map ...` is the same.) The steps on their own:
+(`py -m heroes_capture map render ...` is the same.) `heroes-capture map list` lists the game's
+maps and which have been validated: their render reviewed and, where needed, tuned for. They're
+in `validated-maps.json`; add a map there once its render has been looked over. The steps on
+their own:
 
 ```powershell
 # 1. Prepare: reads the map from the game, injects the capture script, plans the grid.
@@ -81,7 +85,7 @@ Map names are as the game shows them (case and punctuation don't matter), or pas
 `.stormmap`. The battleground maps are `.s2ma` archives under content-hash names in the game's
 storage; the first run after a game update opens each to index them by name (about 20 s).
 
-### Options (prepare; `map` passes them on)
+### Options (prepare; `map render` passes them on)
 
 | Option                    | Default     | Effect                                                                                                         |
 | ------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------- |
@@ -89,17 +93,17 @@ storage; the first run after a game update opens each to index them by name (abo
 | `--px-per-cell <n>`       | `48`        | output resolution; a map is ~220 cells wide, so 48 gives ~10,600 px                                            |
 | `--screen <w>x<h>`        | `3840x2160` | the game's resolution while capturing; match your monitor                                                      |
 | `--fov <deg>`             | `20`        | field of view; narrower is flatter (less lean on tall objects) but puts the camera further away                |
-| `--distance <units>`      |             | camera distance instead of `--fov` (the field of view is then chosen to keep the scale); `map` uses 214     |
+| `--distance <units>`      |             | camera distance instead of `--fov` (the field of view is then chosen to keep the scale); `map render` uses 214 |
 | `--keep <0..1>`           | `0.6`       | share of each screenshot used, centred; the rest is overlap, used to measure the scale                         |
 | `--refit-yaw <deg>`       | map's light | yaw of the lighting-refit look before each tile (by default it faces the map's main light)                     |
 | `--no-lens`               |             | don't set the field of view or clip planes (see troubleshooting)                                               |
 | `--margin <cells>`        | `0`         | also capture beyond the map's camera bounds (lifts them)                                                       |
 | `--crop-margin <cells>`   | `12`        | the stitched image reaches this far past the camera bounds (or past each arena's area)                         |
-| `--show-ui`               |             | diagnostic: leave the HUD up; `map` then launches the map and stops                                           |
+| `--show-ui`               |             | diagnostic: leave the HUD up; `map render` then launches the map and stops                                    |
 | `--keep-intro`            |             | diagnostic: let the intro cutscene play out instead of skipping it                                             |
 | `--paint-texture <t> <c>` |             | diagnostic: paint one of the map's own sky textures a solid colour, or `clear` (sky probes; repeatable)       |
 
-Diagnostics `map` runs instead of rendering:
+Diagnostics `map render` runs instead of rendering:
 
 | Switch          | Effect                                                                                                                                                                                     |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -268,7 +272,8 @@ cell there is no more detail: that's the game's own texture resolution.
 | File                                       | What it does                                                                                  |
 | ------------------------------------------ | --------------------------------------------------------------------------------------------- |
 | `src/heroes_capture/`                      | the package; the modules below are in it                                                      |
-| `cli.py`                                   | the `heroes-capture` command: `map` (the three steps), `prepare`, `capture`, `stitch`          |
+| `cli.py`                                   | the `heroes-capture` command (Typer, Rich): `map render`, `map list`, `prepare`, `capture`, `stitch` |
+| `validated-maps.json`                      | the maps whose renders have been reviewed (`map list`)                                        |
 | `inject.py`                                | prepares the map: reads it, plans the grid, injects the script, adds the textures, writes the manifest |
 | `capture_script.galaxy`, `capture_script.py` | the Galaxy script injected into the map (scene, opening, status strip, chat commands), and its values |
 | `sky.py`, `light_data.py`                  | the solid-colour skyboxes; the map's tileset, lighting and sky from the game's definitions     |
@@ -335,7 +340,7 @@ between runs.
   3 minutes; `strip-missing.png` shows the screen's left edge.
 
 - **A "script failed to compile" error naming a `c_cameraValue…` constant:** re-run
-  `map` with `--no-lens`. Without a narrow field of view, tall objects lean more at the
+  `map render` with `--no-lens`. Without a narrow field of view, tall objects lean more at the
   screenshot edges; lower `--keep` (e.g. `0.4`) to use only the centre.
 
 - **HUD pieces still visible:** note which ones. There are more hide calls to try.
