@@ -2,16 +2,13 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: the output modes, shown without the game: the live view with warnings arriving
-rem mid-progress (ui-demo), then the same as plain log lines with --verbose. Both also write
-rem work\heroes-capture.log, which is copied back.
+rem Current step: map list (pip, when it runs, is quiet now, its output in work\setup.log).
 setlocal
 pushd "%~dp0"
 set "PYTHONPATH=%~dp0src"
-py -c "import heroes_capture.cli, numpy, PIL, pyvips, scipy, mss, pydirectinput, dxcam, typer, rich" 2>nul || py -m pip install -e . || goto :copy
-py -m heroes_capture ui-demo
-echo.
-py -m heroes_capture --log --verbose ui-demo
+rem The tool's dependencies, installed quietly when missing (pip's output in work\setup.log).
+py -c "import heroes_capture.cli, numpy, PIL, pyvips, scipy, mss, pydirectinput, dxcam, typer, rich" 2>nul || call :install || goto :copy
+py -m heroes_capture map list
 if errorlevel 1 echo.& echo Stopped: the step above failed.
 popd
 
@@ -38,3 +35,14 @@ if errorlevel 8 (
   exit /b 1
 )
 echo Results copied.
+exit /b 0
+
+:install
+echo Installing heroes-capture's dependencies ...
+if not exist "%~dp0work" mkdir "%~dp0work"
+py -m pip install --quiet --no-warn-script-location --disable-pip-version-check -e . > "%~dp0work\setup.log" 2>&1
+if errorlevel 1 (
+  echo Installing failed; see work\setup.log.
+  exit /b 1
+)
+exit /b 0
