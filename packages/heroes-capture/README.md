@@ -284,7 +284,7 @@ cell there is no more detail: that's the game's own texture resolution.
 
 ```sh
 python tools/build_native.py   # once: StormLib and CascLib for this machine, into native/
-uv run pytest -n auto          # or pnpm test from the workspace root
+uv run pytest -n auto --dist loadgroup   # or pnpm test from the workspace root
 ```
 
 - `tests/test_units.py`: the pieces with exact rules (JSON as JavaScript writes it, the script's

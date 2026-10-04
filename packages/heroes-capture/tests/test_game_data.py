@@ -13,7 +13,9 @@ from heroes_capture import game_data, inject
 from heroes_capture.sky import PARALLAX_KEYS
 from heroes_capture.stormlib import Archive
 
-pytestmark = pytest.mark.game_data
+# One worker for all of them: CascLib's CDN cache isn't safe for several processes filling it at
+# once (a cold cache came out corrupt when the tests ran on parallel workers).
+pytestmark = [pytest.mark.game_data, pytest.mark.xdist_group("cdn")]
 
 # Names the script uses that Blizzard's code doesn't spell out but the game has accepted.
 ACCEPTED = {"BoolToInt", "RegionRect", "GameSetBackground", "CutsceneStop", "c_syncFrameTypeTextTag",

@@ -7,7 +7,7 @@
     "build.exe": "python tools/build_exe.py",
     "github.actions.build": "python tools/build_exe.py",
     "github.actions.pack": "gitflow pack",
-    "github.actions.test": "(test -f native/libstorm.so && test -f native/libcasc.so || python3 tools/build_native.py) && uv run pytest -n auto",
-    "test": "uv run pytest -n auto"
+    "github.actions.test": "(test -f native/libstorm.so && test -f native/libcasc.so || python3 tools/build_native.py) && uv run pytest -n auto --dist loadgroup",
+    "test": "uv run pytest -n auto --dist loadgroup"
   }
 }
