@@ -1,7 +1,0 @@
-mss>=9
-pydirectinput>=1.0.4
-pillow>=10
-numpy>=1.26
-pyvips[binary]>=2.2
-scipy>=1.11
-dxcam>=0.3

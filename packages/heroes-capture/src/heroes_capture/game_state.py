@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from game_window import game_process_seen
+from .game_window import game_process_seen
 
 NOT_RUNNING = "not running"
 MENU = "menu"

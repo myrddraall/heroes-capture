@@ -9,7 +9,7 @@ it in the same position every time) each sky layer; phase correlation gives the 
 fixed skybox moves with the camera (rate 0 by definition).
 
 Layers: "parallax", the map's parallax model as it is (background art and haze together); and
-"haze", the keyed copy over black, when the map has one (sky.mjs PARALLAX_KEYS), which shows the
+"haze", the keyed copy over black, when the map has one (sky.py PARALLAX_KEYS), which shows the
 haze shells alone. Written to <id>/sky-layers.json.
 """
 
@@ -21,9 +21,9 @@ from pathlib import Path
 
 import numpy as np
 
-from frames import save_frame
-from game_control import settle, step
-from runlog import log
+from .frames import save_frame
+from .game_control import settle, step
+from .runlog import log
 
 SKY_SETTLE = 0.1  # real seconds for a sky swap to be drawn before its shot (was 1; the waits probe found shots within one level down to 0.05)
 MAP_SETTLE = 0.1  # real seconds after a camera move before a shot of the map (as the tiles' settle)
@@ -56,6 +56,25 @@ def phase_offset(a: np.ndarray, b: np.ndarray) -> tuple[float, float, float]:
     dy = fy - h if fy > h / 2 else fy
     dx = fx - w if fx > w / 2 else fx
     return float(dx) * 2, float(dy) * 2, float(corr.max())
+
+
+AXES_AGREE = 0.1  # a shell's rates across and down agree to within this share (the background art: 0.4574, 0.4596)
+
+
+def consistent(name: str, rate: list, strength: list) -> None:
+    """A sky shell moves at one rate across and down, and slower than the map (a rate of 1 or more
+    is impossible for a layer behind it). Soft haze over black can match falsely (strength 0.01: a
+    rate of 1.28 once, where the other axis gave 0.476 at 0.032): when an axis's rate is impossible,
+    or the two disagree by more than AXES_AGREE, the axis with the stronger match stands for both.
+    In place."""
+    usable = [0 < r < 1 if r is not None else False for r in rate]
+    if usable == [True, True] and abs(rate[0] - rate[1]) <= AXES_AGREE * max(rate):
+        return
+    if not any(usable):
+        return
+    best = max((axis for axis in (0, 1) if usable[axis]), key=lambda axis: strength[axis] or 0.0)
+    log(f"  sky layers: {name}'s rates {rate} disagree (matches {strength}); taking axis {'xy'[best]}'s {rate[best]} for both")
+    rate[0] = rate[1] = rate[best]
 
 
 def measure(session, manifest: dict, out_dir: Path, area: dict | None = None) -> dict | None:
@@ -123,6 +142,7 @@ def measure(session, manifest: dict, out_dir: Path, area: dict | None = None) ->
         log(f"  axis {'xy'[axis]}: camera moved {moved['camera'][axis] - base['camera'][axis]:.2f} cells, the map {map_shift:.1f} px; "
             + ", ".join(f"{n} {rates[n][axis]} (match {strengths[n][axis]})" for n in layers))
     for name in layers:
+        consistent(name, rates[name], strengths[name])
         known = [r for r in rates[name] if r is not None]
         layer = {"model": models["parallax"] if name == "parallax" else f"{models['parallax']} (haze, keyed copy)",
                  "rate": rates[name], "matchStrength": strengths[name]}
@@ -144,7 +164,7 @@ def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep:
     """The sky layers as images, for a parallax viewer: the camera steps across the map (steps
     sized so the sky, moving at its measured rate, moves `keep` of a screen between
     positions), the map clipped away, and at each position the keyed copies of the parallax
-    model are shot (sky.mjs KEY_VARIANTS: the background art alone; white without haze; the
+    model are shot (sky.py KEY_VARIANTS: the background art alone; white without haze; the
     haze over white; over black), then the background art over the map's own fixed skybox
     (where the art lets it through). The fixed skybox once, alone. Into <id>/sky/, with
     positions.json; stitch.py makes the layers and composites from them."""

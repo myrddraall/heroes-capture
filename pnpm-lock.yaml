@@ -9,11 +9,11 @@ importers:
   .:
     devDependencies:
       '@cpdevtools/git-flow':
-        specifier: ^1.1.1
-        version: 1.1.2(chokidar@3.6.0)
+        specifier: ^1.2.2
+        version: 1.2.2(chokidar@3.6.0)
       '@cpdevtools/git-flow-cli':
-        specifier: ^1.1.1
-        version: 1.1.2(chokidar@3.6.0)
+        specifier: ^1.2.2
+        version: 1.2.2(chokidar@3.6.0)(supports-color@8.1.1)
       '@cpdevtools/ts-dev-utilities-cli':
         specifier: ^1.1.6
         version: 1.2.0
@@ -22,13 +22,13 @@ importers:
         version: 20.19.43
       '@typescript-eslint/eslint-plugin':
         specifier: ^8.20.0
-        version: 8.71.0(@typescript-eslint/parser@8.71.0(eslint@9.39.5)(typescript@5.9.3))(eslint@9.39.5)(typescript@5.9.3)
+        version: 8.71.0(@typescript-eslint/parser@8.71.0(eslint@9.39.5(supports-color@8.1.1))(supports-color@8.1.1)(typescript@5.9.3))(eslint@9.39.5(supports-color@8.1.1))(supports-color@8.1.1)(typescript@5.9.3)
       '@typescript-eslint/parser':
         specifier: ^8.20.0
-        version: 8.71.0(eslint@9.39.5)(typescript@5.9.3)
+        version: 8.71.0(eslint@9.39.5(supports-color@8.1.1))(supports-color@8.1.1)(typescript@5.9.3)
       eslint:
         specifier: ^9.18.0
-        version: 9.39.5
+        version: 9.39.5(supports-color@8.1.1)
       husky:
         specifier: ^9.1.7
         version: 9.1.7
@@ -45,11 +45,7 @@ importers:
         specifier: ^0.14.13
         version: 0.14.13
 
-  packages/heroes-capture:
-    dependencies:
-      '@jamiephan/stormlib':
-        specifier: ^0.3.0
-        version: 0.3.0
+  packages/heroes-capture: {}
 
 packages:
 
@@ -76,13 +72,13 @@ packages:
     resolution: {integrity: sha512-qehxGkRj55h/ff8EMaJ+cYhyaKlHIxqYDn682wQD7RNp9UujOQsHog2uS0r2vzr4pW+sXf90NeeayjcNaX3fFg==}
     engines: {node: '>=6.9.0'}
 
-  '@cpdevtools/git-flow-cli@1.1.2':
-    resolution: {integrity: sha512-lQE9z1RoVsvdhw24/af5Cww24zpjhRR/6HRHbd5qnuPOhpBzG+NIYPQRZBBpSHbgH1W+Oy5SufmmJsIw4pcyvw==, tarball: https://npm.pkg.github.com/download/@cpdevtools/git-flow-cli/1.1.2/b8d54d0d584eea622ba1371ed2d3f468fb7a7562}
+  '@cpdevtools/git-flow-cli@1.2.2':
+    resolution: {integrity: sha512-tkElHxJI76176aCfkvrIH3smXPwp14kuhl+AxZlq0dyyaus2sO/fePtSpyd1h/K//WxQ6v54vBdl3DoKKUdD7Q==, tarball: https://npm.pkg.github.com/download/@cpdevtools/git-flow-cli/1.2.2/f1865fb59e92a88bf4fd26c90bf6a6731564e5bb}
     engines: {node: '>=24'}
     hasBin: true
 
-  '@cpdevtools/git-flow@1.1.2':
-    resolution: {integrity: sha512-ij01qASWWMPRNNxHcnTKAcfjVGa4bloDuYqtQSOvZbJGJ1trL9TdBjwNvnrPRV52PhO3JXIr1e+H7QGChQlY8A==, tarball: https://npm.pkg.github.com/download/@cpdevtools/git-flow/1.1.2/f9ecb8e6c2c5128eb9007d3096cdb158c1e2ee8d}
+  '@cpdevtools/git-flow@1.2.2':
+    resolution: {integrity: sha512-+GRHNEUiVn/0OdH15iUDyx8g4q+ojku72yoZkiZ2kUnWJTxZxVHLQfynDAePh0HM8RAtaCX0yFvLL65DHEKpMQ==, tarball: https://npm.pkg.github.com/download/@cpdevtools/git-flow/1.2.2/2279c56fe1d0b87993a6945636526e379aa96417}
     engines: {node: '>=24'}
 
   '@cpdevtools/ts-dev-utilities-cli@1.2.0':
@@ -92,6 +88,10 @@ packages:
 
   '@cpdevtools/ts-dev-utilities@1.2.0':
     resolution: {integrity: sha512-H3qryv5Cjr0lcNyXkryc9fN6N8FYkhGk5e2PZ4Y4ogemGsUKT+vej1QC5Xr/0ZW3UXfQ5LTQW0RinopkIlz8oA==, tarball: https://npm.pkg.github.com/download/@cpdevtools/ts-dev-utilities/1.2.0/1aba57bde2f35ee6979890560ae60b2671944a3f}
+    engines: {node: '>=24'}
+
+  '@cpdevtools/ts-dev-utilities@1.2.1':
+    resolution: {integrity: sha512-uVDG/+cJ2Jpwc71bRCfPaJLJca98shQcFPRvYWueA/aCIFiBNbirgo6cqQazgk6i3ZrujN/5bvguIEGIKW+eMQ==, tarball: https://npm.pkg.github.com/download/@cpdevtools/ts-dev-utilities/1.2.1/68f438348bc247d5842a2111174921fb703f8f65}
     engines: {node: '>=24'}
 
   '@eslint-community/eslint-utils@4.10.1':
@@ -155,11 +155,6 @@ packages:
   '@humanwhocodes/retry@0.4.3':
     resolution: {integrity: sha512-bV0Tgo9K4hfPCek+aMAn81RppFKv2ySDQeMoSZuvTASywNTnVJCArCZE2FWqpvIatKu7VMRLWlR1EazvVhDyhQ==}
     engines: {node: '>=18.18'}
-
-  '@jamiephan/stormlib@0.3.0':
-    resolution: {integrity: sha512-ehKe+YNiuRLl5rP0KpV+Z4FdgNShFiMMukoctqXIqz2304M0epakZF4u0tsCVTcx5uaBIgubATls7YrULAFe6Q==}
-    engines: {node: '>=18.0.0'}
-    hasBin: true
 
   '@nodelib/fs.scandir@2.1.5':
     resolution: {integrity: sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g==}
@@ -321,6 +316,10 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
+  adm-zip@0.5.18:
+    resolution: {integrity: sha512-ufJnssQGbxzLNS1Ho9bCtX4rQKCCvoVuDLHoJyc3F9dOGDB4BkWs2Ci0kv53lqocAEQ/Cbi+I2XCsNYGqVYqng==}
+    engines: {node: '>=12.0'}
+
   ajv@6.15.0:
     resolution: {integrity: sha512-fgFx7Hfoq60ytK2c7DhnF8jIvzYgOMxfugjLOSMHjLIPgenqa7S7oaagATUq99mV6IYvN2tRmC0wnTYX6iPbMw==}
 
@@ -430,10 +429,6 @@ packages:
 
   color-name@1.1.4:
     resolution: {integrity: sha512-dOy+3AuW3a2wNbZHIuMZpTcgjGuLU/uBL/ubcZF9OXbDo8ff4O8yVp5Bf0efS8uEoYo5q4Fx7dY9OgQGXgAsQA==}
-
-  commander@12.1.0:
-    resolution: {integrity: sha512-Vw8qHK3bZM9y/P10u3Vib8o/DdkvA2OtPtZvD871QKjy74Wj1WSKFILMPRPSdUSx5RFK1arlJzEtA4PkFgnbuA==}
-    engines: {node: '>=18'}
 
   commander@13.1.0:
     resolution: {integrity: sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw==}
@@ -815,14 +810,6 @@ packages:
   natural-compare@1.4.0:
     resolution: {integrity: sha512-OWND8ei3VtNC9h7V60qff3SVobHr996CTwgxubgyQYEpg290h9J0buyECNNJexkFm5sOajh5G116RYA1c8ZMSw==}
 
-  node-addon-api@8.9.2:
-    resolution: {integrity: sha512-VijLXbi3UACN69I0JVXJsX4tjACjNoQDgv2gTF6sx2wWEi8tkSg2eX8p5gSIFi8z2+DL3oHmY6OyKce38SDolg==}
-    engines: {node: ^18 || ^20 || >= 21}
-
-  node-gyp-build@4.8.4:
-    resolution: {integrity: sha512-LA4ZjwlnUblHVgq0oBF3Jl/6h/Nvs5fzBLwdEF4nuxnFdsfajde4WfxtJr3CaiH+F6ewcIB/q4jQ4UzPyid+CQ==}
-    hasBin: true
-
   normalize-path@3.0.0:
     resolution: {integrity: sha512-6eZs5Ls3WtCisHWp9S2GUy8dqkpGi4BVSz3GaqiE6ezub0512ESztXUwUB6C6IKbQkY2Pnb/mD4WYojCRwcwLA==}
     engines: {node: '>=0.10.0'}
@@ -1165,11 +1152,11 @@ snapshots:
 
   '@babel/helper-validator-identifier@7.29.7': {}
 
-  '@cpdevtools/git-flow-cli@1.1.2(chokidar@3.6.0)':
+  '@cpdevtools/git-flow-cli@1.2.2(chokidar@3.6.0)(supports-color@8.1.1)':
     dependencies:
-      '@cpdevtools/git-flow': 1.1.2(chokidar@3.6.0)
+      '@cpdevtools/git-flow': 1.2.2(chokidar@3.6.0)
       '@oclif/core': 4.14.0
-      '@oclif/plugin-autocomplete': 3.3.0
+      '@oclif/plugin-autocomplete': 3.3.0(supports-color@8.1.1)
       '@oclif/plugin-help': 6.3.0
       prompts: 2.4.2
       semver: 7.8.5
@@ -1179,11 +1166,12 @@ snapshots:
       - chokidar
       - supports-color
 
-  '@cpdevtools/git-flow@1.1.2(chokidar@3.6.0)':
+  '@cpdevtools/git-flow@1.2.2(chokidar@3.6.0)':
     dependencies:
       '@actions/core': 1.11.1
       '@actions/github': 6.0.1
-      '@cpdevtools/ts-dev-utilities': 1.2.0
+      '@cpdevtools/ts-dev-utilities': 1.2.1
+      adm-zip: 0.5.18
       fast-glob: 3.3.3
       nunjucks: 3.2.4(chokidar@3.6.0)
       semver: 7.8.5
@@ -1204,14 +1192,22 @@ snapshots:
       semver: 7.8.5
       yaml: 2.9.1
 
-  '@eslint-community/eslint-utils@4.10.1(eslint@9.39.5)':
+  '@cpdevtools/ts-dev-utilities@1.2.1':
     dependencies:
-      eslint: 9.39.5
+      change-case: 5.4.4
+      globby: 14.1.0
+      jsonc-parser: 3.3.1
+      semver: 7.8.5
+      yaml: 2.9.1
+
+  '@eslint-community/eslint-utils@4.10.1(eslint@9.39.5(supports-color@8.1.1))':
+    dependencies:
+      eslint: 9.39.5(supports-color@8.1.1)
       eslint-visitor-keys: 3.4.3
 
   '@eslint-community/regexpp@4.12.2': {}
 
-  '@eslint/config-array@0.21.2':
+  '@eslint/config-array@0.21.2(supports-color@8.1.1)':
     dependencies:
       '@eslint/object-schema': 2.1.7
       debug: 4.4.3(supports-color@8.1.1)
@@ -1227,7 +1223,7 @@ snapshots:
     dependencies:
       '@types/json-schema': 7.0.15
 
-  '@eslint/eslintrc@3.3.7':
+  '@eslint/eslintrc@3.3.7(supports-color@8.1.1)':
     dependencies:
       ajv: 6.15.0
       debug: 4.4.3(supports-color@8.1.1)
@@ -1268,12 +1264,6 @@ snapshots:
 
   '@humanwhocodes/retry@0.4.3': {}
 
-  '@jamiephan/stormlib@0.3.0':
-    dependencies:
-      commander: 12.1.0
-      node-addon-api: 8.9.2
-      node-gyp-build: 4.8.4
-
   '@nodelib/fs.scandir@2.1.5':
     dependencies:
       '@nodelib/fs.stat': 2.0.5
@@ -1307,7 +1297,7 @@ snapshots:
       wrap-ansi: 7.0.0
       wsl-utils: 0.4.0
 
-  '@oclif/plugin-autocomplete@3.3.0':
+  '@oclif/plugin-autocomplete@3.3.0(supports-color@8.1.1)':
     dependencies:
       '@oclif/core': 4.14.0
       ansis: 3.17.0
@@ -1390,15 +1380,15 @@ snapshots:
     dependencies:
       undici-types: 6.21.0
 
-  '@typescript-eslint/eslint-plugin@8.71.0(@typescript-eslint/parser@8.71.0(eslint@9.39.5)(typescript@5.9.3))(eslint@9.39.5)(typescript@5.9.3)':
+  '@typescript-eslint/eslint-plugin@8.71.0(@typescript-eslint/parser@8.71.0(eslint@9.39.5(supports-color@8.1.1))(supports-color@8.1.1)(typescript@5.9.3))(eslint@9.39.5(supports-color@8.1.1))(supports-color@8.1.1)(typescript@5.9.3)':
     dependencies:
       '@eslint-community/regexpp': 4.12.2
-      '@typescript-eslint/parser': 8.71.0(eslint@9.39.5)(typescript@5.9.3)
+      '@typescript-eslint/parser': 8.71.0(eslint@9.39.5(supports-color@8.1.1))(supports-color@8.1.1)(typescript@5.9.3)
       '@typescript-eslint/scope-manager': 8.71.0
-      '@typescript-eslint/type-utils': 8.71.0(eslint@9.39.5)(typescript@5.9.3)
-      '@typescript-eslint/utils': 8.71.0(eslint@9.39.5)(typescript@5.9.3)
+      '@typescript-eslint/type-utils': 8.71.0(eslint@9.39.5(supports-color@8.1.1))(supports-color@8.1.1)(typescript@5.9.3)
+      '@typescript-eslint/utils': 8.71.0(eslint@9.39.5(supports-color@8.1.1))(typescript@5.9.3)
       '@typescript-eslint/visitor-keys': 8.71.0
-      eslint: 9.39.5
+      eslint: 9.39.5(supports-color@8.1.1)
       ignore: 7.0.11
       natural-compare: 1.4.0
       ts-api-utils: 2.5.0(typescript@5.9.3)
@@ -1406,19 +1396,19 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@typescript-eslint/parser@8.71.0(eslint@9.39.5)(typescript@5.9.3)':
+  '@typescript-eslint/parser@8.71.0(eslint@9.39.5(supports-color@8.1.1))(supports-color@8.1.1)(typescript@5.9.3)':
     dependencies:
       '@typescript-eslint/scope-manager': 8.71.0
       '@typescript-eslint/types': 8.71.0
-      '@typescript-eslint/typescript-estree': 8.71.0(typescript@5.9.3)
+      '@typescript-eslint/typescript-estree': 8.71.0(supports-color@8.1.1)(typescript@5.9.3)
       '@typescript-eslint/visitor-keys': 8.71.0
       debug: 4.4.3(supports-color@8.1.1)
-      eslint: 9.39.5
+      eslint: 9.39.5(supports-color@8.1.1)
       typescript: 5.9.3
     transitivePeerDependencies:
       - supports-color
 
-  '@typescript-eslint/project-service@8.71.0(typescript@5.9.3)':
+  '@typescript-eslint/project-service@8.71.0(supports-color@8.1.1)(typescript@5.9.3)':
     dependencies:
       '@typescript-eslint/tsconfig-utils': 8.71.0(typescript@5.9.3)
       '@typescript-eslint/types': 8.71.0
@@ -1436,13 +1426,13 @@ snapshots:
     dependencies:
       typescript: 5.9.3
 
-  '@typescript-eslint/type-utils@8.71.0(eslint@9.39.5)(typescript@5.9.3)':
+  '@typescript-eslint/type-utils@8.71.0(eslint@9.39.5(supports-color@8.1.1))(supports-color@8.1.1)(typescript@5.9.3)':
     dependencies:
       '@typescript-eslint/types': 8.71.0
-      '@typescript-eslint/typescript-estree': 8.71.0(typescript@5.9.3)
-      '@typescript-eslint/utils': 8.71.0(eslint@9.39.5)(typescript@5.9.3)
+      '@typescript-eslint/typescript-estree': 8.71.0(supports-color@8.1.1)(typescript@5.9.3)
+      '@typescript-eslint/utils': 8.71.0(eslint@9.39.5(supports-color@8.1.1))(typescript@5.9.3)
       debug: 4.4.3(supports-color@8.1.1)
-      eslint: 9.39.5
+      eslint: 9.39.5(supports-color@8.1.1)
       ts-api-utils: 2.5.0(typescript@5.9.3)
       typescript: 5.9.3
     transitivePeerDependencies:
@@ -1450,9 +1440,9 @@ snapshots:
 
   '@typescript-eslint/types@8.71.0': {}
 
-  '@typescript-eslint/typescript-estree@8.71.0(typescript@5.9.3)':
+  '@typescript-eslint/typescript-estree@8.71.0(supports-color@8.1.1)(typescript@5.9.3)':
     dependencies:
-      '@typescript-eslint/project-service': 8.71.0(typescript@5.9.3)
+      '@typescript-eslint/project-service': 8.71.0(supports-color@8.1.1)(typescript@5.9.3)
       '@typescript-eslint/tsconfig-utils': 8.71.0(typescript@5.9.3)
       '@typescript-eslint/types': 8.71.0
       '@typescript-eslint/visitor-keys': 8.71.0
@@ -1465,13 +1455,13 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@typescript-eslint/utils@8.71.0(eslint@9.39.5)(typescript@5.9.3)':
+  '@typescript-eslint/utils@8.71.0(eslint@9.39.5(supports-color@8.1.1))(typescript@5.9.3)':
     dependencies:
-      '@eslint-community/eslint-utils': 4.10.1(eslint@9.39.5)
+      '@eslint-community/eslint-utils': 4.10.1(eslint@9.39.5(supports-color@8.1.1))
       '@typescript-eslint/scope-manager': 8.71.0
       '@typescript-eslint/types': 8.71.0
-      '@typescript-eslint/typescript-estree': 8.71.0(typescript@5.9.3)
-      eslint: 9.39.5
+      '@typescript-eslint/typescript-estree': 8.71.0(supports-color@8.1.1)(typescript@5.9.3)
+      eslint: 9.39.5(supports-color@8.1.1)
       typescript: 5.9.3
     transitivePeerDependencies:
       - supports-color
@@ -1488,6 +1478,8 @@ snapshots:
       acorn: 8.18.0
 
   acorn@8.18.0: {}
+
+  adm-zip@0.5.18: {}
 
   ajv@6.15.0:
     dependencies:
@@ -1591,8 +1583,6 @@ snapshots:
 
   color-name@1.1.4: {}
 
-  commander@12.1.0: {}
-
   commander@13.1.0: {}
 
   commander@5.1.0: {}
@@ -1663,14 +1653,14 @@ snapshots:
 
   eslint-visitor-keys@5.0.1: {}
 
-  eslint@9.39.5:
+  eslint@9.39.5(supports-color@8.1.1):
     dependencies:
-      '@eslint-community/eslint-utils': 4.10.1(eslint@9.39.5)
+      '@eslint-community/eslint-utils': 4.10.1(eslint@9.39.5(supports-color@8.1.1))
       '@eslint-community/regexpp': 4.12.2
-      '@eslint/config-array': 0.21.2
+      '@eslint/config-array': 0.21.2(supports-color@8.1.1)
       '@eslint/config-helpers': 0.4.2
       '@eslint/core': 0.17.0
-      '@eslint/eslintrc': 3.3.7
+      '@eslint/eslintrc': 3.3.7(supports-color@8.1.1)
       '@eslint/js': 9.39.5
       '@eslint/plugin-kit': 0.4.1
       '@humanfs/node': 0.16.8
@@ -1931,10 +1921,6 @@ snapshots:
   ms@2.1.3: {}
 
   natural-compare@1.4.0: {}
-
-  node-addon-api@8.9.2: {}
-
-  node-gyp-build@4.8.4: {}
 
   normalize-path@3.0.0: {}
 

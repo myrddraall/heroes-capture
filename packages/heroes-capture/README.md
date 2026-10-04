@@ -1,4 +1,4 @@
-# map-capture
+# heroes-capture
 
 Renders top-down images of Heroes of the Storm battlegrounds by driving the game itself: a
 script injected into the map hides the HUD, the fog of war and the units, points the camera
@@ -7,17 +7,39 @@ stitched by their known positions. Structures (forts, towers, cores, gates) can 
 hidden, so each map can be rendered both ways.
 
 Runs on Windows with the game installed. Start Heroes from the Battle.net app first, so it's
-logged in; capture.py then hands the prepared map to the running game.
+logged in; the capture then hands the prepared map to the running game.
+
+## The release
+
+Each release on GitHub has `heroes-capture-win-x64.exe`, the whole tool in one file (Python
+included; nothing to install), and its `.sha256`. The newest is always at
+`https://github.com/myrddraall/heroes-capture/releases/latest/download/heroes-capture-win-x64.exe`.
+
+```powershell
+heroes-capture-win-x64.exe map "Battlefield of Eternity"
+```
+
+It writes into `work\` in the folder it runs from. The rest of this page is for working on the
+tool itself.
 
 ## Setup (once)
 
-- [Node.js](https://nodejs.org) 20 or later, and [Python](https://www.python.org) 3.11 or later
-- In this folder:
+- [Python](https://www.python.org) 3.11 or later
+- In this folder (the package, `src/heroes_capture`, and its dependencies):
 
   ```powershell
-  npm install
-  pip install -r requirements.txt
+  pip install -e .
   ```
+
+- The native libraries, into `native/` (not in git): the map archives are read and written with
+  [StormLib](https://github.com/ladislav-zezula/StormLib) (v9.40, its release DLL, checked
+  against the release's SHA-256), the game's own data (its maps, tilesets and light sets, sky
+  models) is read from the install's CASC storage with
+  [CascLib](https://github.com/ladislav-zezula/CascLib) (3.0, which publishes no binaries, so it
+  is built). `python tools/build_native.py --windows` fetches and builds both (needs git, CMake
+  and, off Windows, Zig: `pip install cmake ziglang`); without `--windows`, the Linux libraries
+  the tests use. The install is found by itself (its uninstall entry, the Battle.net app's list,
+  the usual folders).
 
 - In the game's options: **Display Mode: Windowed (Fullscreen)** (screenshots of exclusive
   fullscreen come out black), your monitor's native resolution, graphics on Ultra.
@@ -28,27 +50,26 @@ logged in; capture.py then hands the prepared map to the running game.
 `update.cmd` that refreshes the files and calls it needs no arguments. `update.cmd` is not
 tracked: it contains the machine's source path.
 
-The quick way is `render.cmd`, which runs all three steps at 3440x1440 against
-`D:\Games\Heroes of the Storm` (edit `SCREEN` and `GAME` at the top to change them), and
-installs what's needed on first run:
+`heroes-capture map` runs all three steps against the installed game, at the primary monitor's
+resolution, into `work\`:
 
 ```powershell
-render.cmd                          # Towers of Doom, structures kept
-render.cmd "Cursed Hollow" hide     # another map, bare terrain
+heroes-capture map "Towers of Doom"                       # structures kept
+heroes-capture map "Cursed Hollow" --structures hide      # bare terrain
 ```
 
-The steps it runs:
+(`py -m heroes_capture map ...` is the same.) The steps on their own:
 
 ```powershell
-# 1. Prepare: downloads the map, injects the capture script, plans the grid.
-node inject.mjs "Towers of Doom" --structures keep --screen 3840x2160
+# 1. Prepare: reads the map from the game, injects the capture script, plans the grid.
+heroes-capture prepare "Towers of Doom" --screen 3440x1440 --distance 214 --keep 0.4
 
 # 2. Capture: launches the map, waits for it to load and for the intro to finish; leave the
 #    mouse and keyboard alone.
-python capture.py work/towers-of-doom-structures.json
+heroes-capture capture work/towers-of-doom-structures.json
 
 # 3. Stitch: writes work/towers-of-doom-structures.png, a preview, and the geo file.
-python stitch.py work/towers-of-doom-structures.json --tiles
+heroes-capture stitch work/towers-of-doom-structures.json --tiles
 ```
 
 The screenshots are kept as raw `.npy` arrays (fast for the stitch to read; older runs' PNG tiles
@@ -56,11 +77,11 @@ still stitch).
 
 Use `--structures hide` for bare terrain; it writes `…-terrain` files alongside.
 
-Map names are the file names in
-[jamiephan/HeroesOfTheStorm_S2MA/maps](https://github.com/jamiephan/HeroesOfTheStorm_S2MA/tree/main/maps)
-(kept current with the live game), or pass a path to any `.stormmap`.
+Map names are as the game shows them (case and punctuation don't matter), or pass a path to any
+`.stormmap`. The battleground maps are `.s2ma` archives under content-hash names in the game's
+storage; the first run after a game update opens each to index them by name (about 20 s).
 
-### Options (inject.mjs)
+### Options (prepare; `map` passes them on)
 
 | Option                    | Default     | Effect                                                                                                         |
 | ------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------- |
@@ -68,17 +89,17 @@ Map names are the file names in
 | `--px-per-cell <n>`       | `48`        | output resolution; a map is ~220 cells wide, so 48 gives ~10,600 px                                            |
 | `--screen <w>x<h>`        | `3840x2160` | the game's resolution while capturing; match your monitor                                                      |
 | `--fov <deg>`             | `20`        | field of view; narrower is flatter (less lean on tall objects) but puts the camera further away                |
-| `--distance <units>`      |             | camera distance instead of `--fov` (the field of view is then chosen to keep the scale); `render.cmd` uses 214 |
+| `--distance <units>`      |             | camera distance instead of `--fov` (the field of view is then chosen to keep the scale); `map` uses 214     |
 | `--keep <0..1>`           | `0.6`       | share of each screenshot used, centred; the rest is overlap, used to measure the scale                         |
 | `--refit-yaw <deg>`       | map's light | yaw of the lighting-refit look before each tile (by default it faces the map's main light)                     |
 | `--no-lens`               |             | don't set the field of view or clip planes (see troubleshooting)                                               |
 | `--margin <cells>`        | `0`         | also capture beyond the map's camera bounds (lifts them)                                                       |
 | `--crop-margin <cells>`   | `12`        | the stitched image reaches this far past the camera bounds (or past each arena's area)                         |
-| `--show-ui`               |             | diagnostic: leave the HUD up; `render.cmd` then launches the map and stops                                     |
+| `--show-ui`               |             | diagnostic: leave the HUD up; `map` then launches the map and stops                                           |
 | `--keep-intro`            |             | diagnostic: let the intro cutscene play out instead of skipping it                                             |
 | `--paint-texture <t> <c>` |             | diagnostic: paint one of the map's own sky textures a solid colour, or `clear` (sky probes; repeatable)       |
 
-Diagnostics `render.cmd` hands to capture.py instead of rendering:
+Diagnostics `map` runs instead of rendering:
 
 | Switch          | Effect                                                                                                                                                                                     |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -120,9 +141,10 @@ cell there is no more detail: that's the game's own texture resolution.
 
 ## How it works
 
-- **inject.mjs** copies the `.stormmap` (an MPQ archive), reads the map size and camera bounds
-  from its `MapInfo`, plans a grid of camera positions, and appends the capture script
-  (`capture-script.mjs`) to `MapScript.galaxy`, called at the end of `InitMap`. It also adds
+- **inject.py** copies the `.stormmap` (an MPQ archive, written through StormLib), reads the map
+  size and camera bounds from its `MapInfo`, plans a grid of camera positions, and appends the
+  capture script (`capture_script.galaxy`, filled in by `capture_script.py`) to `MapScript.galaxy`,
+  called at the end of `InitMap`. It also adds
   the status strip's texture and the solid-colour skyboxes (see below). A map that is several arenas in one (Punisher Arena: one arena per round,
   stacked on the map, the camera bounds moved to the round's arena at run time) marks each
   with a region named `..._MapBounds` in its `Regions` file; with two or more, each gets its
@@ -148,11 +170,9 @@ cell there is no more detail: that's the game's own texture resolution.
   the latest look counts, and only a shallow look towards the light cleared every box. The
   light's direction comes from the map's tileset (`t3Terrain.xml`), the tileset's light set
   and that light set's "Key" light, with the map's own `TerrainData.xml` / `LightData.xml`
-  overriding; tilesets and light sets are in `light-sets.json` (`light-data.mjs` resolves
-  them, `--refit-yaw` overrides). After a game update that adds tilesets, rebuild the table:
-  extract every `mods/**/GameData/TerrainData.xml` and `LightData.xml` from the game's CASC
-  storage into a folder (file names = CASC paths with `__` for the separators) and run
-  `node generate-light-sets.mjs <folder>`.
+  overriding; the tilesets and light sets are read from every mod's `GameData/TerrainData.xml`
+  and `LightData.xml` in the game's storage at each run (`game_data.py`, `light_data.py`;
+  `--refit-yaw` overrides), so a game update that adds tilesets needs nothing done.
 - **Opening events first.** The gates open 3 s in (GameLib's `libCore_gv_bALOpenTheGatesDelay`
   and its countdown timer); then, for 8 real seconds, the map's own timers between the gates and
   its first objective are cut short as each starts (`opening-timers.json`, by the libraries the
@@ -172,7 +192,7 @@ cell there is no more detail: that's the game's own texture resolution.
   Depth precision goes with the far/near ratio; at the capture distance, flat decals lying on
   surfaces (road trim, lava cracks, low decorations) were z-fighting the ground and going
   missing in patches. Found with lighting probes that varied the clip planes.
-- **Transparent void (`sky.mjs`).** The void around and below a map is the skybox. The
+- **Transparent void (`sky.py`).** The void around and below a map is the skybox. The
   map gets four solid-colour skyboxes (white, black, magenta, lime): a skybox is a model on a stock mesh whose textures are
   referenced by path, and a file in the map at that path replaces the game's, so each colour is
   a stock mesh (the Braxis bowl and the "parallax" bowls; the big heaven/Luxoria bowl won't swap
@@ -184,7 +204,7 @@ cell there is no more detail: that's the game's own texture resolution.
   (difference matting: the difference between the shots is exactly the see-through share; the
   white level is measured from the shots, the game renders it at about 230; pixels that changed
   between the shots other than by the sky, an animated glow, stay opaque). Whether a map's
-  void shows the sky is read from its tileset (`light-sets.json`, with the map's own overrides:
+  void shows the sky is read from its tileset (from the game's data, with the map's own overrides:
   the lowest terrain level undrawn, or a skybox). Without that (Dragon Shire, Towers of Doom,
   Tomb of the Spider Queen) the void is terrain drawn black, which no skybox shows through:
   one shot per tile, over black, and the stitch makes the near-black that is connected to the
@@ -247,10 +267,16 @@ cell there is no more detail: that's the game's own texture resolution.
 
 | File                                       | What it does                                                                                  |
 | ------------------------------------------ | --------------------------------------------------------------------------------------------- |
-| `inject.mjs`                               | prepares the map: reads it, plans the grid, injects the script, adds the textures, writes the manifest |
-| `capture-script.mjs`                       | the Galaxy script injected into the map (scene, opening, status strip, chat commands)          |
-| `sky.mjs`, `light-data.mjs`                | the solid-colour skyboxes; the map's tileset, lighting and sky from `light-sets.json`          |
-| `generate-light-sets.mjs`                  | rebuilds `light-sets.json` from the game's data                                               |
+| `src/heroes_capture/`                      | the package; the modules below are in it                                                      |
+| `cli.py`                                   | the `heroes-capture` command: `map` (the three steps), `prepare`, `capture`, `stitch`          |
+| `inject.py`                                | prepares the map: reads it, plans the grid, injects the script, adds the textures, writes the manifest |
+| `capture_script.galaxy`, `capture_script.py` | the Galaxy script injected into the map (scene, opening, status strip, chat commands), and its values |
+| `sky.py`, `light_data.py`                  | the solid-colour skyboxes; the map's tileset, lighting and sky from the game's definitions     |
+| `stormlib.py`                              | MPQ archives through StormLib (ctypes)                                                        |
+| `casclib.py`, `game_data.py`               | the game's CASC storage through CascLib; the install, the maps, tilesets, light sets, models   |
+| `native.py`, `tools/build_native.py`       | where StormLib and CascLib are; fills `native/` with them (not in git)                         |
+| `tools/build_exe.py`                       | builds the one-file `heroes-capture.exe` (PyInstaller) at the release version                 |
+| `js_json.py`                               | JSON written as JavaScript writes it, so manifests match those the Node injector wrote        |
 | `opening-timers.json`                      | per map library, the timers between the gates and the first objective                          |
 | `capture.py`                               | the capture run: start-up, the tiles, recovery                                                |
 | `status.py`                                | reads the status strip                                                                        |
@@ -267,7 +293,28 @@ cell there is no more detail: that's the game's own texture resolution.
 | `workers.py` | the ordered thread pool the stitches use |
 | `matching.py` | phase correlation, for the stitches' matching |
 | `viewer.py`, `viewer.html` | the prototype viewer folder the stitch writes per map image |
-| `local-assets/` | game files fetched for sky probes (BoE's parallax sky model); not in git |
+
+## Tests
+
+```sh
+python tools/build_native.py   # once: StormLib and CascLib for this machine, into native/
+uv run pytest -n auto --dist loadgroup   # or pnpm test from the workspace root
+```
+
+- `tests/test_units.py`: the pieces with exact rules (JSON as JavaScript writes it, the script's
+  numbers, the grid, lighting, sky textures, the sky measurement's consistency rule).
+- `tests/test_simulated.py`: the capture end to end against a simulated game and desktop
+  (`tests/sim/fakegame.py`: a virtual clock, the chat commands carried out, frames with the
+  status strip): renders in both void modes, a resumed run, lost focus, a silent strip, a crash,
+  the wrong map, the probes; and the stitch of a simulated render.
+- `tests/test_game_data.py` (marker `game_data`): the game's own data from Blizzard's CDN (no
+  install needed): the maps by name, the tilesets and light sets, the sky models, and three maps
+  prepared from it, whose injected script may use only names Blizzard's own Galaxy code has. The
+  first run downloads about 3.7 GB into the cache (CascLib keeps whole CDN archives); skip them
+  with `-m "not game_data"`.
+
+The workspace's test workflow runs them all on every push, keeping `native/` and the CDN cache
+between runs.
 
 ## Troubleshooting
 
@@ -278,7 +325,7 @@ cell there is no more detail: that's the game's own texture resolution.
   ```powershell
   mkdir "D:\Games\Heroes of the Storm\maps\heroes\singleplayermaps"
   copy work\towers-of-doom-structures.stormmap "D:\Games\Heroes of the Storm\maps\heroes\singleplayermaps\(10)trymemode.stormmap"
-  py capture.py work\towers-of-doom-structures.json --no-launch
+  heroes-capture capture work\towers-of-doom-structures.json --no-launch
   ```
 
   Delete that `(10)trymemode.stormmap` afterwards to get normal Try Mode back.
@@ -288,7 +335,7 @@ cell there is no more detail: that's the game's own texture resolution.
   3 minutes; `strip-missing.png` shows the screen's left edge.
 
 - **A "script failed to compile" error naming a `c_cameraValue…` constant:** re-run
-  inject.mjs with `--no-lens`. Without a narrow field of view, tall objects lean more at the
+  `map` with `--no-lens`. Without a narrow field of view, tall objects lean more at the
   screenshot edges; lower `--keep` (e.g. `0.4`) to use only the centre.
 
 - **HUD pieces still visible:** note which ones. There are more hide calls to try.
@@ -299,5 +346,5 @@ cell there is no more detail: that's the game's own texture resolution.
   distance. Raise `--px-per-cell` or `--fov` (both bring the camera closer).
 
 - **Minions flicker into some screenshots, or some screenshots have blurry textures:** raise
-  `--settle` in capture.py (the least time from a camera move to the kept screenshot, 0.1 s by
+  `--settle` of `heroes-capture capture` (the least time from a camera move to the kept screenshot, 0.1 s by
   default); units are swept four times a second.

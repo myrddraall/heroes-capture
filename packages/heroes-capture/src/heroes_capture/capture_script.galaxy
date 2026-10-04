@@ -1,139 +1,16 @@
-/**
- * The Galaxy script injected into a battleground (inject.mjs appends it before InitMap and
- * calls hrsCap_Init at InitMap's end). It skips the map's intro cutscene, opens the gates early
- * and cuts the map's opening timers short, reveals the whole map, hides the HUD, removes units
- * (and keeps removing them as they spawn), keeps or hides structures, pauses the map's
- * animations, sets the solid-colour skybox and points the camera straight down. capture.py
- * drives it through chat commands ("tile <n> <x> <y>", "clean", "black", "quit", ...) and reads
- * its status strip, drawn in the screen's top-left corner, to know when each is done.
- *
- * Galaxy is single-pass: every function must be defined before its first use (inject.mjs
- * checks), and one unknown native or syntax error stops the whole map script, which shows in
- * the game as every interface panel visible at once. The calls below are ones Blizzard's own
- * Heroes scripts make, except the lens values (field of view, far and near clip) and
- * CameraSetBounds, which are StarCraft II natives the game also accepts. Actor messages are
- * plain strings the game ignores when it doesn't know them, so they cannot break compilation.
- */
-
-const fixed = (n) => (Number.isInteger(n) ? `${n}.0` : n.toFixed(4));
-
-/** The status strip (hrsCap_Status* below, read by status.py): cells and size. */
-export const STATUS_CELLS = 89; // 88 bits plus a fixed black cell at the top of the second column
-export const STATUS_ROWS = 64; // cells per column; the strip continues in a second column to the right
-export const STATUS_CELL_W = 25; // cell width in interface units (30 px at 1440 lines: 1.2 px per unit)
-export const STATUS_CELL_H = 15; // cell height (18 px)
-
-/**
- * @param {object} o
- * @param {{ x: number, y: number }[]} o.tiles Camera targets, in map cells.
- * @param {boolean} o.hideStructures Hide structures and map-mechanic units too.
- * @param {number} o.distance Camera distance from its target.
- * @param {number} [o.pitch] Camera pitch in degrees (90 is straight down).
- * @param {number} [o.refitYaw] Yaw of the lighting-refit look before each tile (towards the
- *   map's main light).
- * @param {{ fov: number, farClip: number } | null} o.lens Narrow field of view; null to leave the map's.
- * @param {boolean} o.unbound Lift the map's camera bounds so edge tiles are not clamped (and, on a
- *   map that is several arenas in one, so the camera can reach every arena). Lifted before each
- *   tile's first pan, since the map may put its own bounds back at any time.
- * @param {boolean} o.showUi Leave the HUD up (diagnostic: to check what the HUD hiding affects).
- * @param {string} o.skyColour The sky each tile starts under: white (then "black" for the
- *   matte's second shot) or black.
- * @param {number} o.mapWidth Map size in cells (MapInfo), for the reveal: RegionEntireMap() is only the playable area.
- * @param {number} o.mapHeight
- * @param {number} o.mapId The prepared map's identity, 0..65535, shown in the status strip.
- * @param {string[]} o.openingTimers The map's timers between the gates and its first objective
- *   (opening-timers.json), cut short so the objective is in place before the tiles.
- * @param {{ fixed: string | null, parallax: string | null }} [o.mapSky] The map's own sky models,
- *   for the probe commands "sky mapsky" and "sky mapparallax".
- * @param {string[]} o.hideDoodads Doodad types to hide (cloud layers placed in the map as doodads).
- * @param {boolean} [o.keepIntro] Let the intro cutscene play out instead of skipping it
- *   (diagnostic: does skipping it leave the map's lighting half changed?).
- * @param {boolean} [o.arena] The map plays rounds (its script includes LibAREN: Punisher Arena):
- *   a core killed ends only the round, so "quit" first gives the other team all but its last
- *   round win.
- */
-export function captureScript({
-  tiles,
-  hideStructures,
-  distance,
-  pitch = 90,
-  refitYaw = 180,
-  lens,
-  unbound,
-  showUi,
-  skyColour = 'white',
-  mapSky = { fixed: null, parallax: null },
-  mapWidth = 256,
-  mapHeight = 256,
-  openingTimers = [],
-  mapId = 0,
-  hideDoodads = [],
-  keepIntro = false,
-  arena = false,
-}) {
-  const n = tiles.length;
-  const tileLines = tiles
-    .map((t, i) => `    hrsCap_tileX[${i}] = ${fixed(t.x)}; hrsCap_tileY[${i}] = ${fixed(t.y)};`)
-    .join('\n');
-  const lensLines = lens
-    ? `
-    CameraSetValue(lp_player, c_cameraValueFieldOfView, ${fixed(lens.fov)}, 0.0, -1, 10.0);
-    CameraSetValue(lp_player, c_cameraValueFarClip, ${fixed(lens.farClip)}, 0.0, -1, 10.0);
-    // The near clip well out from the game's tiny default: depth precision goes with the
-    // far/near ratio, and at this distance flat decals on the ground (road trim, cracks, the
-    // decorations lying on surfaces) were z-fighting the ground and losing in patches.
-    CameraSetValue(lp_player, c_cameraValueNearClip, 5.0, 0.0, -1, 10.0);`
-    : `
-    // No lens: the game's own clip planes (a sky shot's "hidemap" moved them).
-    CameraSetValue(lp_player, c_cameraValueNearClip, CameraInfoGetValue(CameraInfoDefault(), c_cameraValueNearClip), 0.0, -1, 10.0);
-    CameraSetValue(lp_player, c_cameraValueFarClip, CameraInfoGetValue(CameraInfoDefault(), c_cameraValueFarClip), 0.0, -1, 10.0);`;
-  const boundsLine = unbound
-    ? `
-    CameraSetBounds(PlayerGroupAll(), RegionEntireMap(), false);`
-    : '';
-  // The whole map, not RegionEntireMap() (only the playable area), for the reveal and for
-  // pausing every animation the way Blizzard's own maps do at game over (Trial Grounds: one
-  // actor message to the whole-map region, no filter; filter terms broke the map's script).
-  const mapRegion = `RegionRect(-16.0, -16.0, ${fixed(mapWidth + 16)}, ${fixed(mapHeight + 16)})`;
-  const heroUiLines = showUi
-    ? ''
-    : `            libUIUI_gf_UIHeroConsoleShowHideForPlayer(false, lv_p);
-            libUIUI_gf_UIGameUIShowHideConsolePanelForPlayer(false, lv_p);
-            libUIUI_gf_UIHeroTrackerArrowShowHideForPlayer(false, lv_p);
-`;
-  const uiLines = showUi
-    ? ''
-    : `    UISetMode(PlayerGroupAll(), c_uiModeFullscreen, c_transitionDurationImmediate);
-    // Every UI frame type, as cinematic mode does (the intro's exit re-shows whatever was
-    // visible when it started, debug panels included); text tags are left alone.
-    lv_f = c_syncFrameTypeFirst;
-    for ( ; lv_f <= c_syncFrameTypeLast ; lv_f += 1 ) {
-        if ((lv_f != c_syncFrameTypeTextTag)) {
-            UISetFrameVisible(PlayerGroupAll(), lv_f, false);
-        }
-    }`;
-  const skyModel = skyColour === 'black' ? 'Black' : 'White';
-  const skyState = skyColour === 'black' ? 2 : 1;
-  const doodadLines = hideDoodads
-    .map(
-      (type) => `
-    libNtve_gf_ShowHideDoodadsInRegion(false, RegionEntireMap(), "${type}");  // a cloud layer, placed as doodads`,
-    )
-    .join('');
-
-  return `//--------------------------------------------------------------------------------------------------
-// Map capture (injected by heroes-replay-stats tools/map-capture)
+//--------------------------------------------------------------------------------------------------
+// Map capture (injected by heroes-capture)
 // Chat "tile <n> <x> <y>" moves the camera to tile n; the status strip reports when it is done.
 //--------------------------------------------------------------------------------------------------
-const bool hrsCap_hideStructures = ${hideStructures};
-const fixed hrsCap_distance = ${fixed(distance)};
-const fixed hrsCap_pitch = ${fixed(pitch)};
-const int hrsCap_tileCount = ${n};
+const bool hrsCap_hideStructures = ${hide_structures};
+const fixed hrsCap_distance = ${distance};
+const fixed hrsCap_pitch = ${pitch};
+const int hrsCap_tileCount = ${tile_count};
 int hrsCap_currentTile = 0;
 fixed hrsCap_curX = 0.0;  // the current tile's camera target (from the command, else the table)
 fixed hrsCap_curY = 0.0;
-fixed[${n}] hrsCap_tileX;
-fixed[${n}] hrsCap_tileY;
+fixed[${tile_count}] hrsCap_tileX;
+fixed[${tile_count}] hrsCap_tileY;
 trigger hrsCap_gt_Tile;
 trigger hrsCap_gt_Clean;
 trigger hrsCap_gt_Black;
@@ -157,8 +34,8 @@ trigger hrsCap_gt_FastForward;
 // The map's state.
 int hrsCap_skyState = 0;  // 1 white, 2 black, 0 other
 fixed hrsCap_bgSpeed = 100.0;  // animation speed (percent) "sky" gives a background; chat "bgspeed"
-const string hrsCap_mapSky = "${mapSky.fixed || ''}";  // the map's own sky models (probes)
-const string hrsCap_mapParallax = "${mapSky.parallax || ''}";
+const string hrsCap_mapSky = "${map_sky}";  // the map's own sky models (probes)
+const string hrsCap_mapParallax = "${map_parallax}";
 bool hrsCap_paused = false;  // the map's animations have been paused (once the game started)
 bool hrsCap_forwardStarted = false;  // the fast-forward after the gates opened has begun
 bool hrsCap_ready = false;  // fast-forward done: the map's opening events have happened
@@ -167,11 +44,11 @@ int hrsCap_clearedSinceReady = 0;  // units the clearing removed after the map w
 bool hrsCap_introOn = false;  // the map's intro cutscene is playing (set by the sweep)
 int hrsCap_openingCuts = 0;  // opening timers cut short so far
 const fixed hrsCap_gatesDelay = 3.0;  // seconds to the gates opening (the game's default is 35)
-const fixed hrsCap_forwardSeconds = ${openingTimers.length ? '8.0' : '0.0'};  // real seconds the map's opening timers are kept short (none known for this map: no wait)
+const fixed hrsCap_forwardSeconds = ${forward_seconds};  // real seconds the map's opening timers are kept short (none known for this map: no wait)
 const fixed hrsCap_readySeconds = 18.0;  // real seconds from the gates opening to the map ready and paused, fast-forward included: the cores' entrance animation hadn't finished at 10
 
 //--------------------------------------------------------------------------------------------------
-// The status strip: a dialog in the top-left corner, two columns of ${STATUS_ROWS} black-or-white cells
+// The status strip: a dialog in the top-left corner, two columns of ${status_rows} black-or-white cells
 // (wide and short), redrawn at the end of every chat command and every sweep. The capture reads
 // it from the screen far faster than it can judge the picture, so it knows when a command has
 // been carried out and rendered. Cells: 0 white, 1 black (locator), then bits: command sequence
@@ -183,13 +60,13 @@ const fixed hrsCap_readySeconds = 18.0;  // real seconds from the gates opening 
 // units cleared since ready (8: something spawning mid-render), intro cutscene playing (1),
 // opening timers cut short so far (4), parity of all bits, and a black end cell.
 //--------------------------------------------------------------------------------------------------
-const int hrsCap_statusCells = ${STATUS_CELLS};
-const int hrsCap_statusCellW = ${STATUS_CELL_W};  // cell size in interface units
-const int hrsCap_statusCellH = ${STATUS_CELL_H};
-const int hrsCap_statusRows = ${STATUS_ROWS};
-const int hrsCap_mapId = ${mapId};  // the prepared map's identity (inject.mjs)
+const int hrsCap_statusCells = ${status_cells};
+const int hrsCap_statusCellW = ${status_cell_w};  // cell size in interface units
+const int hrsCap_statusCellH = ${status_cell_h};
+const int hrsCap_statusRows = ${status_rows};
+const int hrsCap_mapId = ${map_id};  // the prepared map's identity (inject.py)
 int hrsCap_status = c_invalidDialogId;
-int[${STATUS_CELLS}] hrsCap_statusCtl;
+int[${status_cells}] hrsCap_statusCtl;
 int hrsCap_statusBackdrop = c_invalidDialogControlId;
 int hrsCap_statusBackdropDialog = c_invalidDialogId;
 int hrsCap_statusFiller = c_invalidDialogControlId;
@@ -357,7 +234,7 @@ void hrsCap_StatusInit () {
 // The scene: units, camera, interface, sky.
 //--------------------------------------------------------------------------------------------------
 void hrsCap_InitTiles () {
-${tileLines}
+${tile_lines}
 }
 
 void hrsCap_RemoveUnits (unitfilter lp_filter) {
@@ -411,7 +288,7 @@ void hrsCap_ClearUnits () {
 // may put its own bounds back at any time.
 void hrsCap_LiftBounds () {
     if (hrsCap_unbound) {
-        CameraSetBounds(PlayerGroupAll(), RegionRect(0.0, 0.0, ${fixed(mapWidth)}, ${fixed(mapHeight)}), false);
+        CameraSetBounds(PlayerGroupAll(), RegionRect(0.0, 0.0, ${map_width}, ${map_height}), false);
     }
 }
 
@@ -420,11 +297,11 @@ void hrsCap_ApplyCamera (int lp_player) {
     CameraUseHeightDisplacement(lp_player, false);
     CameraSetValue(lp_player, c_cameraValuePitch, hrsCap_pitch, 0.0, -1, 10.0);
     CameraSetValue(lp_player, c_cameraValueYaw, 90.0, 0.0, -1, 10.0);
-    CameraSetValue(lp_player, c_cameraValueDistance, hrsCap_distance, 0.0, -1, 10.0);${lensLines}
+    CameraSetValue(lp_player, c_cameraValueDistance, hrsCap_distance, 0.0, -1, 10.0);${lens_lines}
 }
 
 // A camera like real play (distance 34, fov 45), shallow (pitch 35) and facing the map's main
-// light (yaw ${fixed(refitYaw)}). The game fits its lighting (the region the main light and
+// light (yaw ${refit_yaw}). The game fits its lighting (the region the main light and
 // shadows are computed for) to the last camera it takes as normal and never refits it for the
 // capture camera: the rest of the map was drawn without the main light (a dark, straight-edged
 // area, a different one each match; dark boxes around holes). So every tile shows this camera
@@ -433,7 +310,7 @@ void hrsCap_ApplyCamera (int lp_player) {
 // yaws left boxes around some holes).
 void hrsCap_NormalCamera (int lp_player) {
     CameraSetValue(lp_player, c_cameraValuePitch, 35.0, 0.0, -1, 10.0);
-    CameraSetValue(lp_player, c_cameraValueYaw, ${fixed(refitYaw)}, 0.0, -1, 10.0);
+    CameraSetValue(lp_player, c_cameraValueYaw, ${refit_yaw}, 0.0, -1, 10.0);
     CameraSetValue(lp_player, c_cameraValueDistance, 34.0, 0.0, -1, 10.0);
     CameraSetValue(lp_player, c_cameraValueFieldOfView, 45.0, 0.0, -1, 10.0);
 }
@@ -450,20 +327,20 @@ void hrsCap_Scene () {
     // at the boundary, which darkened the outer walls and trees of Dragon Shire to half.
     lv_p = 0;
     for ( ; lv_p <= 15 ; lv_p += 1 ) {
-        VisExploreArea(lv_p, ${mapRegion}, true, false);
-        VisRevealArea(lv_p, ${mapRegion}, 0.0, false);
+        VisExploreArea(lv_p, ${map_region}, true, false);
+        VisRevealArea(lv_p, ${map_region}, 0.0, false);
     }
 
     lv_p = 1;
     for ( ; lv_p <= 10 ; lv_p += 1 ) {
         if ((PlayerStatus(lv_p) == c_playerStatusActive)) {
-${heroUiLines}            hrsCap_ApplyCamera(lv_p);
+${hero_ui_lines}            hrsCap_ApplyCamera(lv_p);
         }
     }
-${uiLines}${boundsLine}
+${ui_lines}${bounds_line}
     hrsCap_LiftBounds();
-    GameSetBackground(0, "HrsSky${skyModel}", 100.0);  // the camera-fixed skybox (sky.mjs)
-    hrsCap_skyState = ${skyState};${doodadLines}
+    GameSetBackground(0, "HrsSky${sky_model}", 100.0);  // the camera-fixed skybox (sky.py)
+    hrsCap_skyState = ${sky_state};${doodad_lines}
     UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
     // Every animation on the map paused (glows, fires, smoke, swaying trees, flags), the way
     // Blizzard's maps do at game over: the two shots of a tile then differ only by the sky.
@@ -472,7 +349,7 @@ ${uiLines}${boundsLine}
     // (Water is the terrain's own layer, not an actor; its waves are time-driven in the shader
     // and neither its data nor catalog edits still them, so it keeps moving.)
     if (hrsCap_ready) {
-        libNtve_gf_SendActorMessageToGameRegion(${mapRegion}, "AnimSetPausedAll");
+        libNtve_gf_SendActorMessageToGameRegion(${map_region}, "AnimSetPausedAll");
     }
 }
 
@@ -542,8 +419,8 @@ void hrsCap_Restore () {
 
     TriggerEnable(hrsCap_gt_Sweep, false);
     hrsCap_bgSpeed = 100.0;
-    GameSetBackground(0, "HrsSky${skyModel}", 100.0);
-    hrsCap_skyState = ${skyState};
+    GameSetBackground(0, "HrsSky${sky_model}", 100.0);
+    hrsCap_skyState = ${sky_state};
     if ((hrsCap_mapParallax != "")) {
         GameSetBackground(1, hrsCap_mapParallax, 100.0);
     }
@@ -615,7 +492,7 @@ bool hrsCap_gt_FastForward_Func (bool testConds, bool runActions) {
     }
     lv_n = 0;
     while ((lv_n < FixedToInt(hrsCap_forwardSeconds * 4.0))) {
-${openingTimers.map((t) => `        hrsCap_CutShort(${t});`).join('\n')}
+${cut_short_lines}
         Wait(0.25, c_timeReal);
         lv_n += 1;
     }
@@ -631,7 +508,7 @@ bool hrsCap_gt_Sweep_Func (bool testConds, bool runActions) {
     if (!runActions) {
         return true;
     }
-${keepIntro ? '' : '    hrsCap_SkipIntro();\n'}    hrsCap_HideLabels();
+${skip_intro_line}    hrsCap_HideLabels();
     hrsCap_ClearUnits();
     TransmissionClearGroup(PlayerGroupAll());
     UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
@@ -648,7 +525,7 @@ ${keepIntro ? '' : '    hrsCap_SkipIntro();\n'}    hrsCap_HideLabels();
     }
     if (hrsCap_ready && !hrsCap_paused) {
         hrsCap_paused = true;
-        libNtve_gf_SendActorMessageToGameRegion(${mapRegion}, "AnimSetPausedAll");
+        libNtve_gf_SendActorMessageToGameRegion(${map_region}, "AnimSetPausedAll");
     }
     hrsCap_introOn = hrsCap_IntroPlaying();
     hrsCap_tick = (1 - hrsCap_tick);
@@ -692,7 +569,7 @@ bool hrsCap_gt_Tile_Func (bool testConds, bool runActions) {
         hrsCap_curX = hrsCap_tileX[lv_index];
         hrsCap_curY = hrsCap_tileY[lv_index];
     }
-    hrsCap_ClearUnits();${boundsLine}
+    hrsCap_ClearUnits();${bounds_line}
     hrsCap_LiftBounds();
     // The normal camera at the tile first, a few frames, so the game refits its lighting there
     // (see hrsCap_NormalCamera); then the scene and the capture camera.
@@ -773,7 +650,7 @@ bool hrsCap_gt_KeyBlack_Func (bool testConds, bool runActions) {
     return true;
 }
 
-// "sky <colour> [<layer>]" (probes): the solid-colour skybox of that name (sky.mjs) on layer 0
+// "sky <colour> [<layer>]" (probes): the solid-colour skybox of that name (sky.py) on layer 0
 // (the camera-fixed skybox, the default) or 1 (c_backgroundTerrain, the terrain-relative
 // parallax layer, which Blizzard's arenas swap). "none" clears the layer, "heaven" is
 // HeavenSkybox, "mapsky" and "mapparallax" the map's own fixed and parallax sky models. At the
@@ -821,11 +698,11 @@ bool hrsCap_gt_Pause_Func (bool testConds, bool runActions) {
         return true;
     }
     if ((StringWord(EventChatMessage(false), 2) == "0")) {
-        libNtve_gf_SendActorMessageToGameRegion(${mapRegion}, "AnimSetPausedAll 0");
+        libNtve_gf_SendActorMessageToGameRegion(${map_region}, "AnimSetPausedAll 0");
         UnitPauseAll(false);
     }
     else {
-        libNtve_gf_SendActorMessageToGameRegion(${mapRegion}, "AnimSetPausedAll");
+        libNtve_gf_SendActorMessageToGameRegion(${map_region}, "AnimSetPausedAll");
         UnitPauseAll(true);
     }
     hrsCap_Ack();
@@ -944,7 +821,7 @@ bool hrsCap_gt_Quit_Func (bool testConds, bool runActions) {
     Wait(0.25, c_timeReal);
     hrsCap_Restore();
     Wait(0.5, c_timeReal);
-${arena ? '    libAREN_gv_aRM_RoundScore[libGame_gf_EnemyTeam(libGame_gf_TeamNumberOfPlayer(EventPlayer()))] = libAREN_gv_victoriesCount - 1;\n' : ''}    UnitKill(libGame_gv_teams[libGame_gf_TeamNumberOfPlayer(EventPlayer())].lv_core);
+${arena_quit_line}    UnitKill(libGame_gv_teams[libGame_gf_TeamNumberOfPlayer(EventPlayer())].lv_core);
     return true;
 }
 
@@ -989,5 +866,3 @@ void hrsCap_Init () {
     TriggerAddEventTimePeriodic(hrsCap_gt_Quiet, 0.0625, c_timeReal);
 }
 
-`;
-}

@@ -1,6 +1,6 @@
 """The status strip: how the capture knows a command has been carried out and rendered.
 
-The map script (capture-script.mjs, hrsCap_Status*) draws a dialog in the top-left corner of
+The map script (capture_script.galaxy, hrsCap_Status*) draws a dialog in the top-left corner of
 the screen: two columns of black-or-white cells, wider than they are tall, redrawn at the end of
 every chat command and on every sweep. Reading it from a screenshot is a handful of pixel
 averages, so the capture can poll it many times a second instead of judging the picture.

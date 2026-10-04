@@ -45,10 +45,10 @@ import pyvips
 from PIL import Image
 from scipy.optimize import least_squares
 
-from frames import PNG_COMPRESSION, frame_exists, load_frame
-from matching import phase_correlate
-from runlog import log, stage
-from workers import ordered_map
+from .frames import PNG_COMPRESSION, frame_exists, load_frame
+from .matching import phase_correlate
+from .runlog import log, stage
+from .workers import ordered_map
 
 MATCH_PATCH = 128  # the side of a matched patch, in half-size pixels (256 screen pixels)
 MATCH_STRENGTH = 0.12  # a patch match weaker than this is left out (soft haze matches falsely below it)

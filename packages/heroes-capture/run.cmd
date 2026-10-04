@@ -2,11 +2,16 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: full render of Punisher Arena again. Since the last run: the haze layer's
-rem transparency is estimated where the sky shells end before the map does (the far south),
-rem instead of coming out opaque; arena edges facing no other arena are captured further where
-rem the map runs on; the viewer shows one arena at a time, centred on the sky layers.
-call "%~dp0render.cmd" "Punisher Arena" keep
+rem Current step: the first run of the heroes-capture command (the tool is now a Python package,
+rem src\heroes_capture; render.cmd is gone): Battlefield of Eternity, as before. The screen size
+rem now comes from the primary monitor.
+setlocal
+pushd "%~dp0"
+set "PYTHONPATH=%~dp0src"
+py -c "import heroes_capture.cli, numpy, PIL, pyvips, scipy, mss, pydirectinput, dxcam" 2>nul || py -m pip install -e . || goto :copy
+py -m heroes_capture map "Battlefield of Eternity"
+if errorlevel 1 echo.& echo Stopped: the step above failed.
+popd
 
 :copy
 rem Copy this run's output (everything in work\ except the map files) to the results folder,
@@ -15,6 +20,11 @@ if not defined HRS_RESULTS (
   echo.
   echo Results not copied back: HRS_RESULTS is not set. Run this through update.cmd.
   exit /b 0
+)
+if not exist "%~dp0work" (
+  echo.
+  echo Nothing to copy back: the run made no work folder.
+  exit /b 1
 )
 echo.
 echo Copying results to %HRS_RESULTS% ...

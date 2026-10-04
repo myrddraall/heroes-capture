@@ -9,7 +9,7 @@ import json
 import shutil
 from pathlib import Path
 
-from runlog import log, stage
+from .runlog import log, stage
 
 TEMPLATE = Path(__file__).with_name("viewer.html")
 SKY_ORDER = ("background", "haze")  # back to front, under the map

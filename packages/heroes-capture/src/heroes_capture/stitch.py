@@ -1,6 +1,6 @@
 """Stitch captured screenshots into one top-down image of the battleground.
 
-    python stitch.py work/towers-of-doom-structures.json [--tiles]
+    heroes-capture stitch work/towers-of-doom-structures.json [--tiles]   (heroes-capture map runs it last)
 
 Each screenshot is anchored where the map script reported its camera (positions.json, written
 by capture.py), and every screenshot is also matched against its right and lower neighbours,
@@ -34,12 +34,12 @@ import numpy as np
 import pyvips
 from PIL import Image
 
-import sky_stitch
-import viewer
-from frames import PNG_COMPRESSION, frame_exists, load_frame
-from matching import phase_correlate
-from workers import ordered_map
-from runlog import log, log_timings, set_log_file, stage
+from . import sky_stitch
+from . import viewer
+from .frames import PNG_COMPRESSION, frame_exists, load_frame
+from .matching import phase_correlate
+from .workers import ordered_map
+from .runlog import log, log_timings, set_log_file, stage
 
 MATCH_SCALE = 2  # screenshots are matched at half size: fast, and still ~0.2 px precise
 FEATHER = 16  # pixels blended either side of each seam: enough to hide lighting steps, narrow enough not to double leaning objects
@@ -759,11 +759,11 @@ def write_outputs(manifest: dict, base: Path, shots: Shots, layout: Layout, seam
     return written
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def main(argv: list[str]) -> None:
+    ap = argparse.ArgumentParser(prog="heroes-capture stitch", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("manifest", type=Path)
     ap.add_argument("--tiles", action="store_true", help="also write a Google Maps style tile pyramid")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     manifest = json.loads(args.manifest.read_text())
     base = args.manifest.parent / manifest["id"]
@@ -847,7 +847,3 @@ def main() -> None:
     sky_stitch.build(manifest, base, written)
     viewer.write(base.parent, manifest["id"], manifest["map"], written)
     log_timings("stitch")
-
-
-if __name__ == "__main__":
-    main()

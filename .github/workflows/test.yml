@@ -22,6 +22,34 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # heroes-capture's tests (packages/heroes-capture/tests): Python with uv, StormLib and CascLib
+      # built into native/ (kept until build_native.py changes), and the game's data from
+      # Blizzard's CDN.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - uses: astral-sh/setup-uv@v10.2.0 # publishes no moving major tag
+
+      - name: Native libraries
+        uses: actions/cache@v6
+        with:
+          path: packages/heroes-capture/native
+          key: native-${{ runner.os }}-${{ hashFiles('packages/heroes-capture/tools/build_native.py') }}
+
+      # CascLib keeps whole CDN archives: about 3.7 GB for the tests, so the cache is saved once a
+      # week (picking up game updates) and restored by every run.
+      - name: This week
+        id: week
+        run: echo "week=$(date +%G-%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Game data from Blizzard's CDN
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/heroes-capture
+          key: casc-${{ steps.week.outputs.week }}
+          restore-keys: casc-
+
       - name: Run Tests
         uses: cpdevtools/git-flow/actions/test@main
         with:
