@@ -139,7 +139,8 @@ Proposed; the boundaries are chosen before each starts.
    simulated game and regression scripts into `tests/`, run by `test.yml`. Built: the package in
    `src/heroes_capture`, `heroes-capture map|prepare|capture|stitch`, 53 tests (units, the
    simulated game, the game's data from the CDN) passing locally; the command rendered Battlefield of
-   Eternity on the PC. The test workflow's first run is next.
+   Eternity on the PC, and the test workflow passes (53 tests,
+   about 3 minutes with a cold CDN cache). **Done.**
 4. **Release.** PyInstaller build with the version resource; `build-pack` on Windows; the
    `executable` artifact; the first release.
 5. **Switch over.** The development loop on the PC points here; `tools/map-capture` leaves
