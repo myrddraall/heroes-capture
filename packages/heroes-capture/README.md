@@ -101,9 +101,11 @@ maps by category and which have been validated: their render reviewed and, where
 for. They're in `validated-maps.json`; add a map there once its render has been looked over. The
 categories come from the mods each map builds on: Battleground (the 5v5 maps of the Versus AI /
 Quick Match / Storm League pool, with the custom-game-only ones: the game's data doesn't tell them
-apart), Arena, Brawl, and Other (the sandboxes, and Try Me Mode and the tutorials, listed as
-unsupported: the game keeps them as folders rather than map archives, and the capture builds on an
-archive). The steps on their own, which leave their files in place:
+apart), Arena and Brawl (each map needs handling of its own, as Punisher Arena's three arenas and
+rounds did, so only the validated ones are supported; naming another renders it with a warning),
+and Other (the sandboxes, and Try Me Mode and the tutorials, listed as unsupported: the game keeps
+them as folders rather than map archives, and the capture builds on an archive). A category's run
+leaves the unsupported maps out. The steps on their own, which leave their files in place:
 
 ```powershell
 # 1. Prepare: reads the map from the game, injects the capture script, plans the grid (into tmp\).

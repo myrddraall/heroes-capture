@@ -226,23 +226,39 @@ def split_map(words: list[str]) -> tuple[str | None, list[str]]:
     return found, options
 
 
-def maps_to_render(map_spec: str | None, category: Category | None) -> list[tuple[str, str]]:
-    """(what to prepare, the map's name) for each map to render: the one named (the game's
-    spelling of its name; a .stormmap path's file name), or the category's renderable maps (all of
-    them for "all"; the unsupported ones are never among them), in map list's order."""
+# Arenas and brawls each need handling of their own (Punisher Arena's three arenas, its in-game
+# hero selection, its rounds), so in these categories only the validated maps are supported.
+SUPPORTED_ONCE_VALIDATED = {"Arena", "Brawl"}
+
+
+def supported(name: str, category: str, validated: dict) -> bool:
+    """Whether the capture handles this map of the game's: a validated one, or one outside the
+    categories whose maps need handling of their own."""
+    return name in validated or category not in SUPPORTED_ONCE_VALIDATED
+
+
+def maps_to_render(map_spec: str | None, category: Category | None, validated: dict) -> tuple[list[tuple[str, str]], int]:
+    """(what to prepare, the map's name) for each map to render, and how many unsupported maps the
+    category left out: the one named (the game's spelling of its name; a .stormmap path's file
+    name; an unsupported arena or brawl renders when named, with a warning), or the category's
+    supported maps (all of them for "all"), in map list's order."""
     from . import game_data
 
     if map_spec and map_spec.lower().endswith(".stormmap"):
-        return [(map_spec, Path(map_spec).name[: -len(".stormmap")])]
+        return [(map_spec, Path(map_spec).name[: -len(".stormmap")])], 0
     with game_data.open_storage(game_data.find_install()) as storage:
+        index = game_data.map_index(storage)
         if map_spec:
             name = game_data.find_map(storage, map_spec)
-            return [(name, name)]
-        index = game_data.map_index(storage)
+            if not supported(name, index[name]["category"], validated):
+                ui.warn(f"{name} is unsupported: {index[name]['category'].lower()} maps each need handling of their own, "
+                        "and this one hasn't been validated; rendering it anyway")
+            return [(name, name)], 0
     order = {c: n for n, c in enumerate(game_data.CATEGORIES)}
-    names = sorted((n for n, e in index.items() if category == Category.all or e["category"].lower() == category.value),
+    chosen = [n for n, e in index.items() if category == Category.all or e["category"].lower() == category.value]
+    names = sorted((n for n in chosen if supported(n, index[n]["category"], validated)),
                    key=lambda n: (order[index[n]["category"]], n.casefold()))
-    return [(n, n) for n in names]
+    return [(n, n) for n in names], len(chosen) - len(names)
 
 
 def kept_run(work: Path, map_id: str, options: list[str]) -> Path | None:
@@ -347,7 +363,8 @@ def render(
     probe = next((f"--{name.replace('_', '-')}" for name in PROBES if chosen[name]), None)
     if category and (probe or show_ui):
         raise typer.BadParameter("the diagnostics take one map")
-    maps = maps_to_render(map_spec, category)  # a name that isn't a renderable map stops here, before any file is written
+    validated = validated_maps()
+    maps, left_out = maps_to_render(map_spec, category, validated)  # a name that isn't a renderable map stops here, before any file is written
     work = Path(extra[extra.index("--out") + 1]) if "--out" in extra else TMP
     options = ["--structures", structures.value, *extra]
     if "--out" not in extra:
@@ -371,9 +388,9 @@ def render(
                 run_capture([manifest, probe or "--launch-only", *capture_options])
         return
 
-    validated = validated_maps()
     if category:
-        ui.done(f"{len(maps)} maps to render ({category.value}), {sum(n in validated for _, n in maps)} of them validated")
+        ui.done(f"{len(maps)} maps to render ({category.value}), {sum(n in validated for _, n in maps)} of them validated"
+                + (f"; {left_out} unsupported left out" if left_out else ""))
     rendered, skipped, failed = 0, 0, []
     for map_spec, name in maps:
         try:
@@ -407,19 +424,23 @@ def validated_maps() -> dict[str, dict]:
 GONE = "No longer in the game"
 
 
-def map_rows(game_maps: dict[str, str], unsupported: list[str], validated: dict[str, dict]) -> list[tuple[str, str, str]]:
+def map_rows(game_maps: dict[str, str], folder_maps: list[str], validated: dict[str, dict]) -> list[tuple[str, str, str]]:
     """(category, map, status) for the game's maps (name -> category), by category and then
-    alphabetically; the maps that can't be rendered, under Other; then the validated maps the game
-    no longer has. Status: "validated", "not yet", "unsupported" or "not in the game"."""
+    alphabetically; the folder maps, which can't be rendered, under Other; then the validated maps
+    the game no longer has. Status: "validated", "not yet", "unsupported" (a folder map, or an
+    arena or brawl not validated) or "not in the game"."""
     from .game_data import CATEGORIES
 
     rows = []
     for category in CATEGORIES:
-        names = [n for n, c in game_maps.items() if c == category] + (unsupported if category == "Other" else [])
+        names = [n for n, c in game_maps.items() if c == category] + (folder_maps if category == "Other" else [])
         for name in sorted(names, key=str.casefold):
-            status = "unsupported" if name in unsupported else "validated" if name in validated else "not yet"
+            if name in folder_maps or not supported(name, category, validated):
+                status = "unsupported"
+            else:
+                status = "validated" if name in validated else "not yet"
             rows.append((category, name, status))
-    for name in sorted(set(validated) - set(game_maps) - set(unsupported), key=str.casefold):
+    for name in sorted(set(validated) - set(game_maps) - set(folder_maps), key=str.casefold):
         rows.append((GONE, name, "not in the game"))
     return rows
 
@@ -434,7 +455,7 @@ def list_maps(
 ) -> None:
     """The game's maps by category, and which have been validated.
 
-    Battleground: the game's 5v5 maps, the Versus AI / Quick Match / Storm League pool (with the custom-game-only ones: the game's data doesn't tell them apart). Arena and Brawl: the brawl modes' maps. Other: sandboxes, and Try Me Mode and the tutorials, which are unsupported (the game keeps them as folders, not map archives).
+    Battleground: the game's 5v5 maps, the Versus AI / Quick Match / Storm League pool (with the custom-game-only ones: the game's data doesn't tell them apart). Arena and Brawl: the brawl modes' maps; each needs handling of its own, so only the validated ones are supported. Other: sandboxes, and Try Me Mode and the tutorials, which are unsupported (the game keeps them as folders, not map archives).
 
     Validated: the map's render has been reviewed and, where needed, tuned for (validated-maps.json). The rest render with the defaults, unchecked.
     """
@@ -444,8 +465,8 @@ def list_maps(
     with kept_on_failure(TMP), ui.step("Reading the game's maps"):
         with open_storage(find_install()) as storage:
             game_maps = {name: entry["category"] for name, entry in map_index(storage).items()}
-            unsupported = folder_maps(storage)
-    rows = map_rows(game_maps, unsupported, validated_maps())
+            folders = folder_maps(storage)
+    rows = map_rows(game_maps, folders, validated_maps())
     table = Table(title="Maps", title_justify="left")
     table.add_column("Map", no_wrap=True)
     table.add_column("Status", no_wrap=True)
@@ -459,7 +480,8 @@ def list_maps(
         table.add_row("  " + escape(name), STATUS_STYLE[status])  # as written, brackets too
     ui.show(table)
     done = sum(status == "validated" for _, _, status in rows)
-    ui.show(f"{done} of {len(game_maps)} maps validated; {len(unsupported)} unsupported")
+    unsupported = sum(status == "unsupported" for _, _, status in rows)
+    ui.show(f"{done} of {len(game_maps)} maps validated; {unsupported} unsupported")
     clean_up([ui.log_file()], keep_tmp)
 
 

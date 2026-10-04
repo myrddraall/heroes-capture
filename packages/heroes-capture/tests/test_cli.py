@@ -1,6 +1,7 @@
 """The heroes-capture command: its commands and help, and map list's statuses."""
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -221,22 +222,32 @@ def test_a_category_run_goes_on_past_a_failure_and_carries_on_where_it_left_off(
     calls = render_steps(monkeypatch, tmp_path, fail_stitch={"Cursed Hollow"})
     result = runner.invoke(cli.app, ["--log", "map", "render", "--category", "all"])
     assert result.exit_code == 1, result.output
-    assert [c[1][0] for c in calls if c[0] == "prepare"] == ["Cursed Hollow", "Dragon Shire", "Punisher Arena", "Pull Party"]
-    assert "4 maps to render (all), 2 of them validated" in result.output  # Dragon Shire and Punisher Arena
+    assert [c[1][0] for c in calls if c[0] == "prepare"] == ["Cursed Hollow", "Dragon Shire", "Punisher Arena"]
+    assert "3 maps to render (all), 2 of them validated; 1 unsupported left out" in result.output  # Pull Party: a brawl not validated
     assert "Cursed Hollow (keep structures): 10 tiles planned, black void; not validated: it may not come out right" in result.output
-    assert "3 rendered, 0 already rendered, 1 failed" in result.output and "failed: Cursed Hollow." in result.output
+    assert "2 rendered, 0 already rendered, 1 failed" in result.output and "failed: Cursed Hollow." in result.output
     calls = render_steps(monkeypatch, tmp_path)
     result = runner.invoke(cli.app, ["--log", "map", "render", "--category", "all"])
     assert result.exit_code == 0, result.output
     assert [c[0] for c in calls] == ["stitch"]  # Cursed Hollow's screenshots were all there; the rest done
-    assert "1 rendered, 3 already rendered, 0 failed" in result.output
+    assert "1 rendered, 2 already rendered, 0 failed" in result.output
     assert list((tmp_path / "tmp").glob("*.json")) == []
 
 
-def test_a_category_run_renders_only_that_category(monkeypatch, tmp_path):
+def test_a_category_run_renders_only_that_categorys_supported_maps(monkeypatch, tmp_path):
     calls = render_steps(monkeypatch, tmp_path)
     assert runner.invoke(cli.app, ["map", "render", "-c", "arena"]).exit_code == 0
     assert [c[1][0] for c in calls if c[0] == "prepare"] == ["Punisher Arena"]
+    result = runner.invoke(cli.app, ["map", "render", "-c", "brawl"])
+    assert result.exit_code == 0 and "0 maps to render (brawl), 0 of them validated; 1 unsupported left out" in result.output
+
+
+def test_an_unsupported_brawl_renders_when_named_with_a_warning(monkeypatch, tmp_path):
+    calls = render_steps(monkeypatch, tmp_path)
+    result = runner.invoke(cli.app, ["--log", "map", "render", "pull party"])
+    assert result.exit_code == 0, result.output
+    assert "warning: Pull Party is unsupported: brawl maps each need handling of their own" in result.output
+    assert [c[0] for c in calls] == ["prepare", "capture", "stitch"]
 
 
 def test_a_restarted_capture_carries_on_in_its_runs_logs(monkeypatch, tmp_path):
@@ -290,7 +301,7 @@ def test_map_rows():
         ("Battleground", "dragon cave", "not yet"),
         ("Battleground", "Dragon Shire", "validated"),
         ("Battleground", "Towers of Doom", "not yet"),
-        ("Brawl", "Pull Party", "not yet"),
+        ("Brawl", "Pull Party", "unsupported"),  # a brawl, not validated
         ("Other", "Sandbox (Cursed Hollow)", "not yet"),
         ("Other", "Try Me Mode", "unsupported"),
         (cli.GONE, "Old Map", "not in the game"),
@@ -327,7 +338,8 @@ def test_map_list_against_the_game():
     for category in ("Battleground", "Arena", "Brawl", "Other"):
         assert category in result.output
     assert "Try Me Mode" in result.output and "unsupported" in result.output
-    assert "maps validated; 4 unsupported" in result.output
+    assert "Garden Arena" in result.output  # an arena not validated: unsupported, still listed
+    assert re.search(r"\d+ of \d+ maps validated; \d+ unsupported", result.output)
 
 
 def test_the_plain_log_is_what_log_mode_prints_in_either_mode(tmp_path, ui_state):
