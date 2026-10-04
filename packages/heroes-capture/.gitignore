@@ -1,4 +1,6 @@
-work/
+tmp/
+logs/
+maps/
 __pycache__/
 # personal: copies from a machine-specific path
 update.cmd

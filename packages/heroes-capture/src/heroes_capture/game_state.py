@@ -9,6 +9,7 @@ import numpy as np
 from PIL import Image
 
 from .game_window import game_process_seen
+from .runlog import warn
 
 NOT_RUNNING = "not running"
 MENU = "menu"
@@ -37,7 +38,7 @@ def _load_menu_reference() -> list:
                 p["template"] = np.asarray(Image.open(folder / f"{p['name']}.png").convert("L"), dtype=np.float32)
                 _MENU_REFERENCE.append(p)
         except (OSError, KeyError, ValueError) as e:
-            print(f"(no menu reference: {e})", flush=True)
+            warn(f"no menu reference: {e}")
     return _MENU_REFERENCE
 
 

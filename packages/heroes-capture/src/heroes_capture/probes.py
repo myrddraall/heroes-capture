@@ -1,4 +1,4 @@
-"""Diagnostic runs (capture.py --probe-light, --probe-sky): instead of the tiles, chosen views and
+"""Diagnostic runs (capture.py --probe-light, --probe-sky, --probe-waits): instead of the tiles, chosen views and
 command sequences, a shot after each, kept in a probe-<what>-<time> folder next to the tiles.
 """
 
@@ -9,10 +9,9 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from . import game_control
 from . import sky_layers
-from .game_control import quit_match, send_chat, settle, step
-from .runlog import log
+from .game_control import quit_match, send_command, settle, step
+from .runlog import done, log, warn
 from .screen import changed_share
 
 
@@ -57,16 +56,16 @@ def probe_light(session, manifest: dict, out: Path) -> None:
         if not points:
             middle = min(tiles, key=lambda t: abs(t["row"] - manifest["rows"] // 2) + abs(t["col"] - manifest["cols"] // 2))
             points = [(middle["x"], middle["y"])]
-        send_chat("clean")  # no labels in these shots
+        send_command("clean")  # no labels in these shots
         settle(0.5)
         for n, (x, y) in enumerate(points, start=1):
-            send_chat(f"look {x:.1f} {y:.1f}")
+            send_command(f"look {x:.1f} {y:.1f}")
             settle(1.0)
             for k, entry in enumerate(os.environ.get("HRS_PROBE_TILE_PATH", "tile:0.5").split(";")):
                 cmds, wait = entry.rsplit(":", 1)
                 given, _, cmds = cmds.rpartition("=")
                 if "@" not in cmds:
-                    send_chat(f"look {x + 100:.1f} {y:.1f}")  # arrive afresh
+                    send_command(f"look {x + 100:.1f} {y:.1f}")  # arrive afresh
                     settle(1.0)
                 acked = True
                 for cmd in cmds.split(","):
@@ -87,7 +86,7 @@ def probe_light(session, manifest: dict, out: Path) -> None:
 
     step(run, "the lighting probe")
     quit_match()
-    print(f"\nprobe screenshots in {probe_dir}")
+    done(f"probe screenshots in {probe_dir}")
 
 
 def probe_sky(session, manifest: dict, out: Path) -> None:
@@ -117,23 +116,23 @@ def probe_sky(session, manifest: dict, out: Path) -> None:
         log(f"  {name}: " + "; ".join(parts))
 
     def run() -> None:
-        send_chat(f"tile {edge['index']} {edge['x']:.2f} {edge['y']:.2f}")
+        send_command(f"tile {edge['index']} {edge['x']:.2f} {edge['y']:.2f}")
         settle(2.0)
-        send_chat("clean")
+        send_command("clean")
         settle(0.5)
         sequence = os.environ.get("HRS_SKY_SEQUENCE") or "start:0|black 0:2.5|white 0:2.5|magenta 0:2.5|lime 0:2.5|none 0:2.5"
         previous = None
         for k, item in enumerate(sequence.split("|")):
             command, wait = item.rsplit(":", 1)
             if command not in ("start", previous):
-                send_chat(f"sky {command}")
+                send_command(f"sky {command}")
             settle(float(wait))
             shot(f"{k:02d}-{command.replace(' ', '-layer')}-{wait}s")
             previous = command
 
     step(run, "the skybox probe")
     quit_match()
-    print(f"\nprobe screenshots in {probe_dir}")
+    done(f"probe screenshots in {probe_dir}")
 
 
 def _difference(a: np.ndarray, b: np.ndarray, left: int) -> str:
@@ -210,24 +209,6 @@ def probe_waits(session, manifest: dict, out: Path) -> None:
         step(run, f"waits probe, tile {t['index'] + 1}")
     session.send("refitwait 0.1")
 
-    # The chat box: how long it needs to open before the text is typed. Each wait, 30 commands
-    # sent once each: how many the map took, and how long a command took on average.
-    def chat_run() -> None:
-        current = game_control.CHAT_OPEN_WAIT
-        try:
-            for wait in (0.06, 0.04, 0.03, 0.02):
-                game_control.CHAT_OPEN_WAIT = wait
-                taken, started = 0, time.time()
-                for _ in range(30):
-                    taken += session.send("clean", timeout=1.0, sends=1) is not None
-                log(f"  chat box wait {wait:.2f} s: {taken}/30 commands taken first time, {(time.time() - started) / 30:.2f} s per command")
-                if taken < 30:
-                    break  # shorter still would lose more (and letters typed before the box opens reach the game as hotkeys)
-        finally:
-            game_control.CHAT_OPEN_WAIT = current
-
-    step(chat_run, "waits probe, chat box")
-
     sky = manifest.get("sky") or {}
     measured = None
     if sky.get("keys") and (sky.get("mapSky") or {}).get("parallax"):
@@ -242,7 +223,7 @@ def probe_waits(session, manifest: dict, out: Path) -> None:
             for name, wait in (("current", 0.1), ("current-again", 0.1), ("settle-0.05", 0.05), ("settle-0", 0.0)):
                 for command in (f"tile 0 {x:.2f} {y:.2f}", f"hidemap {clip}", "sky parallaxbare 1"):
                     if session.send(command, timeout=3.0) is None:
-                        log("  sky: no answer")
+                        warn("sky: no answer")
                         return
                 settle(1.0)
                 if session.send("sky parallaxwhite 1") is None:
@@ -259,4 +240,5 @@ def probe_waits(session, manifest: dict, out: Path) -> None:
         session.send("sky mapparallax 1")
         sky_layers.capture(session, manifest, out.parent, measured, keep=0.8, folder_name="sky-keep08")
     quit_match()
-    print(f"\nprobe screenshots in {probe_dir}")
+    done(f"probe screenshots in {probe_dir}")
+

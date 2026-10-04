@@ -23,6 +23,54 @@ ACCEPTED = {"BoolToInt", "RegionRect", "GameSetBackground", "CutsceneStop", "c_s
 KEYWORDS = {"if", "for", "while", "return", "else"}
 
 
+def galaxy_calls(code: str, names: set[str] | None = None) -> list[tuple[str, list[str]]]:
+    """Each call in Galaxy code (of `names` only, if given): the function's name and its arguments'
+    source text, split at the top level's commas."""
+    found = []
+    for m in re.finditer(r"\b([A-Za-z_]\w*)\s*\(", code):
+        name = m.group(1)
+        if name in KEYWORDS or (names is not None and name not in names):
+            continue
+        i, depth, args, current, quoted = m.end(), 1, [], "", False
+        while i < len(code) and depth:
+            ch = code[i]
+            if quoted:
+                quoted = not (ch == '"' and code[i - 1] != "\\")
+            elif ch == '"':
+                quoted = True
+            elif ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if not depth:
+                    break
+            elif ch == "," and depth == 1:
+                args.append(current.strip())
+                current = ""
+                i += 1
+                continue
+            current += ch
+            i += 1
+        if current.strip() or args:
+            args.append(current.strip())
+        found.append((name, args))
+    return found
+
+
+def literal_kind(arg: str) -> str | None:
+    """What a call's argument plainly is, from its text: "string" (a literal, or text joined to one),
+    "number" (a literal, or arithmetic on names), "bool"; None when it can't be told (a name, a call)."""
+    if arg.startswith('"'):
+        return "string"
+    if re.fullmatch(r"-?\d+(\.\d+)?", arg):
+        return "number"
+    if arg in ("true", "false"):
+        return "bool"
+    if arg.startswith("(") and '"' not in arg and re.search(r"\w\s*[-+*/]\s*[\w(]", arg) and not re.search(r"[<>=!&|]", arg):
+        return "number"
+    return None
+
+
 @pytest.fixture(scope="module")
 def blizzard_galaxy(storage) -> str:
     """All of Blizzard's Galaxy code: the storage's own files and those inside its mod archives."""
@@ -56,11 +104,11 @@ def test_tilesets_light_sets_and_sky_models(storage):
         assert model and spec["base"].encode().lower() in model.lower()
 
 
-@pytest.mark.parametrize("map_name, sky_mode, arenas", [
-    ("Battlefield of Eternity", "matte", 0), ("Punisher Arena", "matte", 3), ("Dragon Shire", "black", 0),
+@pytest.mark.parametrize("map_name, sky_mode, arenas, extra", [
+    ("Battlefield of Eternity", "matte", 0, []), ("Punisher Arena", "matte", 3, []), ("Dragon Shire", "black", 0, []),
 ])
-def test_prepared_maps(map_name, sky_mode, arenas, tmp_path, blizzard_galaxy):
-    manifest_path = inject.main([map_name, "--screen", "3440x1440", "--distance", "214", "--keep", "0.4", "--out", str(tmp_path)])
+def test_prepared_maps(map_name, sky_mode, arenas, extra, tmp_path, blizzard_galaxy):
+    manifest_path = inject.main([map_name, "--screen", "3440x1440", "--distance", "214", "--keep", "0.4", "--out", str(tmp_path), *extra])
     manifest = json.loads(manifest_path.read_text())
     assert manifest["map"] == map_name and manifest["sky"]["mode"] == sky_mode
     assert len(manifest["areas"] or []) == arenas and len(manifest["tiles"]) > 50
@@ -75,3 +123,32 @@ def test_prepared_maps(map_name, sky_mode, arenas, tmp_path, blizzard_galaxy):
     unknown = sorted(n for n in names if not n.startswith("hrsCap_") and n not in KEYWORDS | ACCEPTED
                      and not re.search(r"\b" + re.escape(n) + r"\b", blizzard_galaxy))
     assert not unknown, f"names Blizzard's code doesn't have: {unknown}"
+    # One call with the wrong number or kind of arguments stops the script as surely as an unknown
+    # name does (StringReplace(text, find, "", ...): it takes a range, not a replacement). Each
+    # call of a function Blizzard defines in Galaxy is held to its parameters; each native's to
+    # how Blizzard's code calls it: a count it uses, and no literal where it puts another kind.
+    ours = [(n, a) for n, a in galaxy_calls(capture) if not n.startswith("hrsCap_")]
+    used = {n for n, _ in ours}
+    defined = {m.group(1): [p.split()[0] for p in m.group(2).split(",") if p.strip()]
+               for m in re.finditer(r"^\w+\s+(\w+)\s*\(([^)]*)\)\s*\{", blizzard_galaxy, re.M) if m.group(1) in used}
+    theirs: dict = {}
+    for name, args in galaxy_calls(blizzard_galaxy, used - set(defined)):
+        theirs.setdefault(name, {}).setdefault(len(args), [set() for _ in args])
+        for kinds, arg in zip(theirs[name][len(args)], args):
+            kinds.add(literal_kind(arg))
+    wrong = []
+    for name, args in ours:
+        if name in defined:
+            params = defined[name]
+            plain = {"string": ("string", "text"), "number": ("int", "fixed"), "bool": ("bool",)}
+            if len(args) != len(params) or any(literal_kind(a) and t not in plain[literal_kind(a)] for a, t in zip(args, params)):
+                wrong.append(f"{name}({', '.join(args)}): Blizzard defines it ({', '.join(params)})")
+        elif name in theirs:
+            if len(args) not in theirs[name]:
+                wrong.append(f"{name}({', '.join(args)}): Blizzard calls it with {sorted(theirs[name])} arguments")
+                continue
+            for k, (arg, kinds) in enumerate(zip(args, theirs[name][len(args)])):
+                seen = kinds - {None}
+                if literal_kind(arg) and seen and literal_kind(arg) not in seen:
+                    wrong.append(f"{name}(...): argument {k + 1} is a {literal_kind(arg)}, Blizzard passes {sorted(seen)}")
+    assert not wrong, "calls unlike Blizzard's: " + "; ".join(wrong)

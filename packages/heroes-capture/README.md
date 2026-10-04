@@ -16,11 +16,36 @@ included; nothing to install), and its `.sha256`. The newest is always at
 `https://github.com/myrddraall/heroes-capture/releases/latest/download/heroes-capture-win-x64.exe`.
 
 ```powershell
-heroes-capture-win-x64.exe map "Battlefield of Eternity"
+heroes-capture-win-x64.exe map render "Battlefield of Eternity"
+heroes-capture-win-x64.exe map render --category all   # every map the tool can render
+heroes-capture-win-x64.exe map list     # the game's maps by category, and which have been validated
 ```
 
-It writes into `work\` in the folder it runs from. The rest of this page is for working on the
-tool itself.
+The output folder is one a render can be run again on: a map already rendered there is skipped
+(`--force` renders it again), and a map whose render failed or was stopped carries on from where
+it got to. A category's run goes on past a map that fails and lists the failures at the end; the
+same command again picks them up.
+
+A render's images go to `maps\<map id>\` in the folder it runs from (`maps\battlefield-of-eternity\`;
+`-o` / `--output-dir` picks another folder for them). Its working files (the screenshots, the
+prepared map, the diagnostic logs) go to `tmp\` and are removed when the render finishes;
+`--keep-tmp` leaves them for diagnosis, and a failed render leaves them too. `heroes-capture
+clean-up` removes them afterwards (only what heroes-capture wrote in `tmp\`).
+
+Two logs:
+
+- `logs\heroes-capture.log`: the output as `--log` prints it (plain text, no colours), whichever
+  view was on screen; kept, each command's run after a dated `=====` line.
+- `tmp\heroes-capture-<date>-<time>.log` (one per run) and `tmp\<id>\log.txt`: the diagnostic
+  logs, with every message, the detail ones included, and every line a library printed,
+  time-stamped; working files, so removed with the rest. A run removes only its own: a failed
+  run's stay until `clean-up`. A capture restarted after a lost match carries on in its run's.
+
+On a terminal the output is a live view (the step, its status, progress bars; warnings print
+above it); `--log` gives plain log lines instead, the default in CI or when the output isn't a
+terminal; `-v` / `--verbose` adds the detail messages in either.
+
+The rest of this page is for working on the tool itself.
 
 ## Setup (once)
 
@@ -50,26 +75,48 @@ tool itself.
 `update.cmd` that refreshes the files and calls it needs no arguments. `update.cmd` is not
 tracked: it contains the machine's source path.
 
-`heroes-capture map` runs all three steps against the installed game, at the primary monitor's
-resolution, into `work\`:
+`heroes-capture map render` runs all three steps against the installed game, at the primary
+monitor's resolution, into `maps\<map id>\`, with its working files in `tmp\`:
 
 ```powershell
-heroes-capture map "Towers of Doom"                       # structures kept
-heroes-capture map "Cursed Hollow" --structures hide      # bare terrain
+heroes-capture map render "Towers of Doom"                  # structures kept, into maps\towers-of-doom
+heroes-capture map render "Cursed Hollow" --structures hide # bare terrain
+heroes-capture map render "Dragon Shire" -o D:\renders      # into D:\renders\dragon-shire
+heroes-capture map render "Dragon Shire" --keep-tmp         # tmp\ left for diagnosis
+heroes-capture map render --category arena                  # battleground, arena, brawl, other or all
+heroes-capture map render "Dragon Shire" --force            # again, though maps\dragon-shire has it
+heroes-capture clean-up                                     # removes what a failed or --keep-tmp render left in tmp\
 ```
 
-(`py -m heroes_capture map ...` is the same.) The steps on their own:
+A map already rendered in the output folder (its viewer is there) is skipped. A render left
+unfinished carries on from its working files when run again with the same options: the capture
+resumes at the first missing screenshot (less the two the saving threads may have left
+half-written), or the stitch runs straight away when they're all there. With other options it
+starts again. Maps not yet validated render too; their line says they may not come out right.
+Options that aren't `map render`'s own go to the preparing step: `heroes-capture prepare --help`
+lists them.
+
+(`py -m heroes_capture map render ...` is the same.) `heroes-capture map list` lists the game's
+maps by category and which have been validated: their render reviewed and, where needed, tuned
+for. They're in `validated-maps.json`; add a map there once its render has been looked over. The
+categories come from the mods each map builds on: Battleground (the 5v5 maps of the Versus AI /
+Quick Match / Storm League pool, with the custom-game-only ones: the game's data doesn't tell them
+apart), Arena and Brawl (each map needs handling of its own, as Punisher Arena's three arenas and
+rounds did, so only the validated ones are supported; naming another renders it with a warning),
+and Other (the sandboxes, and Try Me Mode and the tutorials, listed as unsupported: the game keeps
+them as folders rather than map archives, and the capture builds on an archive). A category's run
+leaves the unsupported maps out. The steps on their own, which leave their files in place:
 
 ```powershell
-# 1. Prepare: reads the map from the game, injects the capture script, plans the grid.
+# 1. Prepare: reads the map from the game, injects the capture script, plans the grid (into tmp\).
 heroes-capture prepare "Towers of Doom" --screen 3440x1440 --distance 214 --keep 0.4
 
 # 2. Capture: launches the map, waits for it to load and for the intro to finish; leave the
 #    mouse and keyboard alone.
-heroes-capture capture work/towers-of-doom-structures.json
+heroes-capture capture tmp/towers-of-doom-structures.json
 
-# 3. Stitch: writes work/towers-of-doom-structures.png, a preview, and the geo file.
-heroes-capture stitch work/towers-of-doom-structures.json --tiles
+# 3. Stitch: writes maps/towers-of-doom/towers-of-doom-structures.png, a preview, the geo file...
+heroes-capture stitch tmp/towers-of-doom-structures.json --tiles
 ```
 
 The screenshots are kept as raw `.npy` arrays (fast for the stitch to read; older runs' PNG tiles
@@ -81,7 +128,7 @@ Map names are as the game shows them (case and punctuation don't matter), or pas
 `.stormmap`. The battleground maps are `.s2ma` archives under content-hash names in the game's
 storage; the first run after a game update opens each to index them by name (about 20 s).
 
-### Options (prepare; `map` passes them on)
+### Options (prepare; `map render` passes them on)
 
 | Option                    | Default     | Effect                                                                                                         |
 | ------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------- |
@@ -89,17 +136,17 @@ storage; the first run after a game update opens each to index them by name (abo
 | `--px-per-cell <n>`       | `48`        | output resolution; a map is ~220 cells wide, so 48 gives ~10,600 px                                            |
 | `--screen <w>x<h>`        | `3840x2160` | the game's resolution while capturing; match your monitor                                                      |
 | `--fov <deg>`             | `20`        | field of view; narrower is flatter (less lean on tall objects) but puts the camera further away                |
-| `--distance <units>`      |             | camera distance instead of `--fov` (the field of view is then chosen to keep the scale); `map` uses 214     |
+| `--distance <units>`      |             | camera distance instead of `--fov` (the field of view is then chosen to keep the scale); `map render` uses 214 |
 | `--keep <0..1>`           | `0.6`       | share of each screenshot used, centred; the rest is overlap, used to measure the scale                         |
 | `--refit-yaw <deg>`       | map's light | yaw of the lighting-refit look before each tile (by default it faces the map's main light)                     |
 | `--no-lens`               |             | don't set the field of view or clip planes (see troubleshooting)                                               |
 | `--margin <cells>`        | `0`         | also capture beyond the map's camera bounds (lifts them)                                                       |
 | `--crop-margin <cells>`   | `12`        | the stitched image reaches this far past the camera bounds (or past each arena's area)                         |
-| `--show-ui`               |             | diagnostic: leave the HUD up; `map` then launches the map and stops                                           |
+| `--show-ui`               |             | diagnostic: leave the HUD up; `map render` then launches the map and stops                                    |
 | `--keep-intro`            |             | diagnostic: let the intro cutscene play out instead of skipping it                                             |
 | `--paint-texture <t> <c>` |             | diagnostic: paint one of the map's own sky textures a solid colour, or `clear` (sky probes; repeatable)       |
 
-Diagnostics `map` runs instead of rendering:
+Diagnostics `map render` runs instead of rendering:
 
 | Switch          | Effect                                                                                                                                                                                     |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -156,7 +203,13 @@ cell there is no more detail: that's the game's own texture resolution.
   the round, so `quit` first leaves the other team one round win short of the match.
 - **The capture script** reveals the whole map, removes every unit except structures (and
   keeps removing them as they spawn), hides health bars, keeps or hides structures, hides the
-  HUD, and sets a straight-down camera. Typing `tile <n>` in chat moves the camera to tile n.
+  HUD, and sets a straight-down camera. Commands go into an edit box of the map's own in the
+  strip's column (blanked from every shot), typed as Unicode text ending in `;`: `tile <n>;`
+  moves the camera to tile n. Text input never acts as a hotkey wherever it lands, and unlike the
+  chat box (which opens and closes on Enter, and lost its state when the game lost focus) the box
+  has no state to lose; a command takes about 90 ms against about 230 ms through chat (measured
+  with a probe). If a command goes unanswered, the chat command `focus` gives the box the
+  keyboard back.
   Structures are hidden rather than removed, since removing a core could end the game. Camera
   positions stay inside the map's camera bounds, where the game would otherwise clamp them.
   The map's intro cutscene is skipped the way the game's own skip works: the script stops the
@@ -211,7 +264,7 @@ cell there is no more detail: that's the game's own texture resolution.
   outside transparent. `--probe-sky` shows each colour on one edge tile.
 - **The status strip (`status.py`).** How the capture knows a command has been carried out:
   the map script draws a dialog in the top-left corner, two columns of black-or-white cells on
-  a black backdrop down the whole left edge, redrawn at the end of every chat command and every
+  a black backdrop down the whole left edge, redrawn at the end of every command and every
   sweep. It carries a locator, the sequence number of the last command carried out (the
   capture appends one to each command it sends), the camera's actual target (so clamping at
   the map's edge is known, and the camera bounds are measured by sending the camera to two
@@ -243,11 +296,13 @@ cell there is no more detail: that's the game's own texture resolution.
   meanwhile: Punisher Arena), measures the camera bounds the game really applies (an arena's are far tighter than its map file says)
   from where the camera stops when sent to two corners, re-plans the grid from them, sends
   each tile with its position (`tile <n> <x> <y>`), records where the camera really went
-  (`positions.json`), and for each tile takes the kept image once `tile` has been carried out, then (number pad 5, or the `black` command if the key went
-  missing)
-  the same view over the black skybox. It only types while the game is in front;
-  if the game loses focus part way through a tile, that tile is dropped and redone from its
-  start once the game is back in front; black frames are retaken; where map content reaches an
+  (`positions.json`), and for each tile takes the kept image once `tile` has been carried out, then (`black`)
+  the same view over the black skybox. It only types while the game is in front, and puts the
+  game in front only as the run starts (or as it starts the game): alt-tabbing away pauses the
+  run until you click back into the game. Opening the game's own menu (Esc, Options, the Alt+F4
+  dialog) pauses it the same way, until the menu is closed. While paused, the live view says why;
+  the line goes once the run carries on (the logs keep each pause and how long it lasted). Either
+  way the tile in progress is dropped and redone from its start; black frames are retaken; where map content reaches an
   outer tile's outer edge (Battlefield of Eternity's arches run past the camera bounds), it lifts
   the camera bounds and adds tiles beyond, outwards until the edge is clear (three at most); it stops early if the map stops responding, and
   leaves the match at the end (`quit`; the stitch runs while the game leaves, and the next launch
@@ -268,9 +323,11 @@ cell there is no more detail: that's the game's own texture resolution.
 | File                                       | What it does                                                                                  |
 | ------------------------------------------ | --------------------------------------------------------------------------------------------- |
 | `src/heroes_capture/`                      | the package; the modules below are in it                                                      |
-| `cli.py`                                   | the `heroes-capture` command: `map` (the three steps), `prepare`, `capture`, `stitch`          |
+| `cli.py`                                   | the `heroes-capture` command (Typer, Rich): `map render`, `map list`, `prepare`, `capture`, `stitch` |
+| `validated-maps.json`                      | the maps whose renders have been reviewed (`map list`)                                        |
+| `ui.py`                                    | the output: the live view or log lines, warnings, progress bars, the log file                 |
 | `inject.py`                                | prepares the map: reads it, plans the grid, injects the script, adds the textures, writes the manifest |
-| `capture_script.galaxy`, `capture_script.py` | the Galaxy script injected into the map (scene, opening, status strip, chat commands), and its values |
+| `capture_script.galaxy`, `capture_script.py` | the Galaxy script injected into the map (scene, opening, status strip, command box), and its values |
 | `sky.py`, `light_data.py`                  | the solid-colour skyboxes; the map's tileset, lighting and sky from the game's definitions     |
 | `stormlib.py`                              | MPQ archives through StormLib (ctypes)                                                        |
 | `casclib.py`, `game_data.py`               | the game's CASC storage through CascLib; the install, the maps, tilesets, light sets, models   |
@@ -280,11 +337,12 @@ cell there is no more detail: that's the game's own texture resolution.
 | `opening-timers.json`                      | per map library, the timers between the gates and the first objective                          |
 | `capture.py`                               | the capture run: start-up, the tiles, recovery                                                |
 | `status.py`                                | reads the status strip                                                                        |
-| `game_control.py`                          | drives the game: focus, chat, launching, waiting for the map, leaving the match                |
+| `game_control.py`                          | drives the game: focus, commands, launching, waiting for the map, leaving the match            |
 | `game_state.py`                            | tells the game's states apart from a screen grab (`menu-reference/` holds the menu's templates) |
+| `game_menus.py`                            | recognises the game's menus over a match (Esc, Options, the exit dialog) at any screen size    |
 | `game_window.py`                           | Windows calls: the game's process and window, keyboard and cursor                              |
 | `screen.py`                                | screen grabbing and frame comparisons                                                         |
-| `probes.py`                                | the `--probe-light` and `--probe-sky` diagnostics                                             |
+| `probes.py`                                | the `--probe-*` diagnostics                                                                   |
 | `sky_layers.py` | measures the map's sky layers' speeds and shoots them across the map |
 | `sky_stitch.py` | the sky layer images, the composites and `-layers.json` |
 | `stitch.py`                                | stitches the screenshots and writes the outputs                                               |
@@ -304,9 +362,12 @@ uv run pytest -n auto --dist loadgroup   # or pnpm test from the workspace root
 - `tests/test_units.py`: the pieces with exact rules (JSON as JavaScript writes it, the script's
   numbers, the grid, lighting, sky textures, the sky measurement's consistency rule).
 - `tests/test_simulated.py`: the capture end to end against a simulated game and desktop
-  (`tests/sim/fakegame.py`: a virtual clock, the chat commands carried out, frames with the
-  status strip): renders in both void modes, a resumed run, lost focus, a silent strip, a crash,
-  the wrong map, the probes; and the stitch of a simulated render.
+  (`tests/sim/fakegame.py`: a virtual clock, the command box and its commands carried out,
+  frames with the status strip): renders in both void modes, a resumed run, lost focus, the
+  game's menu opened part way, the command box losing the keyboard, a silent strip, a crash, the wrong map, the probes; and the stitch of a simulated
+  render.
+- `tests/test_game_menus.py`: the game's menus told from the map at screen sizes from 600 to
+  2160 rows and 16:9 to 32:9 (`tests/sim/menus.py` draws them).
 - `tests/test_game_data.py` (marker `game_data`): the game's own data from Blizzard's CDN (no
   install needed): the maps by name, the tilesets and light sets, the sky models, and three maps
   prepared from it, whose injected script may use only names Blizzard's own Galaxy code has. The
@@ -324,8 +385,8 @@ between runs.
 
   ```powershell
   mkdir "D:\Games\Heroes of the Storm\maps\heroes\singleplayermaps"
-  copy work\towers-of-doom-structures.stormmap "D:\Games\Heroes of the Storm\maps\heroes\singleplayermaps\(10)trymemode.stormmap"
-  heroes-capture capture work\towers-of-doom-structures.json --no-launch
+  copy tmp\towers-of-doom-structures.stormmap "D:\Games\Heroes of the Storm\maps\heroes\singleplayermaps\(10)trymemode.stormmap"
+  heroes-capture capture tmp\towers-of-doom-structures.json --no-launch
   ```
 
   Delete that `(10)trymemode.stormmap` afterwards to get normal Try Mode back.
@@ -335,12 +396,16 @@ between runs.
   3 minutes; `strip-missing.png` shows the screen's left edge.
 
 - **A "script failed to compile" error naming a `c_cameraValue…` constant:** re-run
-  `map` with `--no-lens`. Without a narrow field of view, tall objects lean more at the
+  `map render` with `--no-lens`. Without a narrow field of view, tall objects lean more at the
   screenshot edges; lower `--keep` (e.g. `0.4`) to use only the centre.
 
+- **Every interface panel showing (Blizzard's debug menu among them), on a red tint:** the map's
+  script failed to compile. The run stops at once ("the map's script failed to compile", with a
+  shot in `script-broken.png`) rather than relaunching; it's a heroes-capture bug. Leave the match
+  by hand (Esc, Quit).
 - **HUD pieces still visible:** note which ones. There are more hide calls to try.
-- **The camera doesn't move when `tile` is typed:** check the chat opens with Enter; the
-  script matches any message containing `tile`.
+- **The camera doesn't move when `tile <n>;` is typed:** the command box needs the keyboard
+  (it has it from the match's start; chat `focus 0 ;` gives it back) and the command its `;`.
 
 - **Trees or props missing or low-detail:** the camera is too far away for the game's detail
   distance. Raise `--px-per-cell` or `--fov` (both bring the camera closer).
