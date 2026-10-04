@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from conftest import PACKAGE, simulate
+from conftest import PACKAGE, sim_slot, simulate
 
 RELAUNCH = "relaunch attempted: -m heroes_capture capture test-map.json --game game"
 
@@ -40,8 +40,9 @@ def test_scenario(name, tmp_path):
 def test_stitch_of_a_simulated_render(tmp_path):
     run = simulate(tmp_path, "matte")
     assert run["outcome"] == "finished"
-    result = subprocess.run([sys.executable, "-m", "heroes_capture", "stitch", "test-map.json", "--tiles"], cwd=tmp_path,
-                            capture_output=True, text=True, env={"PYTHONPATH": str(PACKAGE / "src")})
+    with sim_slot():
+        result = subprocess.run([sys.executable, "-m", "heroes_capture", "stitch", "test-map.json", "--tiles"], cwd=tmp_path,
+                                capture_output=True, text=True, env={"PYTHONPATH": str(PACKAGE / "src")})
     assert result.returncode == 0, result.stderr[-3000:]
     out = tmp_path / "maps" / "test-map"  # <output-dir>/<map id>, from the map's name "Test Map"
     for name in ("test-map.png", "test-map.geo.json", "test-map-layers.json", "test-map-composite.png",
