@@ -101,6 +101,35 @@ def map_command(argv: list[str]) -> None:
     print(f"\nDone. The image is next to {manifest}")
 
 
+def self_check() -> None:
+    """Load everything the tool loads on demand, as a built executable must carry it all: the
+    modules imported lazily or by name (dxcam's compiled kernel, pyvips' compiled binding), and
+    StormLib and CascLib. The build runs it on the fresh executable (tools/build_exe.py)."""
+    import importlib
+    import pkgutil
+
+    from . import __path__ as package_path
+
+    # The modules that drive the game need Windows to import at all.
+    windows_only = {"capture", "game_control", "game_state", "game_window", "probes", "screen", "sky_layers"}
+    skip = {"__main__"} | (set() if sys.platform == "win32" else windows_only)
+    modules = [f"heroes_capture.{m.name}" for m in pkgutil.iter_modules(package_path) if m.name not in skip]
+    modules += ["numpy.fft", "scipy.ndimage", "scipy.optimize", "PIL.Image", "pyvips"]
+    if sys.platform == "win32":
+        modules += ["dxcam", "dxcam.processor._numpy_kernels", "mss", "pydirectinput"]
+    for name in modules:
+        importlib.import_module(name)
+    import pyvips
+
+    if not pyvips.API_mode:
+        raise SystemExit("pyvips runs without its compiled binding (_libvips)")
+    from . import casclib, stormlib
+
+    stormlib._load()
+    casclib._load()
+    print(f"self-check: {len(modules)} modules and both native libraries load")
+
+
 def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] in (["--version"], ["-V"]):
@@ -118,6 +147,8 @@ def main(argv: list[str] | None = None) -> None:
         print(inject.main(rest))
     elif command == "capture":
         run_capture(rest)
+    elif command == "self-check":
+        self_check()
     elif command == "stitch":
         from . import stitch
 

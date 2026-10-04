@@ -81,11 +81,15 @@ def main() -> None:
         "--collect-data", "heroes_capture",  # the Galaxy template, menu templates, viewer page, opening timers
         "--collect-submodules", "heroes_capture",  # imported lazily by the command
         "--hidden-import", "_libvips",  # pyvips' compiled binding, imported inside a try
+        *(["--collect-submodules", "dxcam"] if sys.platform == "win32" else []),  # its compiled kernel is imported by name
         *binaries,
         "--distpath", str(DIST), "--workpath", str(BUILD / "pyinstaller"), "--specpath", str(BUILD),
         str(BUILD / "entry.py"))
     built = next(DIST.iterdir())
     print(f"-> {built} ({built.stat().st_size / 1e6:.0f} MB)")
+    # The fresh executable loads everything it will need, or the build fails here rather than a
+    # capture later.
+    subprocess.run([str(built), "self-check"], check=True)
 
 
 if __name__ == "__main__":
