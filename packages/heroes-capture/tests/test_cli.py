@@ -32,6 +32,22 @@ def test_prepare_passes_its_options_through(monkeypatch, tmp_path):
     assert result.exit_code == 0 and seen == [["Dragon Shire", "--screen", "3440x1440", "--keep-intro"]]
 
 
+def test_the_steps_on_their_own_show_as_steps(monkeypatch, tmp_path):
+    """capture and stitch run in a step (the live view): a capture restarted after a lost match runs
+    as `capture` in its own process, and showed no progress without one."""
+    from heroes_capture import stitch
+
+    (tmp_path / "tmp").mkdir()
+    (tmp_path / "tmp" / "m.json").write_text(json.dumps({"map": "Punisher Arena"}))
+    monkeypatch.setattr(cli, "run_capture", lambda argv: None)
+    monkeypatch.setattr(stitch, "main", lambda argv: None)
+    monkeypatch.setenv("HRS_RECOVERIES", "1")
+    result = runner.invoke(cli.app, ["--log", "capture", "tmp/m.json", "--start", "86"])
+    assert result.exit_code == 0 and "\nCapturing Punisher Arena in the game (restart 1 of 3)\n" in result.output
+    result = runner.invoke(cli.app, ["--log", "stitch", "tmp/m.json"])
+    assert result.exit_code == 0 and "\nStitching Punisher Arena\n" in result.output
+
+
 def test_prepare_help_lists_its_options(tmp_path):
     result = runner.invoke(cli.app, ["prepare", "--help"])
     assert result.exit_code == 0 and "--px-per-cell" in result.output and "--crop-margin" in result.output

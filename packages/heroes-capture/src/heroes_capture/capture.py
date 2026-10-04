@@ -534,7 +534,12 @@ def capture_tiles(session: Session, manifest: dict, start: int, settle_time: flo
 
     def take(tile: dict, total: int, sides: list[str]) -> None:
         note = ""
-        status, frame, black, mismatch = step(lambda: shoot(session, tile, settle_time, matting), f"tile {tile['index'] + 1}/{total}")
+        try:
+            status, frame, black, mismatch = step(lambda: shoot(session, tile, settle_time, matting), f"tile {tile['index'] + 1}/{total}")
+        except Recoverable as e:
+            if e.resume_at is None:  # lost during this tile (the game closed): the fresh launch carries on at it
+                e.resume_at = tile["index"]
+            raise
         if status is not None:
             if status.cleared_since_ready > state["cleared"]:
                 note += f"  ({status.cleared_since_ready - state['cleared']} units spawned and cleared since the last tile)"

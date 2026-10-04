@@ -496,18 +496,25 @@ def prepare(ctx: typer.Context) -> None:
     from . import inject
 
     args = list(ctx.args)
-    inject.parse_args(args)  # --help, and a mistyped option, before any file is written
-    log_to(Path(args[args.index("--out") + 1]) if "--out" in args else TMP)
-    print(inject.main(args))
+    opts = inject.parse_args(args)  # --help, and a mistyped option, before any file is written
+    log_to(Path(opts["out"]))
+    with ui.step(f"Preparing {opts['map']}"):
+        manifest = inject.main(args)
+    print(manifest)
 
 
 @app.command(context_settings=PASS_THROUGH, add_help_option=False)
 def capture(ctx: typer.Context) -> None:
     """Capture a prepared map in the running game (heroes-capture capture --help)."""
     args = list(ctx.args)
-    if args and Path(args[0]).suffix == ".json":
-        log_to(Path(args[0]).parent)
-    run_capture(args)
+    if not args or Path(args[0]).suffix != ".json" or {"--help", "-h"} & set(args):
+        run_capture(args)  # its usage, or --help
+        return
+    log_to(Path(args[0]).parent)
+    restart = os.environ.get("HRS_RECOVERIES")  # a capture started again after a lost match (capture.recover)
+    title = f"Capturing {json.loads(Path(args[0]).read_text())['map']} in the game" + (f" (restart {restart} of 3)" if restart else "")
+    with ui.step(title):  # the live view, also in a restarted capture's own process
+        run_capture(args)
 
 
 @app.command(context_settings=PASS_THROUGH, add_help_option=False)
@@ -516,9 +523,12 @@ def stitch(ctx: typer.Context) -> None:
     from . import stitch as stitching
 
     args = list(ctx.args)
-    if args and Path(args[0]).suffix == ".json":
-        log_to(Path(args[0]).parent)
-    stitching.main(args)
+    if not args or Path(args[0]).suffix != ".json" or {"--help", "-h"} & set(args):
+        stitching.main(args)  # its usage, or --help
+        return
+    log_to(Path(args[0]).parent)
+    with ui.step(f"Stitching {json.loads(Path(args[0]).read_text())['map']}"):
+        stitching.main(args)
 
 
 @app.command("clean-up")
