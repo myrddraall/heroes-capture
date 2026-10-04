@@ -149,7 +149,8 @@ Proposed; the boundaries are chosen before each starts.
    on the fresh executable. The pre-release `0.1.0-feature.injector-python.alpha.0.build.14` (67 MB)
    rendered Battlefield of Eternity on the PC from the download alone. **Done.**
 5. **Switch over.** The development loop on the PC points here; `tools/map-capture` leaves
-   `heroes-replay-stats`.
+   `heroes-replay-stats`. The loop has run from here since stage 1; `tools/map-capture` is
+   removed (its README points here); `0.1.0` is the first release. **Done.**
 
 ## Verified
 
