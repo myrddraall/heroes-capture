@@ -38,6 +38,7 @@ from PIL import Image
 
 from . import probes
 from . import sky_layers
+from . import ui
 from .frames import frame_exists, load_frame, save_frame
 from .game_control import (
     FocusLost,
@@ -54,7 +55,7 @@ from .game_control import (
 from .game_data import find_install
 from .game_state import IN_MAP, LOADING, MAP_FAILED, MENU, NOT_RUNNING, PHASES, game_state
 from .game_window import game_region, hold_key
-from .runlog import log, log_timings, set_log_file, stage
+from .runlog import done, log, log_timings, set_log_file, stage, warn
 from .screen import ScreenGrabber, disagree, looks_black, same_view, view_shift
 from .status import Status, StatusStrip
 
@@ -190,7 +191,7 @@ def wait_for_strip(session: Session, out: Path) -> None:
             # Kept for diagnosis: the screen's left edge, where the strip should be.
             dumped = True
             Image.fromarray(np.ascontiguousarray(frame[:, :240])).save(out.parent / "strip-missing.png")
-            log("  no status strip after 30 s; the screen's left edge is in strip-missing.png")
+            warn("no status strip after 30 s; the screen's left edge is in strip-missing.png")
         if state == NOT_RUNNING:
             raise Recoverable("the game closed before the map started")
         if state == MAP_FAILED:
@@ -213,7 +214,7 @@ def wait_for_strip(session: Session, out: Path) -> None:
     strip = session.strip
     log(f"  status strip: {strip.cell_w}x{strip.cell} px cells at {strip.origin}")
     if session.strip_width and 2 * strip.cell_w + strip.origin[0] > session.strip_width:
-        log(f"  warning: the strip ({2 * strip.cell_w + strip.origin[0]} px) is wider than the {session.strip_width} px blanked; lower the interface scale or raise pageLeft")
+        warn(f"the strip ({2 * strip.cell_w + strip.origin[0]} px) is wider than the {session.strip_width} px blanked; lower the interface scale or raise pageLeft")
 
 
 def wait_until_ready(session: Session) -> None:
@@ -235,7 +236,7 @@ def wait_until_ready(session: Session) -> None:
 
     while not step(ready, "waiting for the game to start"):
         if time.time() - started > 240:
-            log("  the map didn't report ready within 4 minutes; pausing the animations now")
+            warn("the map didn't report ready within 4 minutes; pausing the animations now")
             step(lambda: session.send("pause"), "pausing the animations")
             return
         time.sleep(1.0)
@@ -263,7 +264,7 @@ def measure_bounds(session: Session, manifest: dict, manifest_path: Path) -> Non
     manifest rewritten) when they differ from the map file's."""
     bounds = game_bounds(session, manifest)
     if bounds is None:
-        log("  couldn't measure the camera bounds in the game; using the map file's")
+        warn("couldn't measure the camera bounds in the game; using the map file's")
         return
     planned = manifest["cameraBounds"]
     if any(abs(bounds[k] - planned[k]) > 2 for k in bounds):
@@ -528,7 +529,7 @@ def capture_tiles(session: Session, manifest: dict, start: int, settle_time: flo
 
     flagged: list[tuple[dict, str]] = []  # (tile, side): content at that edge
     saver = ThreadPoolExecutor(max_workers=2)
-    state = {"previous": None, "cleared": 0, "failures": 0, "done": 0}
+    state = {"previous": None, "cleared": 0, "failures": 0, "done": 0, "advance": lambda n=1: None}
     started = time.time()
 
     def take(tile: dict, total: int, sides: list[str]) -> None:
@@ -552,7 +553,7 @@ def capture_tiles(session: Session, manifest: dict, start: int, settle_time: flo
 
         if frame is None:
             state["failures"] += 1
-            log(f"    tile {tile['index'] + 1} failed (no answer from the map, or black frames); not saved")
+            warn(f"tile {tile['index'] + 1} failed (no answer from the map, or black frames); not saved")
             if state["failures"] >= 3:
                 first_bad = tile["index"] - state["failures"] + 1
                 try:
@@ -578,6 +579,7 @@ def capture_tiles(session: Session, manifest: dict, start: int, settle_time: flo
                 flagged.append((tile, side))
                 note += f"  (the map runs on past its {side} edge)"
         state["done"] += 1
+        state["advance"]()
         eta = (time.time() - started) / state["done"] * max(0, total - start - state["done"])
         log(f"  tile {tile['index'] + 1}/{total}  (row {tile['row']}, col {tile['col']})  ~{eta:.0f}s left{note}")
 
@@ -592,9 +594,11 @@ def capture_tiles(session: Session, manifest: dict, start: int, settle_time: flo
     if any(t.get("edge") for t in tiles[start:]):
         # Tiles past the grid left by the run this one resumes: the camera bounds lifted again.
         step(lambda: session.send("unbound"), "lifting the camera bounds")
-    with stage("tiles"):
+    with stage("tiles"), ui.bar(len(tiles) - start, "tiles") as advance:
+        state["advance"] = advance
         for tile in tiles[start:]:
             take(tile, len(tiles), sides_of(tile))
+    state["advance"] = lambda n=1: None
     with stage("tiles past the grid"):
         extend_past_grid(manifest, tiles, flagged, take, session, manifest_path)
     saver.shutdown(wait=True)
@@ -622,14 +626,16 @@ def extend_past_grid(manifest: dict, tiles: list, flagged: list, take, session, 
             break
         if not unbound_sent:
             if step(lambda: session.send("unbound"), "lifting the camera bounds") is None:
-                log("  the map didn't take \"unbound\"; no tiles past the grid")
+                warn("the map didn't take \"unbound\"; no tiles past the grid")
                 break
             unbound_sent = True
         log(f"  the map runs on past the grid's edge at {len(new)} tiles: {len(new)} more beyond them (ring {ring + 1})")
         tiles.extend(tile for tile, _ in new)
         manifest_path.write_text(json.dumps(manifest, indent=2))  # before shooting: a resumed run knows them, and the stitch places them
-        for tile, side in new:
-            take(tile, len(tiles), [side])
+        with ui.bar(len(new), f"tiles past the grid (ring {ring + 1})") as advance:
+            for tile, side in new:
+                take(tile, len(tiles), [side])
+                advance()
 
 
 # ------------------------------------------------------------------------------------------------
@@ -682,20 +688,20 @@ def main(argv: list[str]) -> None:
             sys.exit("Heroes of the Storm's install wasn't found (uninstall entries, the Battle.net app's list, the usual folders); pass --game")
         launch_map(manifest, str(game), args.battlenet)
     if args.launch_only:
-        print("\nLaunched. In the game, chat commands: 'tile <n>' moves to a tile, 'clean', 'black', 'sky <colour>', 'pause'.")
+        done("Launched. In the game, chat commands: 'tile <n>' moves to a tile, 'clean', 'black', 'sky <colour>', 'pause'.")
         return
 
     if args.probe_light:
-        print(f"Lighting probe on {manifest['map']}: screenshots at chosen spots and cameras.")
+        log(f"Lighting probe on {manifest['map']}: screenshots at chosen spots and cameras.")
     elif args.probe_waits:
-        print(f"Waits probe on {manifest['map']}: sample tiles and a sky swap with shorter waits, compared with the current ones.")
+        log(f"Waits probe on {manifest['map']}: sample tiles and a sky swap with shorter waits, compared with the current ones.")
     elif args.probe_depth:
-        print(f"Sky depth probe on {manifest['map']}: the sky layers' parallax, measured at three camera positions.")
+        log(f"Sky depth probe on {manifest['map']}: the sky layers' parallax, measured at three camera positions.")
     elif args.probe_sky:
-        print(f"Skybox probe on {manifest['map']}: one edge tile, a scripted sequence of skybox swaps, a shot after each.")
+        log(f"Skybox probe on {manifest['map']}: one edge tile, a scripted sequence of skybox swaps, a shot after each.")
     else:
         shots = "two shots each (over white, over black)" if (manifest.get("sky") or {}).get("mode") == "matte" else "one shot each (over black; the void is black terrain)"
-        print(f"Capturing {manifest['map']}: {len(tiles) - args.start} tiles, {shots}. Leave the keyboard and mouse alone.")
+        log(f"Capturing {manifest['map']}: {len(tiles) - args.start} tiles, {shots}. Leave the keyboard and mouse alone.")
     with stage("launch and load"):
         wait_for_map_load(not args.no_launch)
 
@@ -704,7 +710,7 @@ def main(argv: list[str]) -> None:
     with ScreenGrabber(region, duplication=os.environ.get("HRS_CAPTURE", "duplication") != "mss") as screen:
         log(f"capturing {region['width']}x{region['height']} at ({region['left']}, {region['top']}) by {screen.method}")
         if (region["width"], region["height"]) != expected:
-            print(f"warning: that is not the {expected[0]}x{expected[1]} the grid was planned for; the stitch will still work, at a different scale")
+            warn(f"that is not the {expected[0]}x{expected[1]} the grid was planned for; the stitch will still work, at a different scale")
         session = Session(screen, int(manifest["status"].get("pageLeft", 0)))
         probe = args.probe_light or args.probe_sky or args.probe_waits or args.probe_depth
         measured = None
@@ -760,7 +766,7 @@ def main(argv: list[str]) -> None:
         quit_match(wait=False)  # the stitch runs while the game leaves; the next launch waits for the menu
     log(f"camera positions recorded for {len(positions)} screenshots")
     log_timings("capture")
-    print(f"\n{len(manifest['tiles']) - args.start} screenshots in {out}")
+    done(f"{len(manifest['tiles']) - args.start} screenshots in {out}")
 
 
 def recover(e: Recoverable, argv: list[str]) -> int:
@@ -770,7 +776,7 @@ def recover(e: Recoverable, argv: list[str]) -> int:
     times at most per run (HRS_RECOVERIES counts them across the relaunches). Returns the fresh
     run's exit code."""
     done = int(os.environ.get("HRS_RECOVERIES", "0"))
-    log(f"\nlost the match: {e.why}")
+    warn(f"lost the match: {e.why}")
     if done >= 3:
         sys.exit(f"\nStopped: {e.why}; already recovered 3 times in this run.")
     argv = [a for a in argv if a != "--no-launch"]
@@ -783,7 +789,7 @@ def recover(e: Recoverable, argv: list[str]) -> int:
         dismiss_failed_dialog()
     except Exception:
         pass
-    log(f"recovering ({done + 1} of 3): launching the map again" + (f" and resuming at tile {e.resume_at + 1}" if e.resume_at is not None else ""))
+    warn(f"recovering ({done + 1} of 3): launching the map again" + (f" and resuming at tile {e.resume_at + 1}" if e.resume_at is not None else ""))
     env = dict(os.environ, HRS_RECOVERIES=str(done + 1))
     # The same program again: the exe itself, or Python running the package.
     program = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, "-m", "heroes_capture"]

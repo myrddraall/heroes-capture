@@ -39,7 +39,7 @@ from . import viewer
 from .frames import PNG_COMPRESSION, frame_exists, load_frame
 from .matching import phase_correlate
 from .workers import ordered_map
-from .runlog import log, log_timings, set_log_file, stage
+from .runlog import log, warn, log_timings, set_log_file, stage
 
 MATCH_SCALE = 2  # screenshots are matched at half size: fast, and still ~0.2 px precise
 FEATHER = 16  # pixels blended either side of each seam: enough to hide lighting steps, narrow enough not to double leaning objects
@@ -700,7 +700,7 @@ def write_outputs(manifest: dict, base: Path, shots: Shots, layout: Layout, seam
         y0 = max(0, int(np.floor(-scale * (bounds["top"] + margin) + ay)))
         y1 = min(height, int(np.ceil(-scale * (bounds["bottom"] - margin) + ay)))
         if x1 - x0 < 16 or y1 - y0 < 16:
-            log(f"  {name or manifest['id']}: nothing placed inside its bounds; skipped")
+            warn(f"{name or manifest['id']}: nothing placed inside its bounds; skipped")
             continue
         out_id = f"{manifest['id']}-{name.lower()}" if name else manifest["id"]
         # Each arena's image from its own screenshots only: the next arena's rows overlap this
@@ -805,7 +805,7 @@ def main(argv: list[str]) -> None:
     log(f"placed {len(placed)} of {len(tiles)} screenshots from {len(kept)} matches ({len(edges)} measured)")
     unplaced = [t["index"] for t in present if t["index"] not in placed]
     if unplaced:
-        log(f"  not placed (no position, no match): {len(unplaced)} screenshots: {unplaced[:20]}{' ...' if len(unplaced) > 20 else ''}")
+        warn(f"not placed (no position, no match): {len(unplaced)} screenshots: {unplaced[:20]}{' ...' if len(unplaced) > 20 else ''}")
 
     # 3. Map cells -> pixels.
     if anchors:

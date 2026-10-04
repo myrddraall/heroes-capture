@@ -47,7 +47,7 @@ from scipy.optimize import least_squares
 
 from .frames import PNG_COMPRESSION, frame_exists, load_frame
 from .matching import phase_correlate
-from .runlog import log, stage
+from .runlog import log, warn, stage
 from .workers import ordered_map
 
 MATCH_PATCH = 128  # the side of a matched patch, in half-size pixels (256 screen pixels)
@@ -252,7 +252,7 @@ def build(manifest: dict, base: Path, images: list[str]) -> None:
     measured = json.loads(measured_path.read_text())
     names = sorted(record["positions"])
     if not names or not frame_exists(folder / "fixed"):
-        log("  sky layers: no shots; skipped")
+        warn("sky layers: no shots; skipped")
         return
     out_id = manifest["id"]
     out = base.parent

@@ -12,7 +12,7 @@ from PIL import Image
 from . import game_control
 from . import sky_layers
 from .game_control import quit_match, send_chat, settle, step
-from .runlog import log
+from .runlog import done, log, warn
 from .screen import changed_share
 
 
@@ -87,7 +87,7 @@ def probe_light(session, manifest: dict, out: Path) -> None:
 
     step(run, "the lighting probe")
     quit_match()
-    print(f"\nprobe screenshots in {probe_dir}")
+    done(f"probe screenshots in {probe_dir}")
 
 
 def probe_sky(session, manifest: dict, out: Path) -> None:
@@ -133,7 +133,7 @@ def probe_sky(session, manifest: dict, out: Path) -> None:
 
     step(run, "the skybox probe")
     quit_match()
-    print(f"\nprobe screenshots in {probe_dir}")
+    done(f"probe screenshots in {probe_dir}")
 
 
 def _difference(a: np.ndarray, b: np.ndarray, left: int) -> str:
@@ -242,7 +242,7 @@ def probe_waits(session, manifest: dict, out: Path) -> None:
             for name, wait in (("current", 0.1), ("current-again", 0.1), ("settle-0.05", 0.05), ("settle-0", 0.0)):
                 for command in (f"tile 0 {x:.2f} {y:.2f}", f"hidemap {clip}", "sky parallaxbare 1"):
                     if session.send(command, timeout=3.0) is None:
-                        log("  sky: no answer")
+                        warn("sky: no answer")
                         return
                 settle(1.0)
                 if session.send("sky parallaxwhite 1") is None:
@@ -259,4 +259,4 @@ def probe_waits(session, manifest: dict, out: Path) -> None:
         session.send("sky mapparallax 1")
         sky_layers.capture(session, manifest, out.parent, measured, keep=0.8, folder_name="sky-keep08")
     quit_match()
-    print(f"\nprobe screenshots in {probe_dir}")
+    done(f"probe screenshots in {probe_dir}")

@@ -20,8 +20,12 @@ heroes-capture-win-x64.exe map render "Battlefield of Eternity"
 heroes-capture-win-x64.exe map list     # the game's maps, and which have been validated
 ```
 
-It writes into `work\` in the folder it runs from. The rest of this page is for working on the
-tool itself.
+It writes into `work\` in the folder it runs from, including `heroes-capture.log` with every
+message. On a terminal the output is a live view (the step, its status, progress bars; warnings
+print above it); `--log` gives plain log lines instead, the default in CI or when the output
+isn't a terminal; `-v` / `--verbose` adds the detail messages in either.
+
+The rest of this page is for working on the tool itself.
 
 ## Setup (once)
 
@@ -274,6 +278,7 @@ cell there is no more detail: that's the game's own texture resolution.
 | `src/heroes_capture/`                      | the package; the modules below are in it                                                      |
 | `cli.py`                                   | the `heroes-capture` command (Typer, Rich): `map render`, `map list`, `prepare`, `capture`, `stitch` |
 | `validated-maps.json`                      | the maps whose renders have been reviewed (`map list`)                                        |
+| `ui.py`                                    | the output: the live view or log lines, warnings, progress bars, the log file                 |
 | `inject.py`                                | prepares the map: reads it, plans the grid, injects the script, adds the textures, writes the manifest |
 | `capture_script.galaxy`, `capture_script.py` | the Galaxy script injected into the map (scene, opening, status strip, chat commands), and its values |
 | `sky.py`, `light_data.py`                  | the solid-colour skyboxes; the map's tileset, lighting and sky from the game's definitions     |

@@ -36,7 +36,6 @@ import json
 import math
 import re
 import struct
-import sys
 import time
 from pathlib import Path
 
@@ -45,13 +44,12 @@ from . import js_json
 from .capture_script import STATUS_CELL_H, STATUS_CELL_W, STATUS_CELLS, STATUS_ROWS, capture_script
 from .light_data import has_sky, main_light, sky_models, tileset_of
 from .sky import PARALLAX_KEYS, SKIES, painted_texture_files, parallax_keys, sky_files, solid_dds
+from .runlog import log, warn
 from .stormlib import Archive
 
 HERE = Path(__file__).resolve().parent
 
 
-def log(message: str) -> None:
-    print(message, file=sys.stderr)
 
 
 def parse_args(argv: list[str]) -> dict:
@@ -125,7 +123,7 @@ def resolve_refit_yaw(map_data: dict, light_sets: dict) -> int:
     180 with a warning when the light can't be found."""
     light = main_light(map_data, light_sets)
     if light["yaw"] is None:
-        log(f"warning: the map's main light wasn't found (tileset {light['tileset']}, light set {light['lighting']}); "
+        warn(f"the map's main light wasn't found (tileset {light['tileset']}, light set {light['lighting']}); "
             "the refit look faces yaw 180. Pass --refit-yaw.")
         return 180
     log(f"main light: tileset {light['tileset']}, light set {light['lighting']}, from {light['yaw']:.0f} degrees (the refit look faces it)")

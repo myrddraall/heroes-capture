@@ -21,7 +21,7 @@ from .game_window import (
     park_cursor,
     type_burst,
 )
-from .runlog import log
+from .runlog import log, warn
 from .screen import ScreenGrabber
 from .status import StatusStrip
 
@@ -57,7 +57,7 @@ def wait_for_game() -> None:
     """Block until the game window is in front. Nothing is typed anywhere else."""
     if foreground_is_game():
         return
-    print("  game window not in front; waiting (click into the game to continue)...", flush=True)
+    warn("the game window isn't in front; waiting (click into the game to continue)")
     while not foreground_is_game():
         if not game_running():
             raise Recoverable("the game isn't running any more (it crashed?)")
@@ -76,7 +76,7 @@ def step(action, what: str):
         try:
             return action()
         except FocusLost:
-            log(f"  focus lost during {what} (in front: {foreground_program()}); redoing it from the start")
+            warn(f"focus lost during {what} (in front: {foreground_program()}); redoing it from the start")
             wait_for_game()
             if _chat_open:
                 # A half-typed line may be in the chat box: empty it and close it (Enter on an
@@ -205,7 +205,7 @@ def ensure_game_running(battlenet: str | None, game: str) -> None:
             if time.time() - last_note > 10:
                 log(f"  waiting for the menu ({parts} of 3 fixed parts of it on screen)")
                 last_note = time.time()
-    log("  couldn't tell whether Heroes reached the menu; carrying on")
+    warn("couldn't tell whether Heroes reached the menu; carrying on")
 
 
 def launch_map(manifest: dict, game: str, battlenet: str | None) -> None:
@@ -229,7 +229,7 @@ def launch_map(manifest: dict, game: str, battlenet: str | None) -> None:
         except OSError:
             pass  # still open in a running game
     stormmap = str(shutil.copy(manifest["stormmap"], local / f"{manifest['id']}-{int(time.time())}.stormmap"))
-    print(f"launching {manifest['map']} ({len(manifest['tiles'])} tiles) ...")
+    log(f"launching {manifest['map']} ({len(manifest['tiles'])} tiles) ...")
     subprocess.Popen([str(switcher), stormmap])
 
 
@@ -249,7 +249,7 @@ def wait_for_map_load(launched: bool) -> None:
     wait_for_game()
     if not launched:
         return
-    print("waiting for the map to load ...", flush=True)
+    log("waiting for the map to load ...")
     started, failed_since = time.time(), None
     with ScreenGrabber(game_region(), duplication=False) as screen:
         while time.time() - started < 60:
@@ -285,10 +285,10 @@ def quit_match(wait: bool = True) -> None:
         grabber.release_duplication()  # nothing holds the game's screen while it leaves
     try:
         step(lambda: send_chat("quit"), "sending quit")
-        print("leaving the match ...", flush=True)
+        log("leaving the match ...")
         wait_for_menu(quit_sent=True, until_leaving=not wait)
     except Exception as e:  # a failed check must not cost the run its stitch
-        log(f"  couldn't watch for the menu ({type(e).__name__}: {e}); waiting 45 s instead")
+        warn(f"couldn't watch for the menu ({type(e).__name__}: {e}); waiting 45 s instead")
         time.sleep(45)
 
 

@@ -7,11 +7,11 @@ import hashlib
 import json
 import os
 import re
-import sys
 import tempfile
 from pathlib import Path
 
 from .casclib import Storage
+from .runlog import log
 from .stormlib import Archive
 
 
@@ -24,8 +24,6 @@ SKY_MODELS = "mods\\heroes.stormmod\\base.stormassets\\assets\\skyboxes"
 GAMESTRINGS = "enus.stormdata/localizeddata/gamestrings.txt"
 
 
-def log(message: str) -> None:
-    print(message, file=sys.stderr)
 
 
 # ------------------------------------------------------------------------------------------------

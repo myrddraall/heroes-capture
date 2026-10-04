@@ -30,10 +30,17 @@ def test_prepare_passes_its_options_through(monkeypatch, tmp_path):
     assert result.exit_code == 0 and seen == [["Dragon Shire", "--screen", "3440x1440", "--help"]]
 
 
+@pytest.fixture(autouse=True)
+def in_a_scratch_folder(monkeypatch, tmp_path):
+    """Commands write work\\heroes-capture.log in the current folder."""
+    monkeypatch.chdir(tmp_path)
+
+
 def test_map_render_runs_the_three_steps_with_the_defaults(monkeypatch, tmp_path):
     from heroes_capture import inject, stitch
 
     calls = []
+    (tmp_path / "m.json").write_text(json.dumps({"map": "Dragon Shire", "tiles": [{}] * 3, "sky": {"mode": "black"}}))
     monkeypatch.setattr(inject, "main", lambda argv: calls.append(("prepare", argv)) or tmp_path / "m.json")
     monkeypatch.setattr(cli, "run_capture", lambda argv: calls.append(("capture", argv)))
     monkeypatch.setattr(stitch, "main", lambda argv: calls.append(("stitch", argv)))
@@ -41,6 +48,8 @@ def test_map_render_runs_the_three_steps_with_the_defaults(monkeypatch, tmp_path
     assert result.exit_code == 0, result.output
     assert calls[0] == ("prepare", ["dragon shire", "--structures", "hide", "--fov", "12", "--keep", "0.4"])
     assert calls[1] == ("capture", [str(tmp_path / "m.json")]) and calls[2] == ("stitch", [str(tmp_path / "m.json"), "--tiles"])
+    assert "Dragon Shire (hide structures): 3 tiles planned, black void" in result.output
+    assert (tmp_path / "work" / "heroes-capture.log").exists()
 
 
 def test_map_rows():

@@ -20,6 +20,8 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from . import ui
+
 PROBES = ("probe_light", "probe_sky", "probe_depth", "probe_waits")
 DISTANCE = "214"  # camera distance: far, so tall objects lean little at the seams
 KEEP = "0.4"  # share of each screenshot used, centred
@@ -65,7 +67,8 @@ def run_capture(argv: list[str]) -> None:
     try:
         capture.main(argv)
     except capture.Recoverable as e:
-        code = capture.recover(e, argv)
+        with ui.suspend():  # the restarted capture draws its own view
+            code = capture.recover(e, argv)
         if code:
             raise SystemExit(code)
     except SystemExit:
@@ -86,8 +89,15 @@ def show_version(value: bool) -> None:
 @app.callback()
 def _options(
     _version: Annotated[bool, typer.Option("--version", "-V", help="Print the version and stop.", callback=show_version, is_eager=True)] = False,
+    log: Annotated[bool, typer.Option("--log", help="Plain log lines instead of the live view (the default in CI or when the output isn't a terminal).")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Also show the detail messages.")] = False,
 ) -> None:
-    pass
+    ui.configure(log=log, verbose=verbose)
+
+
+def log_to(folder: Path) -> None:
+    """Every message also into <folder>/heroes-capture.log."""
+    ui.set_log_file(folder / "heroes-capture.log")
 
 
 # ------------------------------------------------------------------------------------------------
@@ -120,6 +130,7 @@ def render(
     from . import inject, stitch
 
     prepare_options = list(ctx.args)
+    log_to(Path(prepare_options[prepare_options.index("--out") + 1] if "--out" in prepare_options else "work"))
     prepare = [map_name, "--structures", structures.value, *prepare_options]
     if "--screen" not in prepare_options and screen_size():
         prepare += ["--screen", screen_size()]
@@ -129,25 +140,28 @@ def render(
         prepare += ["--keep", KEEP]
     if show_ui:
         prepare.append("--show-ui")
-    print(f"\n[1/3] Preparing {map_name} (structures: {structures.value})")
-    manifest = str(inject.main(prepare))
+    with ui.step(f"Preparing {map_name}"):
+        manifest = str(inject.main(prepare))
+    planned = json.loads(Path(manifest).read_text())
+    ui.done(f"{planned['map']} ({structures.value} structures): {len(planned['tiles'])} tiles planned, "
+            + ("void shot over white and black" if planned["sky"]["mode"] == "matte" else "black void"))
     capture_options = ["--game", game] if game else []
     chosen = {"probe_light": probe_light, "probe_sky": probe_sky, "probe_depth": probe_depth, "probe_waits": probe_waits}
     probe = next((f"--{name.replace('_', '-')}" for name in PROBES if chosen[name]), None)
     if probe:
-        print(f"\nProbe {probe}")
-        run_capture([manifest, probe, *capture_options])
+        with ui.step(f"Probe {probe}"):
+            run_capture([manifest, probe, *capture_options])
         return
     if show_ui:
-        print("\nDiagnostic run: launching the map and stopping here.")
-        run_capture([manifest, "--launch-only", *capture_options])
+        with ui.step("Launching the map with the HUD up (diagnostic; stops there)"):
+            run_capture([manifest, "--launch-only", *capture_options])
         return
     shutil.rmtree(Path(manifest).with_suffix("") / "tiles", ignore_errors=True)  # old screenshots would mix in
-    print("\n[2/3] Capturing")
-    run_capture([manifest, *capture_options])
-    print("\n[3/3] Stitching")
-    stitch.main([manifest, "--tiles"])
-    print(f"\nDone. The image is next to {manifest}")
+    with ui.step(f"Capturing {planned['map']} in the game"):
+        run_capture([manifest, *capture_options])
+    with ui.step("Stitching"):
+        stitch.main([manifest, "--tiles"])
+    ui.done(f"The images are next to {manifest}")
 
 
 def validated_maps() -> dict[str, dict]:
@@ -178,8 +192,10 @@ def list_maps() -> None:
     """
     from .game_data import find_install, map_index, open_storage
 
-    with open_storage(find_install()) as storage:
-        game_maps = list(map_index(storage))
+    log_to(Path("work"))
+    with ui.step("Reading the game's maps"):
+        with open_storage(find_install()) as storage:
+            game_maps = list(map_index(storage))
     rows = map_rows(game_maps, validated_maps())
     table = Table(title="Battlegrounds", title_justify="left")
     table.add_column("Map", no_wrap=True)
@@ -204,13 +220,18 @@ def prepare(ctx: typer.Context) -> None:
     """Prepare a map: read it, inject the capture script, plan the grid (prints the manifest)."""
     from . import inject
 
-    print(inject.main(list(ctx.args)))
+    args = list(ctx.args)
+    log_to(Path(args[args.index("--out") + 1] if "--out" in args else "work"))
+    print(inject.main(args))
 
 
 @app.command(context_settings=PASS_THROUGH, add_help_option=False)
 def capture(ctx: typer.Context) -> None:
     """Capture a prepared map in the running game (heroes-capture capture --help)."""
-    run_capture(list(ctx.args))
+    args = list(ctx.args)
+    if args and Path(args[0]).suffix == ".json":
+        log_to(Path(args[0]).parent)
+    run_capture(args)
 
 
 @app.command(context_settings=PASS_THROUGH, add_help_option=False)
@@ -218,7 +239,46 @@ def stitch(ctx: typer.Context) -> None:
     """Stitch a capture's screenshots into the map image, sky layers and viewer."""
     from . import stitch as stitching
 
-    stitching.main(list(ctx.args))
+    args = list(ctx.args)
+    if args and Path(args[0]).suffix == ".json":
+        log_to(Path(args[0]).parent)
+    stitching.main(args)
+
+
+@app.command("ui-demo", hidden=True)
+def ui_demo() -> None:
+    """The output's look, warnings included, without the game: two steps with progress bars and,
+    partway through, a warning from each source (ours, Python's warnings, a library's logging, a
+    library writing straight to stdout and stderr)."""
+    import logging
+    import time
+    import warnings
+
+    log_to(Path("work"))
+    with ui.step("Capturing Demo Map in the game"):
+        ui.info("waiting for the map's status strip ...")
+        time.sleep(1.5)
+        with ui.bar(40, "tiles") as advance:
+            for n in range(40):
+                ui.info(f"tile {n + 1}/40  (row {n // 8}, col {n % 8})")
+                ui.detail(f"tile {n + 1}: camera at ({20 + 26 * (n % 8)}, {178 - 11.5 * (n // 8)})")
+                if n == 10:
+                    ui.warn("focus lost during tile 11/40 (in front: explorer.exe); redoing it from the start")
+                if n == 18:
+                    warnings.warn("a Python warning from some library", RuntimeWarning)
+                if n == 24:
+                    logging.getLogger("dxcam").warning("a library's logging warning")
+                if n == 30:
+                    print("a library printing straight to stdout")
+                    print("and to stderr", file=sys.stderr)
+                advance()
+                time.sleep(0.15)
+    ui.done("40 screenshots in work\\demo")
+    with ui.step("Stitching"):
+        for stage in ("matching neighbours", "routing seams", "composing", "writing the map image"):
+            ui.info(stage)
+            time.sleep(0.8)
+    ui.done("The images are next to work\\demo.json")
 
 
 @app.command("self-check", hidden=True)
