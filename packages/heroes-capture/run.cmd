@@ -2,14 +2,15 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: map list, with tmp\ kept so its diagnostic log comes back too (pip, when it
-rem runs, writes tmp\setup.log).
+rem Current step: render the arena maps (map render --category arena); a map that fails leaves
+rem its working files in tmp\, which come back with the results (pip, when it runs, writes
+rem tmp\setup.log).
 setlocal
 pushd "%~dp0"
 set "PYTHONPATH=%~dp0src"
 rem The tool's dependencies, installed quietly when missing (pip's output in tmp\setup.log).
 py -c "import heroes_capture.cli, numpy, PIL, pyvips, scipy, mss, pydirectinput, dxcam, typer, rich" 2>nul || call :install || goto :copy
-py -m heroes_capture map list --keep-tmp
+py -m heroes_capture map render --category arena
 if errorlevel 1 echo.& echo Stopped: the step above failed.
 popd
 
