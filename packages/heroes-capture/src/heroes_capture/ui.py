@@ -46,6 +46,7 @@ class _State:
     status = ""
     bars: Progress | None = None
     started = 0.0
+    notice = ""  # a passing state shown in the live view while it lasts (see notice)
     handler: logging.Handler | None = None
 
 
@@ -251,6 +252,30 @@ def done(text: str) -> None:
         _console().print(Text("✓ ", style="green bold") + Text(text))
 
 
+@contextmanager
+def notice(text: str):
+    """A passing state (the game not in front, a menu open): in the live view while it lasts, then
+    gone, so pauses don't pile up above it; in log mode a line, and one when it's over; in both
+    logs, the same two lines (how long it lasted)."""
+    _record("paused", text)
+    _plain_log(f"paused: {text}")
+    started = time.time()
+    if _s.mode == "log" or not _s.live:
+        _plain(f"paused: {text}")
+    _s.notice = text
+    _refresh()
+    try:
+        yield
+    finally:
+        _s.notice = ""
+        _refresh()
+        over = f"carrying on after {time.time() - started:.0f} s"
+        _record("paused", over)
+        _plain_log(over)
+        if _s.mode == "log":
+            _plain(over)
+
+
 class _View:
     """The live view: the step with a spinner, its status line, and its progress bars."""
 
@@ -263,6 +288,8 @@ class _View:
         parts = [self.spinner]
         if _s.status:
             parts.append(Text("  " + _s.status, style="dim", overflow="ellipsis", no_wrap=True))
+        if _s.notice:
+            parts.append(Text("  ⏸ " + _s.notice, style="yellow bold", overflow="ellipsis", no_wrap=True))
         if _s.bars and _s.bars.tasks:
             parts.append(_s.bars)
         return Group(*parts)

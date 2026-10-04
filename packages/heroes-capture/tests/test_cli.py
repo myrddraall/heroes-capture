@@ -417,3 +417,19 @@ def test_a_resumed_runs_progress_bar_counts_the_whole_run(ui_state):
             advance()
             [task] = ui._s.bars.tasks
             assert (task.total, task.completed) == (154, 31)
+
+
+def test_a_pause_shows_while_it_lasts_and_is_gone_after(tmp_path, ui_state):
+    """Focus lost or a menu open: a passing line in the live view, not a warning piling up above it;
+    the plain log keeps both ends."""
+    from heroes_capture import ui
+
+    ui.configure(log=True)
+    ui._s.mode = "pretty"
+    ui.set_plain_log(tmp_path / "plain.log")
+    with ui.step("Capturing"):
+        with ui.notice("the game isn't in front"):
+            assert ui._s.notice == "the game isn't in front"
+        assert ui._s.notice == ""
+    lines = (tmp_path / "plain.log").read_text().splitlines()
+    assert "paused: the game isn't in front" in lines and any(line.startswith("carrying on after") for line in lines)

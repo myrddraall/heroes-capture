@@ -23,7 +23,7 @@ from .game_window import (
     park_cursor,
     type_unicode,
 )
-from .runlog import log, warn
+from .runlog import detail, log, paused, warn
 from .screen import ScreenGrabber
 from .status import StatusStrip
 
@@ -73,11 +73,11 @@ def wait_for_game() -> None:
     """Block until the game window is in front. Nothing is typed anywhere else."""
     if foreground_is_game():
         return
-    warn("the game window isn't in front; waiting (click into the game to continue)")
-    while not foreground_is_game():
-        if not game_running():
-            raise Recoverable("the game isn't running any more (it crashed?)")
-        time.sleep(0.5)
+    with paused(f"the game isn't in front ({foreground_program()} is): click into the game to carry on"):
+        while not foreground_is_game():
+            if not game_running():
+                raise Recoverable("the game isn't running any more (it crashed?)")
+            time.sleep(0.5)
     park_cursor()
     time.sleep(1.0)
 
@@ -86,7 +86,8 @@ def wait_for_menu_closed() -> None:
     """Block while one of the game's menus is open over the match, looking twice a second while the
     game is in front; two looks without it in a row and the run carries on. The game closing
     meanwhile (Leave in the exit dialog) is a lost match."""
-    with ScreenGrabber(game_region(), duplication=False) as screen:
+    with paused("a game menu is open (Esc, Options or the exit dialog): close it to carry on"), \
+            ScreenGrabber(game_region(), duplication=False) as screen:
         clear = 0
         while clear < 2:
             if not game_running():
@@ -108,10 +109,10 @@ def step(action, what: str):
             return action()
         except (FocusLost, GamePaused) as e:
             if isinstance(e, GamePaused):
-                warn(f"a game menu is open (Esc, Options or the exit dialog) during {what}; waiting for it to close, then redoing it")
+                detail(f"a game menu opened during {what}; redoing it once it's closed")
                 wait_for_menu_closed()
             else:
-                warn(f"focus lost during {what} (in front: {foreground_program()}); redoing it from the start")
+                detail(f"focus lost during {what} (in front: {foreground_program()}); redoing it once the game is back")
             wait_for_game()
 
 

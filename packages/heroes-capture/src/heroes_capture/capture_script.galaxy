@@ -327,7 +327,7 @@ bool hrsCap_gt_Focus_Func (bool testConds, bool runActions) {
     if (!runActions) {
         return true;
     }
-    hrsCap_cmd = StringReplace(EventChatMessage(false), ";", "", c_stringReplaceAll);
+    hrsCap_cmd = StringReplaceWord(EventChatMessage(false), ";", "", c_stringReplaceAll, c_stringCase);
     hrsCap_cmdPlayer = EventPlayer();
     DialogControlRequestFocus(hrsCap_box, PlayerGroupAll());
     hrsCap_Ack();

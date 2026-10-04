@@ -28,6 +28,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from . import ui
+from .game_menus import ScriptBroken
 
 PROBES = ("probe_light", "probe_sky", "probe_depth", "probe_waits")
 DISTANCE = "214"  # camera distance: far, so tall objects lean little at the seams
@@ -401,6 +402,8 @@ def render(
         except KeyboardInterrupt:
             ui.warn(f"stopped during {name}; its working files are left in {work}: the same command carries on")
             raise
+        except ScriptBroken:
+            raise  # every map gets the same script: the run stops
         except (Exception, SystemExit) as e:
             if not category:
                 ui.warn(f"the working files are left in {work} for diagnosis (the same command carries on; heroes-capture clean-up removes them)")

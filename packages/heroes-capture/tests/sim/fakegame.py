@@ -10,7 +10,8 @@ keys; Enter does nothing while it has the keyboard) and carries out the last com
 command as the text arrives; the chat box, open when the box hasn't the keyboard, only answers
 "focus", which gives it back. It draws frames with the status strip the way the script does.
 Environment: FAKE_FAULT (focus, wrongmap, silent, crash, menu: the Esc menu open for 6 s, taking
-the keys; boxfocus: the box loses the keyboard) and FAKE_FAULT_AT (virtual seconds),
+the keys; boxfocus: the box loses the keyboard; broken: the map's script failed to compile, every
+interface panel showing) and FAKE_FAULT_AT (virtual seconds),
 FAKE_START=map (the map already running), FAKE_BOUNDS, FAKE_HIDDEN (the world hidden until the
 map is ready), FAKE_SKY_RATE.
 """
@@ -25,7 +26,7 @@ import types
 from pathlib import Path
 
 import numpy as np
-from menus import game_menu
+from menus import broken_interface, game_menu
 from PIL import Image
 
 TOOL, WORK = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
@@ -238,6 +239,10 @@ class Game:
         return bits
 
     def frame(self):
+        if self.state == "map" and FAULT == "broken":  # the map's script failed to compile: no strip, every panel showing
+            if "broken" not in self.cache:
+                self.cache["broken"] = broken_interface(np.full((H, W, 3), 90, np.uint8))
+            return self.cache["broken"]
         if self.state == "map" and _menu_open():
             return game_menu(self.match_frame(), "esc")
         return self.match_frame()

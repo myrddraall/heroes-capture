@@ -35,3 +35,14 @@ def game_menu(frame: np.ndarray, kind: str = "esc") -> np.ndarray:
         button(out, 0.38, 0.92, 0.21, 0.053)
         button(out, 0.54, 0.92, 0.21, 0.053)
     return out
+
+
+def broken_interface(frame: np.ndarray) -> np.ndarray:
+    """`frame` as the game shows it when the map's script failed to compile: every interface panel
+    at once under a red tint (a debug menu's column of buttons, a close button)."""
+    out = (frame.astype(np.float32) * 0.35 + np.array([200, 25, 40], np.float32) * 0.65).astype(np.uint8)
+    for n in range(6):
+        button(out, 0.07 * out.shape[0] / out.shape[1] + 0.03, 0.12 + 0.17 * n, 0.2, 0.035)
+    button(out, 0.57, 0.53, 0.2, 0.05)
+    return out
+

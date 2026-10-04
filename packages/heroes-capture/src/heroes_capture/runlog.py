@@ -49,6 +49,16 @@ def detail(text: str) -> None:
 
 
 @contextmanager
+def paused(text: str):
+    """A pause the run waits out (see ui.notice): shown while it lasts; in the run's log too."""
+    _append(f"paused: {text}")
+    started = time.time()
+    with ui.notice(text):
+        yield
+    _append(f"  carrying on after {time.time() - started:.0f} s")
+
+
+@contextmanager
 def stage(name: str):
     """Time a stage of the run; log_timings() lists them all at the end."""
     started = time.time()

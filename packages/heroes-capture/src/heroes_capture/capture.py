@@ -56,7 +56,7 @@ from .game_control import (
     wait_for_map_load,
 )
 from .game_data import find_install
-from .game_menus import game_menu_open
+from .game_menus import ScriptBroken, game_menu_open, interface_all_shown
 from .game_state import IN_MAP, LOADING, MAP_FAILED, MENU, NOT_RUNNING, PHASES, game_state
 from .game_window import game_region, hold_key
 from .runlog import detail, done, log, log_timings, set_log_file, stage, warn
@@ -204,10 +204,11 @@ class Session:
 def wait_for_strip(session: Session, out: Path) -> None:
     """The status strip: drawn by the map script from its start, but the interface is hidden
     while the intro cutscene plays. Nothing is typed until it shows. Raises Recoverable when the
-    game closes, the map fails to load, the menu comes back, or 3 minutes pass."""
+    game closes, the map fails to load, the menu comes back, or 3 minutes pass; ScriptBroken when
+    every interface panel shows instead (the script failed to compile: no relaunch helps)."""
     deadline = time.time() + 180
     log("waiting for the map's status strip ...")
-    failed_since, menu_since, dumped = None, None, False
+    failed_since, menu_since, dumped, broken_looks, broken_checked = None, None, False, 0, 0.0
     started = time.time()
     while True:
         frame = step(session.raw_grab, "finding the status strip")
@@ -219,6 +220,15 @@ def wait_for_strip(session: Session, out: Path) -> None:
             dumped = True
             Image.fromarray(np.ascontiguousarray(frame[:, :240])).save(out.parent / "strip-missing.png")
             warn("no status strip after 30 s; the screen's left edge is in strip-missing.png")
+        if state == LOADING and time.time() - broken_checked >= 1.0:
+            broken_checked = time.time()
+            broken_looks = broken_looks + 1 if interface_all_shown(frame) else 0
+            if broken_looks >= 2:
+                small = Image.fromarray(np.ascontiguousarray(frame)).reduce(2)
+                small.save(out.parent / "script-broken.png")
+                raise ScriptBroken("the map's script failed to compile: every interface panel is showing (Blizzard's debug menu "
+                                   f"among them; a shot is in {out.parent / 'script-broken.png'}). That's a heroes-capture bug, "
+                                   "not something a relaunch fixes; leave the match by hand (Esc, Quit).")
         if state == NOT_RUNNING:
             raise Recoverable("the game closed before the map started")
         if state == MAP_FAILED:

@@ -25,6 +25,7 @@ SCENARIOS = {
     "crash": ("matte", [], {"FAKE_FAULT": "crash", "FAKE_FAULT_AT": "27"}, f"error RuntimeError: {RELAUNCH} --start ", "lost the match"),  # carries on at the lost tile
     "game menu": ("matte", [], {"FAKE_FAULT": "menu", "FAKE_FAULT_AT": "25"}, "finished", "a game menu is open"),  # waited out, not a lost match
     "box focus": ("matte", [], {"FAKE_FAULT": "boxfocus", "FAKE_FAULT_AT": "25"}, "finished", ("giving the command box the keyboard back", "tile 12/12")),
+    "broken script": ("matte", [], {"FAKE_FAULT": "broken"}, "error ScriptBroken: the map's script failed to compile", ""),  # stops at once, no relaunch
     "probe sky": ("matte", ["--probe-sky"], {}, "finished", "05-none-layer0"),
     "probe depth": ("matte", ["--probe-depth"], {}, "finished", "sky layers: parallax rate"),
     "launch only": ("matte", ["--launch-only"], {}, "finished", ""),

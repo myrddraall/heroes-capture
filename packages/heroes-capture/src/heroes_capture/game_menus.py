@@ -1,6 +1,7 @@
-"""The game's own menus over a match (the Esc menu, its Options, the exit dialog), recognised on
-a screen grab at any screen size. A module of its own so it imports anywhere (game_state.py needs
-Windows); see game_menu_open.
+"""The game's own menus over a match (the Esc menu, its Options, the exit dialog), and the screen
+of a map whose script failed to compile, recognised on a screen grab at any screen size. A module
+of its own so it imports anywhere (game_state.py needs Windows); see game_menu_open and
+interface_all_shown.
 """
 
 import numpy as np
@@ -56,3 +57,22 @@ def game_menu_open(frame: np.ndarray) -> bool:
                 # Two buttons side by side (the exit dialog's) run together into one outline.
                 outlines += 2 if min(b0, b1) - max(a0, a1) >= 0.4 * height else 1
     return outlines >= 2
+
+
+class ScriptBroken(Exception):
+    """The map's script failed to compile (interface_all_shown): a relaunch can't help, and every
+    map prepared by the same tool would do the same."""
+
+
+def interface_all_shown(frame: np.ndarray) -> bool:
+    """What the game shows when a map's script failed to compile: every interface panel at once
+    (Blizzard's debug menus among them, so the game's buttons) under a red tint. The game's own
+    menus dim the screen instead, and a red map (Battlefield of Eternity's hell side) has no
+    buttons. The red measured on pixels sampled at a spacing relative to the screen's height."""
+    if not game_menu_open(frame):
+        return False
+    step = max(1, frame.shape[0] // 180)
+    f = frame[::step, ::step, :3].astype(np.int16)
+    r, g, b = f[..., 0], f[..., 1], f[..., 2]
+    return float(((r >= 120) & (r >= 2 * g) & (r * 5 >= b * 8)).mean()) >= 0.15
+

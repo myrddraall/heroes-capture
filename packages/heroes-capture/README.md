@@ -300,8 +300,9 @@ cell there is no more detail: that's the game's own texture resolution.
   the same view over the black skybox. It only types while the game is in front, and puts the
   game in front only as the run starts (or as it starts the game): alt-tabbing away pauses the
   run until you click back into the game. Opening the game's own menu (Esc, Options, the Alt+F4
-  dialog) pauses it the same way, until the menu is closed. Either way the tile in progress is
-  dropped and redone from its start; black frames are retaken; where map content reaches an
+  dialog) pauses it the same way, until the menu is closed. While paused, the live view says why;
+  the line goes once the run carries on (the logs keep each pause and how long it lasted). Either
+  way the tile in progress is dropped and redone from its start; black frames are retaken; where map content reaches an
   outer tile's outer edge (Battlefield of Eternity's arches run past the camera bounds), it lifts
   the camera bounds and adds tiles beyond, outwards until the edge is clear (three at most); it stops early if the map stops responding, and
   leaves the match at the end (`quit`; the stitch runs while the game leaves, and the next launch
@@ -398,6 +399,10 @@ between runs.
   `map render` with `--no-lens`. Without a narrow field of view, tall objects lean more at the
   screenshot edges; lower `--keep` (e.g. `0.4`) to use only the centre.
 
+- **Every interface panel showing (Blizzard's debug menu among them), on a red tint:** the map's
+  script failed to compile. The run stops at once ("the map's script failed to compile", with a
+  shot in `script-broken.png`) rather than relaunching; it's a heroes-capture bug. Leave the match
+  by hand (Esc, Quit).
 - **HUD pieces still visible:** note which ones. There are more hide calls to try.
 - **The camera doesn't move when `tile <n>;` is typed:** the command box needs the keyboard
   (it has it from the match's start; chat `focus 0 ;` gives it back) and the command its `;`.
