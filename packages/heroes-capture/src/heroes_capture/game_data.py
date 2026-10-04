@@ -3,6 +3,7 @@ game is installed), the battleground maps, the tilesets and light sets, and mode
 here is generated ahead or checked in, so a game update needs no new release of this tool.
 """
 
+import difflib
 import hashlib
 import json
 import os
@@ -175,15 +176,32 @@ def folder_maps(storage: Storage) -> list[str]:
     return titles
 
 
+def _plain(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def find_map(storage: Storage, map_name: str) -> str:
+    """A map the game has and the capture can render, by the name the game shows (case and
+    punctuation aside): its name as the game spells it. Otherwise stops, saying which (an
+    unsupported map), or naming the closest names."""
+    index = map_index(storage)
+    match = next((name for name in index if _plain(name) == _plain(map_name)), None)
+    if match:
+        return match
+    unsupported = next((name for name in folder_maps(storage) if _plain(name) == _plain(map_name)), None)
+    if unsupported:
+        raise SystemExit(f"{unsupported} is unsupported: the game keeps it as a folder, not a map archive, and the capture builds on an archive")
+    by_plain = {_plain(name): name for name in index}
+    close = [by_plain[p] for p in difflib.get_close_matches(_plain(map_name), list(by_plain), n=3, cutoff=0.6)]
+    hint = f"did you mean {' or '.join(close)}?" if close else "heroes-capture map list shows them"
+    raise SystemExit(f'no map named "{map_name}" in the game; {hint}')
+
+
 def map_file(storage: Storage, map_name: str) -> tuple[str, bytes]:
     """A battleground's .stormmap, by the name the game shows (case and punctuation aside): its
     name as the game spells it, and its bytes."""
-    index = map_index(storage)
-    plain = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())  # noqa: E731
-    match = next((name for name in index if plain(name) == plain(map_name)), None)
-    if not match:
-        raise SystemExit(f'no map named "{map_name}" in the game; maps: {", ".join(sorted(index))}')
-    return match, storage.read(index[match]["file"])
+    match = find_map(storage, map_name)
+    return match, storage.read(map_index(storage)[match]["file"])
 
 
 # ------------------------------------------------------------------------------------------------

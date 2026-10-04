@@ -1,6 +1,7 @@
 """The heroes-capture command: its commands and help, and map list's statuses."""
 
 import json
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -26,8 +27,14 @@ def test_prepare_passes_its_options_through(monkeypatch, tmp_path):
 
     seen = []
     monkeypatch.setattr(inject, "main", lambda argv: seen.append(argv) or tmp_path / "x.json")
-    result = runner.invoke(cli.app, ["prepare", "Dragon Shire", "--screen", "3440x1440", "--help"])
-    assert result.exit_code == 0 and seen == [["Dragon Shire", "--screen", "3440x1440", "--help"]]
+    result = runner.invoke(cli.app, ["prepare", "Dragon Shire", "--screen", "3440x1440", "--keep-intro"])
+    assert result.exit_code == 0 and seen == [["Dragon Shire", "--screen", "3440x1440", "--keep-intro"]]
+
+
+def test_prepare_help_lists_its_options(tmp_path):
+    result = runner.invoke(cli.app, ["prepare", "--help"])
+    assert result.exit_code == 0 and "--px-per-cell" in result.output and "--crop-margin" in result.output
+    assert not (tmp_path / "tmp").exists() and not (tmp_path / "logs").exists()
 
 
 @pytest.fixture
@@ -52,33 +59,58 @@ def in_a_scratch_folder(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
 
-def render_steps(monkeypatch, tmp_path, fail_stitch=False):
-    """map render with its three steps stood in for: prepare writes the working files the real
-    one would (manifest, prepared map, folder), stitch writes the map's folder."""
-    from heroes_capture import inject, stitch
+GAME_MAPS = {"Dragon Shire": "Battleground", "Cursed Hollow": "Battleground", "Punisher Arena": "Arena", "Pull Party": "Brawl"}
+TILES = 10
+
+
+def render_steps(monkeypatch, tmp_path, fail_stitch=(), fail_capture=None):
+    """map render against a stand-in game (GAME_MAPS, and Try Me Mode unsupported) with its three
+    steps stood in for: prepare writes the working files the real one would (manifest, prepared
+    map, folder), capture the screenshots (stopping before tile n of a map in fail_capture), and
+    stitch the map's folder with its viewer (failing for the maps in fail_stitch)."""
+    from contextlib import nullcontext
+
+    from heroes_capture import game_data, inject, stitch
 
     calls = []
+    monkeypatch.setattr(game_data, "find_install", lambda: None)
+    monkeypatch.setattr(game_data, "open_storage", lambda install: nullcontext())
+    monkeypatch.setattr(game_data, "map_index", lambda storage: {n: {"file": n, "category": c} for n, c in GAME_MAPS.items()})
+    monkeypatch.setattr(game_data, "folder_maps", lambda storage: ["Try Me Mode"])
 
     def prepare(argv):
         calls.append(("prepare", argv))
         work = tmp_path / argv[argv.index("--out") + 1]
-        work.mkdir(exist_ok=True)
-        (work / "dragon-shire-terrain").mkdir(exist_ok=True)
-        (work / "dragon-shire-terrain.stormmap").write_text("map")
-        manifest = work / "dragon-shire-terrain.json"
-        manifest.write_text(json.dumps({"map": "Dragon Shire", "tiles": [{}] * 3, "sky": {"mode": "black"}}))
+        map_id = inject.render_id(argv[0], argv[argv.index("--structures") + 1])
+        (work / map_id).mkdir(parents=True, exist_ok=True)
+        (work / f"{map_id}.stormmap").write_text("map")
+        manifest = work / f"{map_id}.json"
+        manifest.write_text(json.dumps({"map": argv[0], "id": map_id, "tiles": [{"index": i} for i in range(TILES)], "sky": {"mode": "black"}}))
         return manifest.resolve()
+
+    def capture(argv):
+        calls.append(("capture", argv))
+        manifest = json.loads(Path(argv[0]).read_text())
+        tiles = Path(argv[0]).with_suffix("") / "tiles"
+        tiles.mkdir(parents=True, exist_ok=True)
+        start = int(argv[argv.index("--start") + 1]) if "--start" in argv else 0
+        for i in range(start, TILES):
+            if (fail_capture or {}).get(manifest["map"]) == i:
+                raise RuntimeError(f"the match was lost at tile {i + 1}")
+            (tiles / f"tile_{i:04d}.npy").write_bytes(b"shot")
 
     def stitching(argv):
         calls.append(("stitch", argv))
-        if fail_stitch:
+        manifest = json.loads(Path(argv[0]).read_text())
+        if manifest["map"] in fail_stitch:
             raise RuntimeError("stitch failed")
-        out = tmp_path / argv[argv.index("--output-dir") + 1] / "dragon-shire"
-        out.mkdir(parents=True)
-        (out / "dragon-shire-terrain.png").write_text("png")
+        out = tmp_path / argv[argv.index("--output-dir") + 1] / inject.slug(manifest["map"])
+        (out / f"{manifest['id']}-viewer").mkdir(parents=True, exist_ok=True)
+        (out / f"{manifest['id']}.png").write_text("png")
+        (out / f"{manifest['id']}-viewer" / "index.html").write_text("viewer")
 
     monkeypatch.setattr(inject, "main", prepare)
-    monkeypatch.setattr(cli, "run_capture", lambda argv: calls.append(("capture", argv)))
+    monkeypatch.setattr(cli, "run_capture", capture)
     monkeypatch.setattr(stitch, "main", stitching)
     return calls
 
@@ -88,43 +120,123 @@ def test_map_render_runs_the_three_steps_with_the_defaults(monkeypatch, tmp_path
     result = runner.invoke(cli.app, ["map", "render", "dragon shire", "--structures", "hide", "--fov", "12"])
     assert result.exit_code == 0, result.output
     manifest = str((tmp_path / "tmp" / "dragon-shire-terrain.json").resolve())
-    assert calls[0] == ("prepare", ["dragon shire", "--structures", "hide", "--fov", "12", "--out", "tmp", "--keep", "0.4"])
+    assert calls[0] == ("prepare", ["Dragon Shire", "--structures", "hide", "--fov", "12", "--out", "tmp", "--keep", "0.4"])
     assert calls[1] == ("capture", [manifest])
     assert calls[2] == ("stitch", [manifest, "--tiles", "--output-dir", "maps"])
-    assert "Dragon Shire (hide structures): 3 tiles planned, black void" in result.output
+    assert "Dragon Shire (hide structures): 10 tiles planned, black void" in result.output
+    assert "not validated" not in result.output  # Dragon Shire is
     assert (tmp_path / "maps" / "dragon-shire" / "dragon-shire-terrain.png").exists()
-    assert "The map is in maps" in result.output
+    assert "Dragon Shire: the map is in maps" in result.output
     assert not (tmp_path / "tmp").exists()  # the working files removed, and their folder
     plain = (tmp_path / "logs" / "heroes-capture.log").read_text()  # the plain log stays
-    assert plain.startswith("===== ") and "\nPreparing dragon shire\n" in plain and "3 tiles planned" in plain
+    assert plain.startswith("===== ") and "\nPreparing Dragon Shire\n" in plain and "10 tiles planned" in plain
     assert "\x1b[" not in plain
+
+
+def test_options_before_the_map_keep_their_values(monkeypatch, tmp_path):
+    calls = render_steps(monkeypatch, tmp_path)
+    result = runner.invoke(cli.app, ["map", "render", "--fov", "12", "--paint-texture", "sky", "clear", "dragon shire"])
+    assert result.exit_code == 0, result.output
+    assert calls[0] == ("prepare", ["Dragon Shire", "--structures", "keep", "--fov", "12", "--paint-texture", "sky", "clear",
+                                    "--out", "tmp", "--keep", "0.4"])
+
+
+def test_a_misspelled_or_unsupported_map_stops_before_writing_anything(monkeypatch, tmp_path):
+    render_steps(monkeypatch, tmp_path)
+    result = runner.invoke(cli.app, ["map", "render", "Dragn Shire"])
+    assert result.exit_code != 0 and "did you mean Dragon Shire?" in result.output
+    assert "working files" not in result.output
+    result = runner.invoke(cli.app, ["map", "render", "try me mode"])
+    assert result.exit_code != 0 and "Try Me Mode is unsupported" in result.output
+    assert not (tmp_path / "tmp").exists() and not (tmp_path / "logs").exists()
+
+
+def test_map_render_takes_a_map_or_a_category(monkeypatch, tmp_path):
+    render_steps(monkeypatch, tmp_path)
+    assert runner.invoke(cli.app, ["map", "render"]).exit_code == 2
+    assert runner.invoke(cli.app, ["map", "render", "dragon shire", "--category", "arena"]).exit_code == 2
 
 
 def test_map_render_keeps_the_working_files_when_asked(monkeypatch, tmp_path):
     render_steps(monkeypatch, tmp_path)
     result = runner.invoke(cli.app, ["map", "render", "dragon shire", "--keep-tmp", "-o", "renders"])
     assert result.exit_code == 0, result.output
-    assert (tmp_path / "renders" / "dragon-shire" / "dragon-shire-terrain.png").exists()
-    for name in ("dragon-shire-terrain.json", "dragon-shire-terrain.stormmap", "dragon-shire-terrain"):
+    assert (tmp_path / "renders" / "dragon-shire" / "dragon-shire-structures.png").exists()
+    for name in ("dragon-shire-structures.json", "dragon-shire-structures.stormmap", "dragon-shire-structures"):
         assert (tmp_path / "tmp" / name).exists(), name
     assert len(list((tmp_path / "tmp").glob("heroes-capture-*.log"))) == 1
 
 
 def test_a_failed_map_render_leaves_the_working_files(monkeypatch, tmp_path):
-    render_steps(monkeypatch, tmp_path, fail_stitch=True)
-    result = runner.invoke(cli.app, ["map", "render", "dragon shire"])
+    render_steps(monkeypatch, tmp_path, fail_stitch={"Dragon Shire"})
+    result = runner.invoke(cli.app, ["--log", "map", "render", "dragon shire"])
     assert result.exit_code != 0
-    assert (tmp_path / "tmp" / "dragon-shire-terrain.json").exists() and list((tmp_path / "tmp").glob("heroes-capture-*.log"))
+    assert (tmp_path / "tmp" / "dragon-shire-structures.json").exists() and list((tmp_path / "tmp").glob("heroes-capture-*.log"))
+    assert "heroes-capture clean-up removes them" in result.output
 
 
 def test_a_later_run_leaves_a_failed_runs_diagnostic_log(monkeypatch, tmp_path):
-    render_steps(monkeypatch, tmp_path, fail_stitch=True)
+    render_steps(monkeypatch, tmp_path, fail_stitch={"Dragon Shire"})
     assert runner.invoke(cli.app, ["map", "render", "dragon shire"]).exit_code != 0
     [failed] = (tmp_path / "tmp").glob("heroes-capture-*.log")
     render_steps(monkeypatch, tmp_path)
-    assert runner.invoke(cli.app, ["map", "render", "dragon shire", "-o", "again"]).exit_code == 0
+    assert runner.invoke(cli.app, ["map", "render", "dragon shire"]).exit_code == 0
     assert failed.exists() and "left in tmp for diagnosis" in failed.read_text()  # its own was removed, not this one
     assert list((tmp_path / "tmp").glob("heroes-capture-*.log")) == [failed]
+
+
+def test_a_rendered_map_is_skipped_unless_forced(monkeypatch, tmp_path):
+    calls = render_steps(monkeypatch, tmp_path)
+    assert runner.invoke(cli.app, ["map", "render", "dragon shire"]).exit_code == 0
+    calls.clear()
+    result = runner.invoke(cli.app, ["map", "render", "dragon shire"])
+    assert result.exit_code == 0 and "Dragon Shire: already rendered in maps" in result.output and calls == []
+    result = runner.invoke(cli.app, ["map", "render", "dragon shire", "--force"])
+    assert result.exit_code == 0 and [c[0] for c in calls] == ["prepare", "capture", "stitch"]
+
+
+def test_a_stopped_capture_carries_on_from_its_screenshots(monkeypatch, tmp_path):
+    render_steps(monkeypatch, tmp_path, fail_capture={"Dragon Shire": 6})
+    assert runner.invoke(cli.app, ["map", "render", "dragon shire"]).exit_code != 0
+    calls = render_steps(monkeypatch, tmp_path)
+    result = runner.invoke(cli.app, ["map", "render", "dragon shire"])
+    assert result.exit_code == 0, result.output
+    manifest = str((tmp_path / "tmp" / "dragon-shire-structures.json").resolve())
+    assert calls[0] == ("capture", [manifest, "--start", "4"])  # tile 7 lost; the two before it may be half-written
+    assert "carrying on from the run left in tmp (4 of 10 tiles kept)" in result.output
+    assert [c[0] for c in calls] == ["capture", "stitch"]
+    left = sorted(p.name for p in (tmp_path / "tmp").iterdir())  # the stopped run's diagnostic log stays, for clean-up
+    assert len(left) == 1 and left[0].startswith("heroes-capture-")
+
+
+def test_a_kept_run_with_other_options_starts_again(monkeypatch, tmp_path):
+    render_steps(monkeypatch, tmp_path, fail_stitch={"Dragon Shire"})
+    assert runner.invoke(cli.app, ["map", "render", "dragon shire"]).exit_code != 0
+    calls = render_steps(monkeypatch, tmp_path)
+    assert runner.invoke(cli.app, ["map", "render", "dragon shire", "--fov", "12"]).exit_code == 0
+    assert [c[0] for c in calls] == ["prepare", "capture", "stitch"]
+
+
+def test_a_category_run_goes_on_past_a_failure_and_carries_on_where_it_left_off(monkeypatch, tmp_path):
+    calls = render_steps(monkeypatch, tmp_path, fail_stitch={"Cursed Hollow"})
+    result = runner.invoke(cli.app, ["--log", "map", "render", "--category", "all"])
+    assert result.exit_code == 1, result.output
+    assert [c[1][0] for c in calls if c[0] == "prepare"] == ["Cursed Hollow", "Dragon Shire", "Punisher Arena", "Pull Party"]
+    assert "4 maps to render (all), 2 of them validated" in result.output  # Dragon Shire and Punisher Arena
+    assert "Cursed Hollow (keep structures): 10 tiles planned, black void; not validated: it may not come out right" in result.output
+    assert "3 rendered, 0 already rendered, 1 failed" in result.output and "failed: Cursed Hollow." in result.output
+    calls = render_steps(monkeypatch, tmp_path)
+    result = runner.invoke(cli.app, ["--log", "map", "render", "--category", "all"])
+    assert result.exit_code == 0, result.output
+    assert [c[0] for c in calls] == ["stitch"]  # Cursed Hollow's screenshots were all there; the rest done
+    assert "1 rendered, 3 already rendered, 0 failed" in result.output
+    assert list((tmp_path / "tmp").glob("*.json")) == []
+
+
+def test_a_category_run_renders_only_that_category(monkeypatch, tmp_path):
+    calls = render_steps(monkeypatch, tmp_path)
+    assert runner.invoke(cli.app, ["map", "render", "-c", "arena"]).exit_code == 0
+    assert [c[1][0] for c in calls if c[0] == "prepare"] == ["Punisher Arena"]
 
 
 def test_a_restarted_capture_carries_on_in_its_runs_logs(monkeypatch, tmp_path):
@@ -162,12 +274,6 @@ def test_the_clean_up_command_removes_only_what_the_tool_wrote(tmp_path):
     assert "Nothing to clean up" in runner.invoke(cli.app, ["clean-up"]).output
 
 
-def test_a_failed_map_render_says_how_to_clean_up(monkeypatch, tmp_path):
-    render_steps(monkeypatch, tmp_path, fail_stitch=True)
-    result = runner.invoke(cli.app, ["--log", "map", "render", "dragon shire"])
-    assert "heroes-capture clean-up removes them" in result.output
-
-
 def test_clean_up_leaves_other_files_in_tmp(tmp_path):
     (tmp_path / "tmp").mkdir()
     (tmp_path / "tmp" / "setup.log").write_text("pip")
@@ -181,13 +287,13 @@ def test_map_rows():
     game_maps = {"Towers of Doom": "Battleground", "dragon cave": "Battleground", "Dragon Shire": "Battleground",
                  "Pull Party": "Brawl", "Sandbox (Cursed Hollow)": "Other"}
     assert cli.map_rows(game_maps, ["Try Me Mode"], validated) == [
-        ("Battleground", "dragon cave", "not yet", "", ""),
-        ("Battleground", "Dragon Shire", "validated", "0.1.0", "void"),
-        ("Battleground", "Towers of Doom", "not yet", "", ""),
-        ("Brawl", "Pull Party", "not yet", "", ""),
-        ("Other", "Sandbox (Cursed Hollow)", "not yet", "", ""),
-        ("Other", "Try Me Mode", "unsupported", "", ""),
-        (cli.GONE, "Old Map", "not in the game", "0.1.0", ""),
+        ("Battleground", "dragon cave", "not yet"),
+        ("Battleground", "Dragon Shire", "validated"),
+        ("Battleground", "Towers of Doom", "not yet"),
+        ("Brawl", "Pull Party", "not yet"),
+        ("Other", "Sandbox (Cursed Hollow)", "not yet"),
+        ("Other", "Try Me Mode", "unsupported"),
+        (cli.GONE, "Old Map", "not in the game"),
     ]
 
 
@@ -257,16 +363,17 @@ def test_library_warnings_show_once_however_often_the_output_is_configured(ui_st
     assert capsys.readouterr().out.count("a library's warning") == 1
 
 
-def test_map_list_shows_names_and_notes_as_written(monkeypatch):
+def test_map_list_shows_names_as_written_and_no_validation_details(monkeypatch):
     from contextlib import nullcontext
 
     from heroes_capture import game_data
 
     monkeypatch.setattr(game_data, "find_install", lambda: None)
     monkeypatch.setattr(game_data, "open_storage", lambda install: nullcontext())
-    monkeypatch.setattr(game_data, "map_index", lambda storage: {"Dragon Shire": {"file": "x", "category": "Battleground"}})
+    monkeypatch.setattr(game_data, "map_index", lambda storage: {"Dragon Shire [bold]": {"file": "x", "category": "Battleground"}})
     monkeypatch.setattr(game_data, "folder_maps", lambda storage: [])
-    monkeypatch.setattr(cli, "validated_maps", lambda: {"Dragon Shire": {"version": "0.1.0", "note": "void [bold] edges [/]"}})
+    monkeypatch.setattr(cli, "validated_maps", lambda: {"Dragon Shire [bold]": {"version": "0.1.0", "note": "void edges"}})
     result = runner.invoke(cli.app, ["map", "list"], env={"COLUMNS": "200"})
     assert result.exit_code == 0, result.output
-    assert "void [bold] edges [/]" in result.output
+    assert "Dragon Shire [bold]" in result.output and "✓ validated" in result.output
+    assert "0.1.0" not in result.output and "void edges" not in result.output  # the authors' record, not shown

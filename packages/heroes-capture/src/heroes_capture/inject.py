@@ -1,7 +1,7 @@
 """Prepares a battleground for capture: copies the .stormmap, injects the capture script
 (capture_script.galaxy) and writes the capture grid the capture and stitch steps follow.
 
-    heroes-capture prepare "Towers of Doom" [options]   (heroes-capture map runs it first)
+    heroes-capture prepare "Towers of Doom" [options]   (heroes-capture map render runs it first)
     heroes-capture prepare "C:\\path\\to\\Some Map.stormmap" [options]
 
 A bare name is a map as the game names it, read from the installed game (or, with no install,
@@ -52,6 +52,18 @@ HERE = Path(__file__).resolve().parent
 
 
 
+# How many values each option takes (the options without one are switches).
+OPTION_VALUES = {"--structures": 1, "--px-per-cell": 1, "--screen": 1, "--fov": 1, "--pitch": 1, "--refit-yaw": 1,
+                 "--distance": 1, "--keep": 1, "--no-lens": 0, "--show-ui": 0, "--paint-texture": 2, "--keep-intro": 0,
+                 "--margin": 1, "--crop-margin": 1, "--out": 1}
+
+
+def render_id(map_name: str, structures: str) -> str:
+    """The id a preparation's files are named by: <map slug>-structures, or -terrain with the
+    structures hidden."""
+    return f"{slug(map_name)}-{'terrain' if structures == 'hide' else 'structures'}"
+
+
 def parse_args(argv: list[str]) -> dict:
     opts = {
         "map": None, "structures": "keep", "pxPerCell": 48.0, "screen": {"w": 3840.0, "h": 2160.0},
@@ -61,6 +73,9 @@ def parse_args(argv: list[str]) -> dict:
     }
     numbers = {"--px-per-cell": "pxPerCell", "--fov": "fov", "--distance": "distance", "--pitch": "pitch",
                "--refit-yaw": "refitYaw", "--keep": "keep", "--margin": "margin", "--crop-margin": "cropMargin"}
+    if {"--help", "-h"} & set(argv):
+        print(__doc__.strip())
+        raise SystemExit(0)
     args = iter(argv)
     for a in args:
         if a == "--structures":
@@ -258,7 +273,7 @@ def main(argv: list[str]) -> Path:
         light_sets = game_data.light_sets(storage)
         models = {spec["file"]: game_data.sky_model_file(storage, spec["file"]) for spec in PARALLAX_KEYS.values()}
     source = {"name": map_name}
-    id_ = f"{slug(source['name'])}-{'terrain' if opts['structures'] == 'hide' else 'structures'}"
+    id_ = render_id(source["name"], opts["structures"])
     target = (out / f"{id_}.stormmap").resolve()
     target.write_bytes(map_bytes)
 

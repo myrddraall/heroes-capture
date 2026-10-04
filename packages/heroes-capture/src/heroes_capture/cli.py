@@ -3,6 +3,7 @@
     heroes-capture map render "Battlefield of Eternity"         prepare, capture and stitch a battleground
     heroes-capture map render "Cursed Hollow" --structures hide   bare terrain
     heroes-capture map render "Dragon Shire" -o D:\\renders        into D:\\renders\\dragon-shire
+    heroes-capture map render --category all                    every map, skipping those rendered
     heroes-capture map list                                     the game's maps, and which are validated
     heroes-capture clean-up                                     remove the working files a failed render left in tmp\\
     heroes-capture --version
@@ -143,7 +144,8 @@ def clean_up(paths: list[Path], keep: bool) -> None:
     if keep:
         ui.done(f"Working files kept in {paths[0].parent} (heroes-capture clean-up removes them)")
         return
-    ui.close_log_file()
+    if ui.log_file() in paths:
+        ui.close_log_file()
     remove(paths)
     try:
         paths[0].parent.rmdir()
@@ -191,12 +193,133 @@ class Structures(str, Enum):
     hide = "hide"
 
 
-@map_app.command("render", context_settings=PASS_THROUGH)
+class Category(str, Enum):
+    battleground = "battleground"
+    arena = "arena"
+    brawl = "brawl"
+    other = "other"
+    all = "all"
+
+
+SAVERS = 2  # the capture's screenshot-saving threads: a run stopped mid-save may leave this many half-written
+
+
+def split_map(words: list[str]) -> tuple[str | None, list[str]]:
+    """The map and the preparing step's options, from the words after `map render` that aren't its
+    own options: the map is the first word no option takes as a value. (The map isn't a declared
+    argument: click would take the first bare word for it, which in `--fov 12 "Dragon Shire"` is
+    the 12.)"""
+    from .inject import OPTION_VALUES
+
+    found, options, i = None, [], 0
+    while i < len(words):
+        word = words[i]
+        if word.startswith("-"):
+            if word not in OPTION_VALUES:
+                raise typer.BadParameter(f"no such option: {word} (heroes-capture prepare --help lists the preparing step's)")
+            options += words[i:i + 1 + OPTION_VALUES[word]]
+            i += 1 + OPTION_VALUES[word]
+        elif found is None:
+            found, i = word, i + 1
+        else:
+            raise typer.BadParameter(f'"{word}": one map at a time (or several with --category)')
+    return found, options
+
+
+def maps_to_render(map_spec: str | None, category: Category | None) -> list[tuple[str, str]]:
+    """(what to prepare, the map's name) for each map to render: the one named (the game's
+    spelling of its name; a .stormmap path's file name), or the category's renderable maps (all of
+    them for "all"; the unsupported ones are never among them), in map list's order."""
+    from . import game_data
+
+    if map_spec and map_spec.lower().endswith(".stormmap"):
+        return [(map_spec, Path(map_spec).name[: -len(".stormmap")])]
+    with game_data.open_storage(game_data.find_install()) as storage:
+        if map_spec:
+            name = game_data.find_map(storage, map_spec)
+            return [(name, name)]
+        index = game_data.map_index(storage)
+    order = {c: n for n, c in enumerate(game_data.CATEGORIES)}
+    names = sorted((n for n, e in index.items() if category == Category.all or e["category"].lower() == category.value),
+                   key=lambda n: (order[index[n]["category"]], n.casefold()))
+    return [(n, n) for n in names]
+
+
+def kept_run(work: Path, map_id: str, options: list[str]) -> Path | None:
+    """The manifest of a run left unfinished in `work` (failed, stopped, or --keep-tmp) that a
+    render with these preparing options can carry on: the same map, prepared the same way."""
+    manifest = work / f"{map_id}.json"
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if data.get("renderOptions") != options or not manifest.with_suffix(".stormmap").exists():
+        return None
+    return manifest.resolve()  # as a fresh preparation's
+
+
+def first_missing_tile(manifest_path: Path, manifest: dict) -> int:
+    """Where a kept run's capture carries on: at its first tile without a screenshot, less the
+    ones that may have been half-written when it stopped. len(tiles) when all are there."""
+    from .frames import frame_exists
+
+    tiles = manifest_path.with_suffix("") / "tiles"
+    for position, tile in enumerate(manifest["tiles"]):
+        if not frame_exists(tiles / f"tile_{tile['index']:04d}"):
+            return max(0, position - SAVERS)
+    return len(manifest["tiles"])
+
+
+def render_one(map_spec: str, name: str, options: list[str], output_dir: Path, keep_tmp: bool, force: bool,
+               capture_options: list[str], validated: dict) -> bool:
+    """One map: skipped when its viewer is in the output folder already (unless force), carried on
+    from a kept run of it, or prepared, captured and stitched; its working files removed after
+    (unless keep_tmp). False when skipped."""
+    from . import inject, stitch
+
+    structures = options[options.index("--structures") + 1]
+    work = Path(options[options.index("--out") + 1])
+    map_id = inject.render_id(name, structures)
+    out = output_dir / inject.slug(name)
+    if not force and (out / f"{map_id}-viewer" / "index.html").exists():
+        ui.done(f"{name}: already rendered in {out} (--force renders it again)")
+        return False
+    note = "" if name in validated else "; not validated: it may not come out right"
+    manifest_path = None if force else kept_run(work, map_id, options)
+    if manifest_path:
+        planned = json.loads(manifest_path.read_text())
+        start = first_missing_tile(manifest_path, planned)
+        ui.done(f"{name}: carrying on from the run left in {work} ({start} of {len(planned['tiles'])} tiles kept){note}")
+    else:
+        with ui.step(f"Preparing {name}"):
+            manifest_path = inject.main([map_spec, *options])
+        planned = json.loads(manifest_path.read_text())
+        planned["renderOptions"] = options  # what a later render must match to carry this one on
+        manifest_path.write_text(json.dumps(planned, indent=2))
+        start = 0
+        ui.done(f"{planned['map']} ({structures} structures): {len(planned['tiles'])} tiles planned, "
+                + ("void shot over white and black" if planned["sky"]["mode"] == "matte" else "black void") + note)
+    manifest = str(manifest_path)
+    if start < len(planned["tiles"]):
+        if not start:
+            shutil.rmtree(manifest_path.with_suffix("") / "tiles", ignore_errors=True)  # old screenshots would mix in
+        with ui.step(f"Capturing {name} in the game"):
+            run_capture([manifest, *(["--start", str(start)] if start else []), *capture_options])
+    with ui.step(f"Stitching {name}"):
+        stitch.main([manifest, "--tiles", "--output-dir", str(output_dir)])
+    if not keep_tmp:
+        remove([manifest_path, manifest_path.with_suffix(".stormmap"), manifest_path.with_suffix("")])
+    ui.done(f"{name}: the map is in {stitch.output_folder(output_dir, planned)}")
+    return True
+
+
+@map_app.command("render", context_settings=PASS_THROUGH, options_metavar="[OPTIONS] [MAP]")
 def render(
     ctx: typer.Context,
-    map: Annotated[str, typer.Argument(help="The map as the game names it (case and punctuation don't matter), or a path to a .stormmap.", show_default=False)],  # noqa: A002
+    category: Annotated[Optional[Category], typer.Option("--category", "-c", help="Render every map of a category instead of one map; all: every map. Unsupported maps are always left out.", show_default=False)] = None,
     structures: Annotated[Structures, typer.Option(help="Keep or hide forts, towers, cores and gates.")] = Structures.keep,
-    output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Where the map's folder goes: <output-dir>/<map id>, e.g. maps/dragon-shire.")] = MAPS,
+    output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Where the maps' folders go: <output-dir>/<map id>, e.g. maps/dragon-shire.")] = MAPS,
+    force: Annotated[bool, typer.Option("--force", help="Render maps already rendered in the output folder again, from the start.")] = False,
     keep_tmp: Annotated[bool, typer.Option("--keep-tmp", help="Leave the working files (screenshots, the prepared map, diagnostic logs) in tmp\\ for diagnosis.")] = False,
     game: Annotated[Optional[str], typer.Option(hidden=True)] = None,  # the install, when it isn't found by itself
     probe_light: Annotated[bool, typer.Option(hidden=True)] = False,  # diagnostics instead of the tiles
@@ -205,52 +328,75 @@ def render(
     probe_waits: Annotated[bool, typer.Option(hidden=True)] = False,
     show_ui: Annotated[bool, typer.Option(hidden=True)] = False,  # diagnostic: launch with the HUD up and stop
 ) -> None:
-    """Prepare, capture and stitch a battleground.
+    """Prepare, capture and stitch a map, or every map of a category.
 
-    The images go to <output-dir>/<map id> (maps\\<map id> in the current folder). The working files and the diagnostic log go to tmp\\ and are removed once the render finishes, unless --keep-tmp; a failed render leaves them. The output, as --log prints it, goes to logs\\heroes-capture.log and stays. Options after the map that aren't listed here go to the preparing step (heroes-capture prepare --help).
+    MAP: the map as the game names it (case and punctuation don't matter), or a path to a .stormmap; or --category instead.
+
+    The images go to <output-dir>/<map id> (maps\\<map id> in the current folder). A map already rendered there is skipped (--force renders it again), and a map whose render was left unfinished (failed or stopped) carries on from its working files. A map that fails doesn't stop a category's run. Maps that haven't been validated render too; they may not come out right.
+
+    The working files and the diagnostic log go to tmp\\ and are removed once done, unless --keep-tmp; a failed render leaves them. The output, as --log prints it, goes to logs\\heroes-capture.log and stays. Options that aren't listed here go to the preparing step (heroes-capture prepare --help).
     """
-    map_name = map
-    from . import inject, stitch
+    import traceback
 
-    prepare_options = list(ctx.args)
-    work = Path(prepare_options[prepare_options.index("--out") + 1]) if "--out" in prepare_options else TMP
+    from . import inject
+
+    map_spec, extra = split_map(list(ctx.args))
+    if (map_spec is None) == (category is None):
+        raise typer.BadParameter("name one map, or pick maps with --category")
+    chosen = {"probe_light": probe_light, "probe_sky": probe_sky, "probe_depth": probe_depth, "probe_waits": probe_waits}
+    probe = next((f"--{name.replace('_', '-')}" for name in PROBES if chosen[name]), None)
+    if category and (probe or show_ui):
+        raise typer.BadParameter("the diagnostics take one map")
+    maps = maps_to_render(map_spec, category)  # a name that isn't a renderable map stops here, before any file is written
+    work = Path(extra[extra.index("--out") + 1]) if "--out" in extra else TMP
+    options = ["--structures", structures.value, *extra]
+    if "--out" not in extra:
+        options += ["--out", str(TMP)]
+    if "--screen" not in extra and screen_size():
+        options += ["--screen", screen_size()]
+    if not {"--distance", "--fov"} & set(extra):
+        options += ["--distance", DISTANCE]
+    if "--keep" not in extra:
+        options += ["--keep", KEEP]
+    capture_options = ["--game", game] if game else []
     log_to(work)
-    with kept_on_failure(work):
-        prepare = [map_name, "--structures", structures.value, *prepare_options]
-        if "--out" not in prepare_options:
-            prepare += ["--out", str(TMP)]
-        if "--screen" not in prepare_options and screen_size():
-            prepare += ["--screen", screen_size()]
-        if not {"--distance", "--fov"} & set(prepare_options):
-            prepare += ["--distance", DISTANCE]
-        if "--keep" not in prepare_options:
-            prepare += ["--keep", KEEP]
-        if show_ui:
-            prepare.append("--show-ui")
-        with ui.step(f"Preparing {map_name}"):
-            manifest_path = inject.main(prepare)
-        manifest = str(manifest_path)
-        planned = json.loads(manifest_path.read_text())
-        ui.done(f"{planned['map']} ({structures.value} structures): {len(planned['tiles'])} tiles planned, "
-                + ("void shot over white and black" if planned["sky"]["mode"] == "matte" else "black void"))
-        capture_options = ["--game", game] if game else []
-        chosen = {"probe_light": probe_light, "probe_sky": probe_sky, "probe_depth": probe_depth, "probe_waits": probe_waits}
-        probe = next((f"--{name.replace('_', '-')}" for name in PROBES if chosen[name]), None)
-        if probe:
-            with ui.step(f"Probe {probe}"):
-                run_capture([manifest, probe, *capture_options])
-            return
-        if show_ui:
-            with ui.step("Launching the map with the HUD up (diagnostic; stops there)"):
-                run_capture([manifest, "--launch-only", *capture_options])
-            return
-        shutil.rmtree(Path(manifest).with_suffix("") / "tiles", ignore_errors=True)  # old screenshots would mix in
-        with ui.step(f"Capturing {planned['map']} in the game"):
-            run_capture([manifest, *capture_options])
-        with ui.step("Stitching"):
-            stitch.main([manifest, "--tiles", "--output-dir", str(output_dir)])
-        clean_up([manifest_path, manifest_path.with_suffix(".stormmap"), manifest_path.with_suffix(""), ui.log_file()], keep_tmp)
-        ui.done(f"The map is in {stitch.output_folder(output_dir, planned)}")
+
+    if probe or show_ui:  # diagnostics: prepared afresh; their files stay in tmp\
+        with kept_on_failure(work):
+            if show_ui:
+                options.append("--show-ui")
+            with ui.step(f"Preparing {maps[0][1]}"):
+                manifest = str(inject.main([maps[0][0], *options]))
+            with ui.step(f"Probe {probe}" if probe else "Launching the map with the HUD up (diagnostic; stops there)"):
+                run_capture([manifest, probe or "--launch-only", *capture_options])
+        return
+
+    validated = validated_maps()
+    if category:
+        ui.done(f"{len(maps)} maps to render ({category.value}), {sum(n in validated for _, n in maps)} of them validated")
+    rendered, skipped, failed = 0, 0, []
+    for map_spec, name in maps:
+        try:
+            if render_one(map_spec, name, options, output_dir, keep_tmp, force, capture_options, validated):
+                rendered += 1
+            else:
+                skipped += 1
+        except KeyboardInterrupt:
+            ui.warn(f"stopped during {name}; its working files are left in {work}: the same command carries on")
+            raise
+        except (Exception, SystemExit) as e:
+            if not category:
+                ui.warn(f"the working files are left in {work} for diagnosis (the same command carries on; heroes-capture clean-up removes them)")
+                raise
+            ui.detail(traceback.format_exc())
+            ui.warn(f"{name} failed ({e}); its working files are left in {work}")
+            failed.append(name)
+    if category:
+        ui.done(f"{rendered} rendered, {skipped} already rendered, {len(failed)} failed")
+    if failed:
+        ui.warn(f"failed: {', '.join(failed)}. The same command carries them on; their working files and the diagnostic log are in {work} (heroes-capture clean-up removes them)")
+        raise SystemExit(1)
+    clean_up([ui.log_file()], keep_tmp)
 
 
 def validated_maps() -> dict[str, dict]:
@@ -261,25 +407,20 @@ def validated_maps() -> dict[str, dict]:
 GONE = "No longer in the game"
 
 
-def map_rows(game_maps: dict[str, str], unsupported: list[str], validated: dict[str, dict]) -> list[tuple[str, str, str, str, str]]:
-    """(category, map, status, validated with, note) for the game's maps (name -> category), by
-    category and then alphabetically; the maps that can't be rendered, under Other; then the
-    validated maps the game no longer has. Status: "validated", "not yet", "unsupported" or
-    "not in the game"."""
+def map_rows(game_maps: dict[str, str], unsupported: list[str], validated: dict[str, dict]) -> list[tuple[str, str, str]]:
+    """(category, map, status) for the game's maps (name -> category), by category and then
+    alphabetically; the maps that can't be rendered, under Other; then the validated maps the game
+    no longer has. Status: "validated", "not yet", "unsupported" or "not in the game"."""
     from .game_data import CATEGORIES
-
-    def row(category, name, status):
-        entry = validated.get(name, {})
-        return (category, name, status, entry.get("version", ""), entry.get("note", ""))
 
     rows = []
     for category in CATEGORIES:
         names = [n for n, c in game_maps.items() if c == category] + (unsupported if category == "Other" else [])
         for name in sorted(names, key=str.casefold):
             status = "unsupported" if name in unsupported else "validated" if name in validated else "not yet"
-            rows.append(row(category, name, status))
+            rows.append((category, name, status))
     for name in sorted(set(validated) - set(game_maps) - set(unsupported), key=str.casefold):
-        rows.append(row(GONE, name, "not in the game"))
+        rows.append((GONE, name, "not in the game"))
     return rows
 
 
@@ -308,18 +449,16 @@ def list_maps(
     table = Table(title="Maps", title_justify="left")
     table.add_column("Map", no_wrap=True)
     table.add_column("Status", no_wrap=True)
-    table.add_column("Validated with", no_wrap=True)
-    table.add_column("Checked", overflow="fold")
     shown = None
-    for category, name, status, validated_with, note in rows:
+    for category, name, status in rows:
         if category != shown:
             if shown:
                 table.add_section()
             table.add_row(f"[bold]{escape(category)}[/]")
             shown = category
-        table.add_row("  " + escape(name), STATUS_STYLE[status], escape(validated_with), escape(note))  # as written, brackets too
+        table.add_row("  " + escape(name), STATUS_STYLE[status])  # as written, brackets too
     ui.show(table)
-    done = sum(status == "validated" for _, _, status, _, _ in rows)
+    done = sum(status == "validated" for _, _, status in rows)
     ui.show(f"{done} of {len(game_maps)} maps validated; {len(unsupported)} unsupported")
     clean_up([ui.log_file()], keep_tmp)
 
@@ -335,6 +474,7 @@ def prepare(ctx: typer.Context) -> None:
     from . import inject
 
     args = list(ctx.args)
+    inject.parse_args(args)  # --help, and a mistyped option, before any file is written
     log_to(Path(args[args.index("--out") + 1]) if "--out" in args else TMP)
     print(inject.main(args))
 

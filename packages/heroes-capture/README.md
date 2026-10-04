@@ -17,8 +17,14 @@ included; nothing to install), and its `.sha256`. The newest is always at
 
 ```powershell
 heroes-capture-win-x64.exe map render "Battlefield of Eternity"
+heroes-capture-win-x64.exe map render --category all   # every map the tool can render
 heroes-capture-win-x64.exe map list     # the game's maps by category, and which have been validated
 ```
+
+The output folder is one a render can be run again on: a map already rendered there is skipped
+(`--force` renders it again), and a map whose render failed or was stopped carries on from where
+it got to. A category's run goes on past a map that fails and lists the failures at the end; the
+same command again picks them up.
 
 A render's images go to `maps\<map id>\` in the folder it runs from (`maps\battlefield-of-eternity\`;
 `-o` / `--output-dir` picks another folder for them). Its working files (the screenshots, the
@@ -77,8 +83,18 @@ heroes-capture map render "Towers of Doom"                  # structures kept, i
 heroes-capture map render "Cursed Hollow" --structures hide # bare terrain
 heroes-capture map render "Dragon Shire" -o D:\renders      # into D:\renders\dragon-shire
 heroes-capture map render "Dragon Shire" --keep-tmp         # tmp\ left for diagnosis
+heroes-capture map render --category arena                  # battleground, arena, brawl, other or all
+heroes-capture map render "Dragon Shire" --force            # again, though maps\dragon-shire has it
 heroes-capture clean-up                                     # removes what a failed or --keep-tmp render left in tmp\
 ```
+
+A map already rendered in the output folder (its viewer is there) is skipped. A render left
+unfinished carries on from its working files when run again with the same options: the capture
+resumes at the first missing screenshot (less the two the saving threads may have left
+half-written), or the stitch runs straight away when they're all there. With other options it
+starts again. Maps not yet validated render too; their line says they may not come out right.
+Options that aren't `map render`'s own go to the preparing step: `heroes-capture prepare --help`
+lists them.
 
 (`py -m heroes_capture map render ...` is the same.) `heroes-capture map list` lists the game's
 maps by category and which have been validated: their render reviewed and, where needed, tuned
