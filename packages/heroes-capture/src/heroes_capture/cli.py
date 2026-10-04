@@ -29,7 +29,7 @@ from rich.table import Table
 
 from . import ui
 
-PROBES = ("probe_light", "probe_sky", "probe_depth", "probe_waits", "probe_input")
+PROBES = ("probe_light", "probe_sky", "probe_depth", "probe_waits")
 DISTANCE = "214"  # camera distance: far, so tall objects lean little at the seams
 KEEP = "0.4"  # share of each screenshot used, centred
 VALIDATED = Path(__file__).with_name("validated-maps.json")
@@ -342,7 +342,6 @@ def render(
     probe_sky: Annotated[bool, typer.Option(hidden=True)] = False,
     probe_depth: Annotated[bool, typer.Option(hidden=True)] = False,
     probe_waits: Annotated[bool, typer.Option(hidden=True)] = False,
-    probe_input: Annotated[bool, typer.Option(hidden=True)] = False,
     show_ui: Annotated[bool, typer.Option(hidden=True)] = False,  # diagnostic: launch with the HUD up and stop
 ) -> None:
     """Prepare, capture and stitch a map, or every map of a category.
@@ -360,7 +359,7 @@ def render(
     map_spec, extra = split_map(list(ctx.args))
     if (map_spec is None) == (category is None):
         raise typer.BadParameter("name one map, or pick maps with --category")
-    chosen = {"probe_light": probe_light, "probe_sky": probe_sky, "probe_depth": probe_depth, "probe_waits": probe_waits, "probe_input": probe_input}
+    chosen = {"probe_light": probe_light, "probe_sky": probe_sky, "probe_depth": probe_depth, "probe_waits": probe_waits}
     probe = next((f"--{name.replace('_', '-')}" for name in PROBES if chosen[name]), None)
     if category and (probe or show_ui):
         raise typer.BadParameter("the diagnostics take one map")
@@ -383,8 +382,6 @@ def render(
         with kept_on_failure(work):
             if show_ui:
                 options.append("--show-ui")
-            if probe == "--probe-input":
-                options.append("--input-probe")  # the probe's part of the map script, in no other map
             with ui.step(f"Preparing {maps[0][1]}"):
                 manifest = str(inject.main([maps[0][0], *options]))
             with ui.step(f"Probe {probe}" if probe else "Launching the map with the HUD up (diagnostic; stops there)"):

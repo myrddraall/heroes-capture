@@ -26,7 +26,6 @@ Options:
   --paint-texture <texture> <colour|clear>   paint one of the map's own sky textures a
                            solid colour, or make it transparent (sky probes); repeatable
   --keep-intro             let the intro cutscene play out instead of skipping it (diagnostic)
-  --input-probe            the input probe's edit box and commands in the script (diagnostic)
   --margin <cells>         capture past the camera bounds (lifts them)      (default 0)
   --crop-margin <cells>    the stitched image reaches this far past the camera bounds
                            (or past each arena area, see below)             (default 12)
@@ -55,7 +54,7 @@ HERE = Path(__file__).resolve().parent
 
 # How many values each option takes (the options without one are switches).
 OPTION_VALUES = {"--structures": 1, "--px-per-cell": 1, "--screen": 1, "--fov": 1, "--pitch": 1, "--refit-yaw": 1,
-                 "--distance": 1, "--keep": 1, "--no-lens": 0, "--show-ui": 0, "--paint-texture": 2, "--keep-intro": 0, "--input-probe": 0,
+                 "--distance": 1, "--keep": 1, "--no-lens": 0, "--show-ui": 0, "--paint-texture": 2, "--keep-intro": 0,
                  "--margin": 1, "--crop-margin": 1, "--out": 1}
 
 
@@ -69,7 +68,7 @@ def parse_args(argv: list[str]) -> dict:
     opts = {
         "map": None, "structures": "keep", "pxPerCell": 48.0, "screen": {"w": 3840.0, "h": 2160.0},
         "fov": 20.0, "distance": None, "pitch": 90.0, "refitYaw": None, "keep": 0.6, "lens": True,
-        "showUi": False, "paintTextures": {}, "keepIntro": False, "inputProbe": False, "margin": 0.0, "cropMargin": 12.0,
+        "showUi": False, "paintTextures": {}, "keepIntro": False, "margin": 0.0, "cropMargin": 12.0,
         "out": "tmp",
     }
     numbers = {"--px-per-cell": "pxPerCell", "--fov": "fov", "--distance": "distance", "--pitch": "pitch",
@@ -90,8 +89,6 @@ def parse_args(argv: list[str]) -> dict:
             opts["lens"] = False
         elif a == "--keep-intro":
             opts["keepIntro"] = True
-        elif a == "--input-probe":
-            opts["inputProbe"] = True
         elif a == "--show-ui":
             opts["showUi"] = True
         elif a == "--paint-texture":
@@ -338,7 +335,7 @@ def main(argv: list[str]) -> Path:
             pitch=opts["pitch"], refit_yaw=refit_yaw, lens=lens, unbound=unbound, show_ui=opts["showUi"],
             keep_intro=opts["keepIntro"], sky_colour=sky_start, map_sky=map_sky, map_width=info["width"],
             map_height=info["height"], opening_timers=opening_timers, map_id=map_id, hide_doodads=hide_doodads,
-            arena=arena, input_probe=opts["inputProbe"],
+            arena=arena,
         ).replace("\n", eol)
         check_definition_order(script)
         # Galaxy is single-pass: the capture functions go before InitMap, the call at its end.

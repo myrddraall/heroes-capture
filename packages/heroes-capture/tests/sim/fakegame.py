@@ -4,15 +4,15 @@
 
 Fakes ctypes.windll (process, window and input calls), pydirectinput, mss and subprocess, and a
 virtual clock (time.time/time.sleep), then runs heroes_capture.capture.main() on
-<work dir>/test-map.json (written by makemanifest.py). The fake game decodes the keys typed into
-chat, carries out the capture script's commands, and draws frames with the status strip the way
-capture_script.galaxy does. Environment: FAKE_FAULT (focus, wrongmap, silent, crash, menu: the
-Esc menu open for 6 s, taking the keys) and
-FAKE_FAULT_AT (virtual seconds), FAKE_START=map (the map already running), FAKE_BOUNDS,
-FAKE_HIDDEN (the world hidden until the map is ready), FAKE_NO_KEY, FAKE_SKY_RATE. The input probe's
-edit box is there too: it takes key presses and Unicode text while it has the keyboard, is read
-every tick (mode 1) or as it changes (mode 2, dialog event type 2), loses the keyboard to an
-alt-tab unless the map asks for it again; Unicode text never reaches the game as keys.
+<work dir>/test-map.json (written by makemanifest.py). The fake game has the map's command box
+(capture_script.galaxy): it has the keyboard from the match's start, takes typed text (Unicode or
+keys; Enter does nothing while it has the keyboard) and carries out the last complete ";"-ended
+command as the text arrives; the chat box, open when the box hasn't the keyboard, only answers
+"focus", which gives it back. It draws frames with the status strip the way the script does.
+Environment: FAKE_FAULT (focus, wrongmap, silent, crash, menu: the Esc menu open for 6 s, taking
+the keys; boxfocus: the box loses the keyboard) and FAKE_FAULT_AT (virtual seconds),
+FAKE_START=map (the map already running), FAKE_BOUNDS, FAKE_HIDDEN (the world hidden until the
+map is ready), FAKE_SKY_RATE.
 """
 
 import ctypes
@@ -50,7 +50,6 @@ KEYS = {"enter": 28, "space": 57, "backspace": 14, "alt": 56, "esc": 1, "tab": 1
 for i, ch in enumerate("abcdefghijklmnopqrstuvwxyz0123456789.-:,@_"):
     KEYS[ch] = 100 + i
 CODE_TO_KEY = {v: k for k, v in KEYS.items()}
-CODE_TO_KEY[0x4C] = "numpad5"
 pdi = types.ModuleType("pydirectinput")
 pdi.KEYBOARD_MAPPING = KEYS
 pdi.PAUSE = 0.0
@@ -84,8 +83,7 @@ class Game:
         self.haze_alpha = np.asarray(Image.fromarray((haze * 255).astype(np.uint8)).resize((64 * 48, 64 * 48), Image.BILINEAR), np.float32) / 255
         self.sky_rate = float(os.environ.get("FAKE_SKY_RATE", "0.4"))
         self.menu = self._menu_frame()
-        self.box, self.box_focus, self.box_mode, self.box_refocus = None, False, 1, False  # the input probe's edit box
-        self.probe, self.events, self.keys, self.key_counting, self.alt_down = False, 0, 0, False, False
+        self.box, self.box_focus, self.box_lost = "", True, False  # the map's command box
 
     def _menu_frame(self):
         frame = np.full((H, W, 3), 60, np.uint8)
@@ -104,6 +102,7 @@ class Game:
 
     def launch(self, path):
         self.map_id = MAP_ID
+        self.box, self.box_focus = "", True  # a new match: the map's box, with the keyboard
         self.set_state("loading")
         self.pending.append((_now[0] + 6.0, lambda: self.set_state("map")))
 
@@ -112,34 +111,24 @@ class Game:
         self.pending = [p for p in self.pending if p[0] > _now[0]]
         for _, fn in sorted(due, key=lambda p: p[0]):
             fn()
-        if self.box is not None and self.box_mode == 1:
-            self.box_read()
-
-    def box_read(self):
-        if "." in self.box:
-            text, self.box = self.box.split(".", 1)[0], ""
-            words = text.split()
-            if words and words[0] == "mode":
-                self.box_mode, self.box_refocus = int(words[1]), words[2] == "1"
-            if words and words[0] == "close":
-                self.box, self.box_focus, self.box_refocus = None, False, False
-                self.seq = int(words[-1]) & 255
-                return
-            self.seq = int(words[-1]) & 255 if words else self.seq
-        if self.box_refocus and FOREGROUND[0] == 100:
-            self.box_focus = True
+        if _fault("boxfocus") and not self.box_lost:  # something took the keyboard from the box
+            self.box_lost, self.box_focus = True, False
 
     def box_typed(self, ch):
+        """Text into the command box: its last complete command carried out, the box emptied."""
         self.box += ch
-        if self.box_mode == 2:  # a dialog event (type 2) as the text changes
-            self.events |= 1 << 2
-            self.box_read()
+        if ";" in self.box:
+            text = self.box.rsplit(";", 1)[0].split(";")[-1]
+            self.box = ""
+            self.command(text)
 
     def char(self, ch):
-        """Unicode text: into the edit box or the chat box, never a key to the game."""
+        """Unicode text: into the chat box or the command box, never a key to the game."""
+        if _menu_open():
+            return
         if self.chat is not None:
             self.chat += ch
-        elif self.box is not None and self.box_focus:
+        elif self.box_focus:
             self.box_typed(ch)
 
     # match timeline (seconds since the map state began)
@@ -154,25 +143,11 @@ class Game:
 
     def key(self, code, up):
         k = CODE_TO_KEY[code]
-        if k == "alt":
-            self.alt_down = not up
-            return
         if up or _menu_open():
             return  # with the Esc menu open, keys go to it
-        if k == "tab" and self.alt_down:
-            FOREGROUND[0], self.box_focus = 200, False
-            return
-        if self.chat is None and self.box is not None and self.box_focus and k not in ("numpad5",):
-            if k != "enter":  # Enter doesn't open the chat box while the edit box has the keyboard
+        if self.chat is None and self.box_focus:
+            if k != "enter":  # Enter doesn't open the chat box while the command box has the keyboard
                 self.box_typed(" " if k == "space" else k)
-            return
-        if k == "\\":
-            self.keys += self.key_counting and self.chat is None
-            return
-        if k == "numpad5":
-            if self.chat is None and self.state == "map" and not os.environ.get("FAKE_NO_KEY"):
-                self.log.append(f"{_now[0] - START:.2f} key numpad5")
-                self.pending.append((_now[0] + 0.05, lambda: setattr(self, "sky", 2)))
             return
         if k == "enter":
             if self.chat is None:
@@ -180,18 +155,20 @@ class Game:
             else:
                 text, self.chat = self.chat, None
                 if text:
-                    self.command(text)
+                    self.command(text, chat=True)
         elif self.chat is not None:
             if k == "backspace":
                 self.chat = self.chat[:-1]
             else:
                 self.chat += " " if k == "space" else k
 
-    def command(self, text):
-        self.log.append(f"{_now[0] - START:.2f} chat {text!r}")
+    def command(self, text, chat=False):
+        self.log.append(f"{_now[0] - START:.2f} {'chat' if chat else 'box'} {text!r}")
         if self.state != "map":
             return
-        words = text.split()
+        words = text.replace(";", " ").split()
+        if not words or (chat and words[0] != "focus"):
+            return  # through the chat, the map answers only "focus"
         try:
             seq = int(float(words[-1])) & 255
         except ValueError:
@@ -236,12 +213,8 @@ class Game:
             ack(0.05)
         elif cmd in ("clean", "pause", "bgspeed", "refitwait", "hidemap"):
             ack(0.05)
-        elif cmd == "inputbox":
-            self.box = "" if self.box is None else self.box
-            self.box_mode, self.box_refocus, self.box_focus, self.probe = int(words[1]), words[2] == "1", True, True
-            ack(0.05)
-        elif cmd == "inputkeys":
-            self.key_counting = self.probe = True
+        elif cmd == "focus":
+            self.box_focus = True
             ack(0.05)
         elif cmd == "quit":
             self.leaving = True
@@ -256,8 +229,6 @@ class Game:
                   (51, 1, int(self.sky == 1)), (52, 1, int(self.sky == 2)), (53, 1, int(t * 4) % 2), (54, 1, int(phase == 2)),
                   (55, 16, self.map_id), (71, 2, phase), (73, 8, min(255, int(max(0, t - 13) // 8))), (81, 1, 0),
                   (82, 4, 5 if phase >= 1 else 0)]
-        if self.probe:
-            fields[-3:] = [(73, 8, self.events), (81, 1, 0), (82, 4, self.keys % 16)]
         bits = [0] * 88
         bits[0] = 1
         for start, count, value in fields:

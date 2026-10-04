@@ -20,7 +20,7 @@ from .game_window import (
     game_running,
     hold_key,
     park_cursor,
-    type_burst,
+    type_unicode,
 )
 from .runlog import log, warn
 from .screen import ScreenGrabber
@@ -49,7 +49,6 @@ class FocusLost(Exception):
 # Focus: nothing is typed or grabbed unless the game is in front
 # ------------------------------------------------------------------------------------------------
 
-_chat_open = False  # the chat box was opened and not yet sent (a step was interrupted mid-command)
 _brought_to_front = False  # Heroes is put in front once, as the run starts; after that the run waits for it
 CHAT_OPEN_WAIT = 0.06  # seconds for the chat box to open before the text is typed (0.15 until the waits probe: 30 of 30 commands taken even at 0.03)
 
@@ -102,7 +101,6 @@ def step(action, what: str):
     time. If it loses focus part way, or one of the game's menus opens over the map, the step is
     abandoned, and redone from its start once the game is back in front and the menu closed:
     half-done steps are never continued."""
-    global _chat_open
     while True:
         wait_for_game()
         try:
@@ -114,15 +112,6 @@ def step(action, what: str):
             else:
                 warn(f"focus lost during {what} (in front: {foreground_program()}); redoing it from the start")
             wait_for_game()
-            if _chat_open:
-                # A half-typed line may be in the chat box: empty it and close it (Enter on an
-                # empty line sends nothing). Never Esc: with the box already closed, that opens
-                # the game menu, which then swallows every later command.
-                type_burst(["backspace"] * 30)
-                time.sleep(0.05)
-                hold_key("enter")
-                _chat_open = False
-                time.sleep(0.3)
 
 
 def settle(seconds: float) -> None:
@@ -141,20 +130,26 @@ def settle(seconds: float) -> None:
         time.sleep(min(0.05, max(0.0, end - time.time())))
 
 
+def send_command(text: str) -> None:
+    """A command typed into the map's command box (capture_script.galaxy), only while the game is
+    in front: Unicode text ending in ";", in one burst. Text input never acts as a hotkey, wherever
+    it lands. Raises FocusLost if the game isn't in front (the step is then redone; see step)."""
+    require_focus()
+    type_unicode(f"{text};")
+
+
 def send_chat(text: str) -> None:
-    """Open chat, type, send, only while the game is in front: a held Enter, a moment for the
-    chat box to open, the text in one burst, and a held Enter to send it. Raises FocusLost if
-    the game isn't in front (the step it belongs to is then redone; see step)."""
-    global _chat_open
+    """A chat message (only "focus ... ;": the keyboard back to the command box): a held Enter, a
+    moment for the chat box to open, the text as Unicode, a held Enter. With the command box
+    holding the keyboard after all, the Enters do nothing and the text lands in the box, a command
+    there too."""
     require_focus()
     hold_key("enter")
-    _chat_open = True
     time.sleep(CHAT_OPEN_WAIT)  # the chat box needs a moment (a few frames) to open
     require_focus()
-    type_burst(["space" if ch == " " else ch for ch in text])
+    type_unicode(text)
     time.sleep(0.03)
     hold_key("enter")
-    _chat_open = False
 
 
 # ------------------------------------------------------------------------------------------------
@@ -322,7 +317,7 @@ def quit_match(wait: bool = True) -> None:
     for grabber in list(ScreenGrabber.open_grabbers):
         grabber.release_duplication()  # nothing holds the game's screen while it leaves
     try:
-        step(lambda: send_chat("quit"), "sending quit")
+        step(lambda: send_command("quit 0"), "sending quit")
         log("leaving the match ...")
         wait_for_menu(quit_sent=True, until_leaving=not wait)
     except Exception as e:  # a failed check must not cost the run its stitch
@@ -347,7 +342,7 @@ def wait_for_menu(quit_sent: bool = False, until_leaving: bool = False) -> None:
             seen = game_state(screen.grab() if foreground_is_game() else None, strip)
             if seen == IN_MAP and not resent and time.time() - started > 3:
                 resent = True
-                step(lambda: send_chat("quit"), "sending quit again" if quit_sent else "leaving a match still running")
+                step(lambda: (send_chat("focus 0 ;"), time.sleep(0.3), send_command("quit 0")), "sending quit again" if quit_sent else "leaving a match still running")
             if seen != state:
                 state = seen
                 phases.append(f"{state} at {time.time() - started:.1f} s")

@@ -49,6 +49,7 @@ from .game_control import (
     quit_match,
     require_focus,
     send_chat,
+    send_command,
     settle,
     step,
     wait_for_map_load,
@@ -57,7 +58,7 @@ from .game_data import find_install
 from .game_menus import game_menu_open
 from .game_state import IN_MAP, LOADING, MAP_FAILED, MENU, NOT_RUNNING, PHASES, game_state
 from .game_window import game_region, hold_key
-from .runlog import done, log, log_timings, set_log_file, stage, warn
+from .runlog import detail, done, log, log_timings, set_log_file, stage, warn
 from .screen import ScreenGrabber, disagree, looks_black, same_view, view_shift
 from .status import Status, StatusStrip
 
@@ -169,14 +170,20 @@ class Session:
         return None
 
     def send(self, command: str, timeout: float = 2.0, sends: int = 4) -> tuple[Status, np.ndarray] | None:
-        """A chat command with a sequence number appended, then the strip polled until it shows
-        that number: the command has been carried out and the frame rendered. Returns the
-        status and that raw frame; None when the map never answered (sent `sends` times,
-        `timeout` seconds each)."""
-        for _ in range(sends):
+        """A command typed into the map's command box with a sequence number appended, then the
+        strip polled until it shows that number: the command has been carried out and the frame
+        rendered. Returns the status and that raw frame; None when the map never answered (sent
+        `sends` times, `timeout` seconds each). Before each retry, the chat's "focus" gives the
+        box the keyboard back, in case it lost it (see capture_script.galaxy's command box)."""
+        for attempt in range(sends):
             self.read(self.raw_grab())  # a menu opened since the last command: wait, rather than type into it
+            if attempt:
+                detail(f"no answer to \"{command}\"; giving the command box the keyboard back (chat \"focus\")")
+                self._seq = self._seq % 255 + 1
+                send_chat(f"focus {self._seq} ;")
+                self.wait_for(lambda st: st.seq == self._seq, timeout=1.0)
             self._seq = self._seq % 255 + 1  # 1..255; 0 is what the strip shows before any command
-            send_chat(f"{command} {self._seq}")
+            send_command(f"{command} {self._seq}")
             deadline = time.time() + timeout
             while time.time() < deadline:
                 raw = self.raw_grab()
@@ -445,14 +452,8 @@ def shoot_once(session: Session, tile: dict, settle_time: float, matting: bool):
     # transparency.
     black = None
     if matting and frame is not None:
-        # The black sky from one key press (number pad 5): the strip keeps the tile's number and
-        # shows the sky as black once it is. The chat command if the key went missing.
-        require_focus()
-        hold_key("numpad5")
-        raw = session.wait_for(lambda st: st.seq == session.last_seq and st.sky_black, timeout=0.8)
-        if raw is None:
-            answer = session.send("black")
-            raw = answer[1] if answer is not None else None
+        answer = session.send("black")
+        raw = answer[1] if answer is not None else None
         if raw is not None:
             black = black_settled(session, session.blank(raw), frame)
     return status, frame, black, mismatch
@@ -676,7 +677,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--launch-only", action="store_true", help="launch the map and stop (to try chat commands by hand)")
     ap.add_argument("--probe-light", action="store_true", help="diagnostic: command sequences at chosen points (HRS_PROBE_POINTS, HRS_PROBE_TILE_PATH), a shot after each")
     ap.add_argument("--probe-sky", action="store_true", help="diagnostic: one edge tile over each solid-colour skybox, to check the colour shows and is uniform")
-    ap.add_argument("--probe-input", action="store_true", help="diagnostic: ways to send commands that a chat box knocked open or shut can't upset (the map's own edit box, Unicode text), timed against the chat")
     ap.add_argument("--probe-waits", action="store_true", help="diagnostic: the fixed waits tried shorter on sample tiles and a sky swap, compared with the current ones; and the sky pass with positions further apart")
     ap.add_argument("--probe-depth", action="store_true", help="diagnostic: only measure the sky layers' parallax (done during the start-up in every render)")
     ap.add_argument("--settle", type=float, default=0.1, help="least seconds from a move to the kept screenshot (default 0.1; the waits probe found differences only where the scene animates anyway, as at 0.5)")
@@ -718,8 +718,6 @@ def main(argv: list[str]) -> None:
 
     if args.probe_light:
         log(f"Lighting probe on {manifest['map']}: screenshots at chosen spots and cameras.")
-    elif args.probe_input:
-        log(f"Input probe on {manifest['map']}: the map's own edit box and Unicode text as ways to send commands, timed against the chat.")
     elif args.probe_waits:
         log(f"Waits probe on {manifest['map']}: sample tiles and a sky swap with shorter waits, compared with the current ones.")
     elif args.probe_depth:
@@ -740,7 +738,7 @@ def main(argv: list[str]) -> None:
         if (region["width"], region["height"]) != expected:
             warn(f"that is not the {expected[0]}x{expected[1]} the grid was planned for; the stitch will still work, at a different scale")
         session = Session(screen, int(manifest["status"].get("pageLeft", 0)))
-        probe = args.probe_light or args.probe_sky or args.probe_waits or args.probe_depth or args.probe_input
+        probe = args.probe_light or args.probe_sky or args.probe_waits or args.probe_depth
         measured = None
         sky_waits = False  # the sky work put off until the map is ready (its world was hidden)
 
@@ -777,9 +775,6 @@ def main(argv: list[str]) -> None:
             return
         if args.probe_sky:
             probes.probe_sky(session, manifest, out)
-            return
-        if args.probe_input:
-            probes.probe_input(session, manifest, out)
             return
         if args.probe_waits:
             probes.probe_waits(session, manifest, out)

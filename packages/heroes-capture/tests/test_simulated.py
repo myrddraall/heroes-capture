@@ -21,12 +21,12 @@ SCENARIOS = {
     "edges": ("matte", [], {"FAKE_BOUNDS": "22,26,42,38"}, "finished", "more beyond them (ring 1)"),
     "hidden world": ("matte", [], {"FAKE_HIDDEN": "1"}, "finished", "the sky work waits until the map is ready"),
     "wrong map": ("matte", [], {"FAKE_FAULT": "wrongmap"}, f"error RuntimeError: {RELAUNCH} (HRS_RECOVERIES=1)", "another map is running"),
-    "silent strip": ("matte", [], {"FAKE_FAULT": "silent", "FAKE_FAULT_AT": "35"}, f"error RuntimeError: {RELAUNCH} --start 9", "lost the match"),
-    "crash": ("matte", [], {"FAKE_FAULT": "crash", "FAKE_FAULT_AT": "36"}, f"error RuntimeError: {RELAUNCH} --start ", "lost the match"),  # carries on at the lost tile
-    "game menu": ("matte", [], {"FAKE_FAULT": "menu", "FAKE_FAULT_AT": "36"}, "finished", "a game menu is open"),  # waited out, not a lost match
+    "silent strip": ("matte", [], {"FAKE_FAULT": "silent", "FAKE_FAULT_AT": "28.85"}, f"error RuntimeError: {RELAUNCH} --start 9", "lost the match"),
+    "crash": ("matte", [], {"FAKE_FAULT": "crash", "FAKE_FAULT_AT": "27"}, f"error RuntimeError: {RELAUNCH} --start ", "lost the match"),  # carries on at the lost tile
+    "game menu": ("matte", [], {"FAKE_FAULT": "menu", "FAKE_FAULT_AT": "25"}, "finished", "a game menu is open"),  # waited out, not a lost match
+    "box focus": ("matte", [], {"FAKE_FAULT": "boxfocus", "FAKE_FAULT_AT": "25"}, "finished", ("giving the command box the keyboard back", "tile 12/12")),
     "probe sky": ("matte", ["--probe-sky"], {}, "finished", "05-none-layer0"),
     "probe depth": ("matte", ["--probe-depth"], {}, "finished", "sky layers: parallax rate"),
-    "probe input": ("matte", ["--probe-input"], {}, "finished", ("dialog event types that fired on the box: [2]", "(back at the menu)")),
     "launch only": ("matte", ["--launch-only"], {}, "finished", ""),
 }
 

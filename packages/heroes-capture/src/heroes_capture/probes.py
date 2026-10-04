@@ -1,8 +1,7 @@
-"""Diagnostic runs (capture.py --probe-light, --probe-sky, --probe-waits, --probe-input): instead of the tiles, chosen views and
+"""Diagnostic runs (capture.py --probe-light, --probe-sky, --probe-waits): instead of the tiles, chosen views and
 command sequences, a shot after each, kept in a probe-<what>-<time> folder next to the tiles.
 """
 
-import json
 import os
 import time
 from pathlib import Path
@@ -12,8 +11,7 @@ from PIL import Image
 
 from . import game_control
 from . import sky_layers
-from .game_control import quit_match, send_chat, settle, step
-from .game_window import alt_tab, bring_game_to_front, foreground_is_game, type_burst, type_unicode
+from .game_control import quit_match, send_command, settle, step
 from .runlog import done, log, warn
 from .screen import changed_share
 
@@ -59,16 +57,16 @@ def probe_light(session, manifest: dict, out: Path) -> None:
         if not points:
             middle = min(tiles, key=lambda t: abs(t["row"] - manifest["rows"] // 2) + abs(t["col"] - manifest["cols"] // 2))
             points = [(middle["x"], middle["y"])]
-        send_chat("clean")  # no labels in these shots
+        send_command("clean")  # no labels in these shots
         settle(0.5)
         for n, (x, y) in enumerate(points, start=1):
-            send_chat(f"look {x:.1f} {y:.1f}")
+            send_command(f"look {x:.1f} {y:.1f}")
             settle(1.0)
             for k, entry in enumerate(os.environ.get("HRS_PROBE_TILE_PATH", "tile:0.5").split(";")):
                 cmds, wait = entry.rsplit(":", 1)
                 given, _, cmds = cmds.rpartition("=")
                 if "@" not in cmds:
-                    send_chat(f"look {x + 100:.1f} {y:.1f}")  # arrive afresh
+                    send_command(f"look {x + 100:.1f} {y:.1f}")  # arrive afresh
                     settle(1.0)
                 acked = True
                 for cmd in cmds.split(","):
@@ -119,16 +117,16 @@ def probe_sky(session, manifest: dict, out: Path) -> None:
         log(f"  {name}: " + "; ".join(parts))
 
     def run() -> None:
-        send_chat(f"tile {edge['index']} {edge['x']:.2f} {edge['y']:.2f}")
+        send_command(f"tile {edge['index']} {edge['x']:.2f} {edge['y']:.2f}")
         settle(2.0)
-        send_chat("clean")
+        send_command("clean")
         settle(0.5)
         sequence = os.environ.get("HRS_SKY_SEQUENCE") or "start:0|black 0:2.5|white 0:2.5|magenta 0:2.5|lime 0:2.5|none 0:2.5"
         previous = None
         for k, item in enumerate(sequence.split("|")):
             command, wait = item.rsplit(":", 1)
             if command not in ("start", previous):
-                send_chat(f"sky {command}")
+                send_command(f"sky {command}")
             settle(float(wait))
             shot(f"{k:02d}-{command.replace(' ', '-layer')}-{wait}s")
             previous = command
@@ -262,131 +260,4 @@ def probe_waits(session, manifest: dict, out: Path) -> None:
         sky_layers.capture(session, manifest, out.parent, measured, keep=0.8, folder_name="sky-keep08")
     quit_match()
     done(f"probe screenshots in {probe_dir}")
-
-
-def probe_input(session, manifest: dict, out: Path) -> None:
-    """Ways to send the map its commands that a chat box knocked open or shut can't upset: the
-    map's own edit box (capture_script.galaxy's input probe), typed into as key presses or as
-    Unicode text, read every 1/16 s or on its dialog events; whether Unicode text reaches the game
-    as key presses (where a stray one would be a hotkey); whether the box keeps the keyboard after
-    an alt-tab. Each way is timed (ms from typing to the strip's answer) against the chat. The
-    findings are logged and written to probe-input/input-probe.json."""
-    probe_dir = out.parent / "probe-input"
-    probe_dir.mkdir(exist_ok=True)
-    rounds = 8
-    results: dict = {}
-
-    def next_seq() -> int:
-        session._seq = session._seq % 255 + 1
-        return session._seq
-
-    def answered(seq: int, timeout: float = 2.0) -> bool:
-        return step(lambda: session.wait_for(lambda st: st.seq == seq, timeout), "waiting for the answer") is not None
-
-    def keys_of(text: str) -> list[str]:
-        return ["space" if ch == " " else ch for ch in text]
-
-    def strip() -> dict:
-        status = step(session.status, "reading the strip")
-        return {"keys": status.opening_cuts, "events": status.cleared_since_ready} if status else {"keys": None, "events": None}
-
-    def timed(name: str, send) -> int:
-        """`rounds` pings sent with send(text); how many were answered (the times in results)."""
-        times = []
-        for _ in range(rounds):
-            seq = next_seq()
-            started = time.time()
-            send(f"ping {seq}.")
-            ok = answered(seq)
-            times.append(round((time.time() - started) * 1000) if ok else None)
-            settle(0.1)
-        got = sorted(t for t in times if t is not None)
-        results[name] = {"answered": len(got), "of": rounds, "ms": times,
-                         "median": got[len(got) // 2] if got else None, "max": got[-1] if got else None}
-        log(f"  {name}: {len(got)} of {rounds} answered" + (f", median {got[len(got) // 2]} ms, max {got[-1]} ms" if got else ""))
-        return len(got)
-
-    def in_box(text: str, unicode: bool = False) -> bool:
-        """One command typed into the box; whether the strip answered."""
-        seq = next_seq()
-        (type_unicode if unicode else lambda t: type_burst(keys_of(t)))(f"{text} {seq}.")
-        return answered(seq)
-
-    log("input probe: the chat, for comparison")
-    times = []
-    for _ in range(rounds):
-        started = time.time()
-        ok = step(lambda: session.send("refitwait 0.1", timeout=2.0, sends=1), "a chat command") is not None
-        times.append(round((time.time() - started) * 1000) if ok else None)
-        settle(0.1)
-    got = sorted(t for t in times if t is not None)
-    results["chat"] = {"answered": len(got), "of": rounds, "ms": times, "median": got[len(got) // 2] if got else None, "max": got[-1] if got else None}
-    log(f"  chat: {len(got)} of {rounds} answered" + (f", median {got[len(got) // 2]} ms, max {got[-1]} ms" if got else ""))
-
-    log("input probe: does input reach the game as a key press? (the backslash key, counted by the map)")
-    step(lambda: session.send("inputkeys"), "counting the backslash key")
-    before = strip()["keys"]
-    type_burst(["\\"])
-    settle(0.5)
-    pressed = strip()["keys"]
-    type_unicode("\\")
-    settle(0.5)
-    typed = strip()["keys"]
-    counted = lambda a, b: None if a is None or b is None else (b - a) % 16  # noqa: E731
-    results["keys"] = {"key press counted": counted(before, pressed), "unicode counted": counted(pressed, typed)}
-    log(f"  a key press: counted {counted(before, pressed)} time(s); Unicode text: counted {counted(pressed, typed)} time(s)"
-        " (0: Unicode text never acts as a hotkey)")
-
-    log("input probe: the map's edit box, read every 1/16 s")
-    made = step(lambda: session.send("inputbox 1 0"), "making the edit box") is not None
-    frame = step(session.raw_grab, "a shot of the box")
-    Image.fromarray(np.ascontiguousarray(frame[:, : frame.shape[1] // 8])).save(probe_dir / "box.png")
-    results["box made"] = made
-    typed_ok = timed("box, key presses, read every 1/16 s", lambda t: type_burst(keys_of(t))) if made else 0
-    unicode_ok = timed("box, Unicode text, read every 1/16 s", type_unicode) if made else 0
-    if typed_ok or unicode_ok:
-        before = strip()["keys"]
-        type_burst(["\\"])
-        settle(0.5)
-        results["keys"]["key press counted with the box focused"] = counted(before, strip()["keys"])
-        log(f"  a key press while the box has the keyboard: counted {results['keys']['key press counted with the box focused']} time(s) by the game")
-        # Commands outside the timings go as Unicode text when that reaches the box and the game
-        # doesn't take it as key presses: one that misses the box then sets nothing off.
-        unicode = bool(unicode_ok) and (results["keys"]["unicode counted"] == 0 or not typed_ok)
-
-        def set_mode(mode: int, refocus: int) -> bool:
-            """Through the box; if it has lost the keyboard, through the chat, which gives it back."""
-            return in_box(f"mode {mode} {refocus}", unicode) or step(lambda: session.send(f"inputbox {mode} {refocus}"), "the edit box's mode") is not None
-
-        log("input probe: after an alt-tab, without and with the map asking for the keyboard again")
-        for refocus in (0, 1):
-            set_mode(1, refocus)
-            alt_tab()
-            time.sleep(1.5)
-            away = not foreground_is_game()
-            bring_game_to_front()
-            time.sleep(1.0)
-            game_control.wait_for_game()
-            ok = in_box("ping", unicode)
-            results[f"after alt-tab, refocus {refocus}"] = {"switched away": away, "answered": ok}
-            log(f"  refocus {refocus}: {'switched away' if away else 'the alt-tab did not switch away'}; the box {'took' if ok else 'did not take'} the next command")
-
-        log("input probe: the box read on its dialog events instead")
-        results["event types seen while polling"] = [k for k in range(8) if (strip()["events"] or 0) >> k & 1]
-        if set_mode(2, 0):
-            send = type_unicode if unicode else (lambda t: type_burst(keys_of(t)))
-            timed("box, " + ("Unicode text" if unicode else "key presses") + ", on its events", send)
-        else:
-            log("  couldn't switch the box to its events")
-        results["event types seen"] = [k for k in range(8) if (strip()["events"] or 0) >> k & 1]
-        log(f"  dialog event types that fired on the box: {results['event types seen'] or 'none'}")
-    else:
-        log("  the box took no input; the alt-tab and event tests are skipped")
-    # The box goes before the quit: while it has the keyboard, Enter doesn't open the chat box, and
-    # a "quit" sent as chat lands in the box instead.
-    if made and not in_box("close", unicode):
-        warn("the edit box didn't take \"close\"; leaving may need doing by hand (Esc, Quit)")
-    quit_match()
-    (probe_dir / "input-probe.json").write_text(json.dumps(results, indent=2))
-    done(f"input probe findings in {probe_dir / 'input-probe.json'}")
 

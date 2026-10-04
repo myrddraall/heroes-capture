@@ -1,6 +1,7 @@
 //--------------------------------------------------------------------------------------------------
 // Map capture (injected by heroes-capture)
-// Chat "tile <n> <x> <y>" moves the camera to tile n; the status strip reports when it is done.
+// "tile <n> <x> <y>" (typed into the command box) moves the camera to tile n; the status strip
+// reports when it is done.
 //--------------------------------------------------------------------------------------------------
 const bool hrsCap_hideStructures = ${hide_structures};
 const fixed hrsCap_distance = ${distance};
@@ -23,7 +24,6 @@ trigger hrsCap_gt_BgSpeed;
 trigger hrsCap_gt_Unbound;
 trigger hrsCap_gt_RefitWait;
 trigger hrsCap_gt_HideMap;
-trigger hrsCap_gt_KeyBlack;
 trigger hrsCap_gt_Quiet;
 fixed hrsCap_refitWait = 0.1;  // real seconds the lighting-refit look is held before each tile (chat "refitwait"; 0.25 until the waits probe showed shorter changes nothing but the effects that animate anyway)
 bool hrsCap_unbound = false;  // chat "unbound": the camera may go anywhere on the map (tiles past the camera bounds)
@@ -72,9 +72,6 @@ int hrsCap_statusBackdropDialog = c_invalidDialogId;
 int hrsCap_statusFiller = c_invalidDialogControlId;
 int hrsCap_seq = 0;
 int hrsCap_tick = 0;
-bool hrsCap_inProbe = false;  // the input probe is running (input_probe.galaxy, in a map prepared with --input-probe)
-int hrsCap_inEvents = 0;  // input probe: bit k set once dialog event type k fired on its box
-int hrsCap_inKeys = 0;  // input probe: backslash presses the game saw as a key
 int hrsCap_statusParity = 0;
 int hrsCap_statusPlayer = 1;
 
@@ -149,16 +146,9 @@ void hrsCap_StatusDraw () {
     hrsCap_StatusBits(53, 1, hrsCap_tick);
     hrsCap_StatusBits(54, 1, BoolToInt(hrsCap_ready));
     hrsCap_StatusBits(55, 16, hrsCap_mapId);
-    if (hrsCap_inProbe) {  // the input probe's findings in these two fields instead (see the input probe)
-        hrsCap_StatusBits(73, 8, hrsCap_inEvents);
-        hrsCap_StatusBits(81, 1, BoolToInt(hrsCap_introOn));
-        hrsCap_StatusBits(82, 4, ModI(hrsCap_inKeys, 16));
-    }
-    else {
-        hrsCap_StatusBits(73, 8, MinI(255, hrsCap_clearedSinceReady));
-        hrsCap_StatusBits(81, 1, BoolToInt(hrsCap_introOn));
-        hrsCap_StatusBits(82, 4, MinI(15, hrsCap_openingCuts));
-    }
+    hrsCap_StatusBits(73, 8, MinI(255, hrsCap_clearedSinceReady));
+    hrsCap_StatusBits(81, 1, BoolToInt(hrsCap_introOn));
+    hrsCap_StatusBits(82, 4, MinI(15, hrsCap_openingCuts));
     if (hrsCap_leaving) {
         hrsCap_StatusBits(71, 2, 3);
     }
@@ -176,6 +166,11 @@ void hrsCap_StatusDraw () {
     DialogControlSetPropertyAsColor(hrsCap_statusCtl[hrsCap_statusRows], c_triggerControlPropertyColor, PlayerGroupAll(), Color(0.0, 0.0, 0.0));
 }
 
+// The command being carried out and who sent it (hrsCap_RunCommand sets them): the commands read
+// their words from it, as they once read the chat message.
+string hrsCap_cmd = "";
+int hrsCap_cmdPlayer = 1;
+
 // The sequence number a command carries as its last word (the capture appends it).
 int hrsCap_CommandSeq () {
     string lv_s;
@@ -183,7 +178,7 @@ int hrsCap_CommandSeq () {
     string lv_last;
     int lv_n;
 
-    lv_s = EventChatMessage(false);
+    lv_s = hrsCap_cmd;
     lv_last = "";
     lv_n = 1;
     for ( ; lv_n <= 8 ; lv_n += 1 ) {
@@ -198,7 +193,7 @@ int hrsCap_CommandSeq () {
 
 // Called at the end of a command, once its work is done: the strip shows its sequence number.
 void hrsCap_Ack () {
-    hrsCap_statusPlayer = EventPlayer();
+    hrsCap_statusPlayer = hrsCap_cmdPlayer;
     hrsCap_seq = hrsCap_CommandSeq();
     hrsCap_StatusDraw();
 }
@@ -238,6 +233,118 @@ void hrsCap_StatusInit () {
     hrsCap_statusPlayer = hrsCap_LocalPlayer();
     hrsCap_StatusDraw();
     DialogSetVisible(hrsCap_status, PlayerGroupAll(), true);
+}
+
+//--------------------------------------------------------------------------------------------------
+// The command box: the capture types each command into an edit box of the map's own, in the
+// strip's column (blanked from every shot), as Unicode text ending in ";": "tile 3 12.5 30.25 17;".
+// Text input never acts as a hotkey wherever it lands, and unlike the chat box, which opens and
+// closes on Enter and loses its state when the game loses focus, the box has none to lose (the
+// input probe measured it: about 90 ms from typing to the strip's answer, against about 230 ms
+// through chat, and it kept the keyboard after an alt-tab). Read when its text changes (dialog
+// event type 5, a number: its name isn't in Blizzard's code) and by the sweep as a backstop; the
+// last complete command in it is carried out (earlier ones the capture has given up on), and the
+// box emptied. Until the first command arrives the sweep keeps asking for the keyboard for it
+// (the match is starting); after that, never (the player's own menus keep theirs). The chat
+// command "focus <seq> ;" gives it the keyboard back if it ever lost it (the capture sends it
+// when a command goes unanswered; if the box had the keyboard after all, the text lands in it and
+// is a command too).
+//--------------------------------------------------------------------------------------------------
+int hrsCap_boxDialog = c_invalidDialogId;
+int hrsCap_box = c_invalidDialogControlId;
+bool hrsCap_boxUsed = false;  // a command has come through the box
+trigger hrsCap_gt_BoxChanged;
+trigger hrsCap_gt_Focus;
+
+// A command: its first word picks the trigger, run as a thread of its own (a tile waits for the
+// camera), with the command and the sender set for it.
+void hrsCap_RunCommand (string lp_text, int lp_player) {
+    string lv_word;
+    trigger lv_t;
+
+    hrsCap_cmd = lp_text;
+    hrsCap_cmdPlayer = lp_player;
+    lv_word = StringWord(lp_text, 1);
+    lv_t = null;
+    if ((lv_word == "tile")) { lv_t = hrsCap_gt_Tile; }
+    else if ((lv_word == "clean")) { lv_t = hrsCap_gt_Clean; }
+    else if ((lv_word == "black")) { lv_t = hrsCap_gt_Black; }
+    else if ((lv_word == "sky")) { lv_t = hrsCap_gt_Sky; }
+    else if ((lv_word == "move")) { lv_t = hrsCap_gt_Move; }
+    else if ((lv_word == "look")) { lv_t = hrsCap_gt_Look; }
+    else if ((lv_word == "clip")) { lv_t = hrsCap_gt_Clip; }
+    else if ((lv_word == "hidemap")) { lv_t = hrsCap_gt_HideMap; }
+    else if ((lv_word == "pause")) { lv_t = hrsCap_gt_Pause; }
+    else if ((lv_word == "refitwait")) { lv_t = hrsCap_gt_RefitWait; }
+    else if ((lv_word == "unbound")) { lv_t = hrsCap_gt_Unbound; }
+    else if ((lv_word == "bgspeed")) { lv_t = hrsCap_gt_BgSpeed; }
+    else if ((lv_word == "quit")) { lv_t = hrsCap_gt_Quit; }
+    if ((lv_t != null)) {
+        TriggerExecute(lv_t, false, false);
+    }
+    else {
+        hrsCap_Ack();  // "focus", or a word the map doesn't know: answered all the same
+    }
+}
+
+// The box read: its last complete command carried out, the box emptied.
+void hrsCap_ReadBox () {
+    string lv_s;
+    string lv_last;
+    int lv_end;
+
+    if ((hrsCap_box == c_invalidDialogControlId)) {
+        return;
+    }
+    lv_s = DialogControlGetPropertyAsString(hrsCap_box, c_triggerControlPropertyEditText, hrsCap_LocalPlayer());
+    lv_end = StringFind(lv_s, ";", c_stringCase);
+    if ((lv_end <= 0)) {
+        return;
+    }
+    lv_last = "";
+    while ((lv_end > 0)) {
+        lv_last = StringSub(lv_s, 1, (lv_end - 1));
+        lv_s = StringSub(lv_s, (lv_end + 1), StringLength(lv_s));
+        lv_end = StringFind(lv_s, ";", c_stringCase);
+    }
+    DialogControlSetPropertyAsString(hrsCap_box, c_triggerControlPropertyEditText, PlayerGroupAll(), "");
+    hrsCap_boxUsed = true;
+    hrsCap_RunCommand(lv_last, hrsCap_LocalPlayer());
+}
+
+bool hrsCap_gt_BoxChanged_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    if ((EventDialogControl() == hrsCap_box)) {
+        hrsCap_ReadBox();
+    }
+    return true;
+}
+
+// Chat "focus <seq> ;": the keyboard back to the box, answered.
+bool hrsCap_gt_Focus_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    hrsCap_cmd = StringReplace(EventChatMessage(false), ";", "", c_stringReplaceAll);
+    hrsCap_cmdPlayer = EventPlayer();
+    DialogControlRequestFocus(hrsCap_box, PlayerGroupAll());
+    hrsCap_Ack();
+    return true;
+}
+
+void hrsCap_BoxInit () {
+    hrsCap_boxDialog = DialogCreate((hrsCap_statusCellW * 2), 30, c_anchorBottomLeft, 0, 40, false);
+    hrsCap_box = DialogControlCreate(hrsCap_boxDialog, c_triggerControlTypeEditBox);
+    DialogControlSetSize(hrsCap_box, PlayerGroupAll(), (hrsCap_statusCellW * 2), 30);
+    DialogControlSetPosition(hrsCap_box, PlayerGroupAll(), c_anchorTopLeft, 0, 0);
+    DialogSetVisible(hrsCap_boxDialog, PlayerGroupAll(), true);
+    hrsCap_gt_BoxChanged = TriggerCreate("hrsCap_gt_BoxChanged_Func");
+    TriggerAddEventDialogControl(hrsCap_gt_BoxChanged, c_playerAny, hrsCap_box, 5);  // text changed (the input probe saw it fire as type 5)
+    hrsCap_gt_Focus = TriggerCreate("hrsCap_gt_Focus_Func");
+    TriggerAddEventChatMessage(hrsCap_gt_Focus, c_playerAny, "focus", false);
+    DialogControlRequestFocus(hrsCap_box, PlayerGroupAll());
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -538,6 +645,10 @@ ${skip_intro_line}    hrsCap_HideLabels();
         libNtve_gf_SendActorMessageToGameRegion(${map_region}, "AnimSetPausedAll");
     }
     hrsCap_introOn = hrsCap_IntroPlaying();
+    hrsCap_ReadBox();  // a backstop for a missed text-changed event
+    if (!hrsCap_boxUsed && (hrsCap_box != c_invalidDialogControlId)) {
+        DialogControlRequestFocus(hrsCap_box, PlayerGroupAll());  // the match starting: until the first command
+    }
     hrsCap_tick = (1 - hrsCap_tick);
     hrsCap_StatusDraw();
     return true;
@@ -557,8 +668,8 @@ bool hrsCap_gt_Tile_Func (bool testConds, bool runActions) {
     int lv_index;
     string lv_xs;
 
-    lv_index = StringToInt(StringWord(EventChatMessage(false), 2));
-    lv_xs = StringWord(EventChatMessage(false), 3);
+    lv_index = StringToInt(StringWord(hrsCap_cmd, 2));
+    lv_xs = StringWord(hrsCap_cmd, 3);
     if ((lv_index < 0) || (lv_index > 999) || ((lv_xs == "") && (lv_index >= hrsCap_tileCount))) {
         return true;
     }
@@ -573,7 +684,7 @@ bool hrsCap_gt_Tile_Func (bool testConds, bool runActions) {
     hrsCap_currentTile = lv_index;
     if ((lv_xs != "")) {
         hrsCap_curX = StringToFixed(lv_xs);
-        hrsCap_curY = StringToFixed(StringWord(EventChatMessage(false), 4));
+        hrsCap_curY = StringToFixed(StringWord(hrsCap_cmd, 4));
     }
     else {
         hrsCap_curX = hrsCap_tileX[lv_index];
@@ -583,15 +694,15 @@ bool hrsCap_gt_Tile_Func (bool testConds, bool runActions) {
     hrsCap_LiftBounds();
     // The normal camera at the tile first, a few frames, so the game refits its lighting there
     // (see hrsCap_NormalCamera); then the scene and the capture camera.
-    CameraPan(EventPlayer(), Point(hrsCap_curX, hrsCap_curY), 0.0, -1, 10.0, false);
-    hrsCap_NormalCamera(EventPlayer());
+    CameraPan(hrsCap_cmdPlayer, Point(hrsCap_curX, hrsCap_curY), 0.0, -1, 10.0, false);
+    hrsCap_NormalCamera(hrsCap_cmdPlayer);
     Wait(hrsCap_refitWait, c_timeReal);  // real time: a map that holds game time still (an arena's selection phase) would never return
     if ((hrsCap_currentTile != lv_index)) {
         return true;  // another tile was asked for meanwhile
     }
     hrsCap_Scene();
-    CameraPan(EventPlayer(), Point(hrsCap_curX, hrsCap_curY), 0.0, -1, 10.0, false);
-    hrsCap_statusPlayer = EventPlayer();
+    CameraPan(hrsCap_cmdPlayer, Point(hrsCap_curX, hrsCap_curY), 0.0, -1, 10.0, false);
+    hrsCap_statusPlayer = hrsCap_cmdPlayer;
     hrsCap_WaitCameraStill();
     if ((hrsCap_currentTile != lv_index)) {
         return true;
@@ -643,23 +754,6 @@ bool hrsCap_gt_Quiet_Func (bool testConds, bool runActions) {
     return true;
 }
 
-// Number pad 5: the black skybox, like "black" but from one key press (no chat box to open, type
-// into and send), for the second shot of every tile. A key carries no sequence number: the strip
-// keeps the tile's and shows the sky as black, which is what the capture waits for (and it falls
-// back to "black" if the key went missing).
-bool hrsCap_gt_KeyBlack_Func (bool testConds, bool runActions) {
-    if (!runActions) {
-        return true;
-    }
-    GameSetBackground(0, "HrsSkyBlack", 100.0);
-    hrsCap_skyState = 2;
-    TransmissionClearGroup(PlayerGroupAll());
-    UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
-    hrsCap_statusPlayer = EventPlayer();
-    hrsCap_StatusDraw();
-    return true;
-}
-
 // "sky <colour> [<layer>]" (probes): the solid-colour skybox of that name (sky.py) on layer 0
 // (the camera-fixed skybox, the default) or 1 (c_backgroundTerrain, the terrain-relative
 // parallax layer, which Blizzard's arenas swap). "none" clears the layer, "heaven" is
@@ -674,8 +768,8 @@ bool hrsCap_gt_Sky_Func (bool testConds, bool runActions) {
     if (!runActions) {
         return true;
     }
-    lv_colour = StringWord(EventChatMessage(false), 2);
-    lv_layer = StringToInt(StringWord(EventChatMessage(false), 3));
+    lv_colour = StringWord(hrsCap_cmd, 2);
+    lv_layer = StringToInt(StringWord(hrsCap_cmd, 3));
     if ((lv_colour == "none")) {
         lv_model = "";
     }
@@ -707,7 +801,7 @@ bool hrsCap_gt_Pause_Func (bool testConds, bool runActions) {
     if (!runActions) {
         return true;
     }
-    if ((StringWord(EventChatMessage(false), 2) == "0")) {
+    if ((StringWord(hrsCap_cmd, 2) == "0")) {
         libNtve_gf_SendActorMessageToGameRegion(${map_region}, "AnimSetPausedAll 0");
         UnitPauseAll(false);
     }
@@ -727,16 +821,16 @@ bool hrsCap_gt_Move_Func (bool testConds, bool runActions) {
     if (!runActions) {
         return true;
     }
-    lv_index = StringToInt(StringWord(EventChatMessage(false), 2));
+    lv_index = StringToInt(StringWord(hrsCap_cmd, 2));
     hrsCap_currentTile = lv_index;
-    hrsCap_curX = StringToFixed(StringWord(EventChatMessage(false), 3));
-    hrsCap_curY = StringToFixed(StringWord(EventChatMessage(false), 4));
-    CameraPan(EventPlayer(), Point(hrsCap_curX, hrsCap_curY), 0.0, -1, 10.0, false);
-    hrsCap_NormalCamera(EventPlayer());
+    hrsCap_curX = StringToFixed(StringWord(hrsCap_cmd, 3));
+    hrsCap_curY = StringToFixed(StringWord(hrsCap_cmd, 4));
+    CameraPan(hrsCap_cmdPlayer, Point(hrsCap_curX, hrsCap_curY), 0.0, -1, 10.0, false);
+    hrsCap_NormalCamera(hrsCap_cmdPlayer);
     Wait(0.25, c_timeReal);
-    hrsCap_ApplyCamera(EventPlayer());
-    CameraPan(EventPlayer(), Point(hrsCap_curX, hrsCap_curY), 0.0, -1, 10.0, false);
-    hrsCap_statusPlayer = EventPlayer();
+    hrsCap_ApplyCamera(hrsCap_cmdPlayer);
+    CameraPan(hrsCap_cmdPlayer, Point(hrsCap_curX, hrsCap_curY), 0.0, -1, 10.0, false);
+    hrsCap_statusPlayer = hrsCap_cmdPlayer;
     hrsCap_WaitCameraStill();
     hrsCap_Ack();
     return true;
@@ -750,9 +844,9 @@ bool hrsCap_gt_Look_Func (bool testConds, bool runActions) {
     if (!runActions) {
         return true;
     }
-    lv_x = StringToFixed(StringWord(EventChatMessage(false), 2));
-    lv_y = StringToFixed(StringWord(EventChatMessage(false), 3));
-    CameraPan(EventPlayer(), Point(lv_x, lv_y), 0.0, -1, 10.0, false);
+    lv_x = StringToFixed(StringWord(hrsCap_cmd, 2));
+    lv_y = StringToFixed(StringWord(hrsCap_cmd, 3));
+    CameraPan(hrsCap_cmdPlayer, Point(lv_x, lv_y), 0.0, -1, 10.0, false);
     hrsCap_Ack();
     return true;
 }
@@ -764,8 +858,8 @@ bool hrsCap_gt_Clip_Func (bool testConds, bool runActions) {
     if (!runActions) {
         return true;
     }
-    CameraSetValue(EventPlayer(), c_cameraValueNearClip, StringToFixed(StringWord(EventChatMessage(false), 2)), 0.0, -1, 10.0);
-    CameraSetValue(EventPlayer(), c_cameraValueFarClip, StringToFixed(StringWord(EventChatMessage(false), 3)), 0.0, -1, 10.0);
+    CameraSetValue(hrsCap_cmdPlayer, c_cameraValueNearClip, StringToFixed(StringWord(hrsCap_cmd, 2)), 0.0, -1, 10.0);
+    CameraSetValue(hrsCap_cmdPlayer, c_cameraValueFarClip, StringToFixed(StringWord(hrsCap_cmd, 3)), 0.0, -1, 10.0);
     hrsCap_Ack();
     return true;
 }
@@ -776,8 +870,8 @@ bool hrsCap_gt_HideMap_Func (bool testConds, bool runActions) {
     if (!runActions) {
         return true;
     }
-    CameraSetValue(EventPlayer(), c_cameraValueNearClip, StringToFixed(StringWord(EventChatMessage(false), 2)), 0.0, -1, 10.0);
-    CameraSetValue(EventPlayer(), c_cameraValueFarClip, 5000.0, 0.0, -1, 10.0);
+    CameraSetValue(hrsCap_cmdPlayer, c_cameraValueNearClip, StringToFixed(StringWord(hrsCap_cmd, 2)), 0.0, -1, 10.0);
+    CameraSetValue(hrsCap_cmdPlayer, c_cameraValueFarClip, 5000.0, 0.0, -1, 10.0);
     hrsCap_bgSpeed = 1.0;
     GameSetBackground(0, "", hrsCap_bgSpeed);
     hrsCap_skyState = 0;
@@ -790,7 +884,7 @@ bool hrsCap_gt_RefitWait_Func (bool testConds, bool runActions) {
     if (!runActions) {
         return true;
     }
-    hrsCap_refitWait = StringToFixed(StringWord(EventChatMessage(false), 2));
+    hrsCap_refitWait = StringToFixed(StringWord(hrsCap_cmd, 2));
     hrsCap_Ack();
     return true;
 }
@@ -812,7 +906,7 @@ bool hrsCap_gt_BgSpeed_Func (bool testConds, bool runActions) {
     if (!runActions) {
         return true;
     }
-    hrsCap_bgSpeed = StringToFixed(StringWord(EventChatMessage(false), 2));
+    hrsCap_bgSpeed = StringToFixed(StringWord(hrsCap_cmd, 2));
     hrsCap_Ack();
     return true;
 }
@@ -831,48 +925,34 @@ bool hrsCap_gt_Quit_Func (bool testConds, bool runActions) {
     Wait(0.25, c_timeReal);
     hrsCap_Restore();
     Wait(0.5, c_timeReal);
-${arena_quit_line}    UnitKill(libGame_gv_teams[libGame_gf_TeamNumberOfPlayer(EventPlayer())].lv_core);
+${arena_quit_line}    UnitKill(libGame_gv_teams[libGame_gf_TeamNumberOfPlayer(hrsCap_cmdPlayer)].lv_core);
     return true;
 }
 
-${input_probe}void hrsCap_Init () {
+void hrsCap_Init () {
     hrsCap_InitTiles();
     hrsCap_StatusInit();
-    // (Chat events match a word anywhere in the message, so "sky black" also runs "black";
-    // the order the triggers are created in is kept as it was tested.)
+    // The commands' triggers, run by hrsCap_RunCommand (the first word of what was typed into the
+    // command box picks one).
     hrsCap_gt_Clean = TriggerCreate("hrsCap_gt_Clean_Func");
-    TriggerAddEventChatMessage(hrsCap_gt_Clean, c_playerAny, "clean", false);
     hrsCap_gt_Move = TriggerCreate("hrsCap_gt_Move_Func");
-    TriggerAddEventChatMessage(hrsCap_gt_Move, c_playerAny, "move", false);
     hrsCap_gt_Tile = TriggerCreate("hrsCap_gt_Tile_Func");
-    TriggerAddEventChatMessage(hrsCap_gt_Tile, c_playerAny, "tile", false);
     hrsCap_gt_Pause = TriggerCreate("hrsCap_gt_Pause_Func");
-    TriggerAddEventChatMessage(hrsCap_gt_Pause, c_playerAny, "pause", false);
     hrsCap_gt_Sky = TriggerCreate("hrsCap_gt_Sky_Func");
-    TriggerAddEventChatMessage(hrsCap_gt_Sky, c_playerAny, "sky", false);
     hrsCap_gt_Black = TriggerCreate("hrsCap_gt_Black_Func");
-    TriggerAddEventChatMessage(hrsCap_gt_Black, c_playerAny, "black", false);
     hrsCap_gt_Clip = TriggerCreate("hrsCap_gt_Clip_Func");
-    TriggerAddEventChatMessage(hrsCap_gt_Clip, c_playerAny, "clip", false);
-    hrsCap_gt_KeyBlack = TriggerCreate("hrsCap_gt_KeyBlack_Func");
-    TriggerAddEventKeyPressed(hrsCap_gt_KeyBlack, c_playerAny, c_keyNumPad5, true, c_keyModifierStateIgnore, c_keyModifierStateIgnore, c_keyModifierStateIgnore);
     hrsCap_gt_HideMap = TriggerCreate("hrsCap_gt_HideMap_Func");
-    TriggerAddEventChatMessage(hrsCap_gt_HideMap, c_playerAny, "hidemap", false);
     hrsCap_gt_RefitWait = TriggerCreate("hrsCap_gt_RefitWait_Func");
-    TriggerAddEventChatMessage(hrsCap_gt_RefitWait, c_playerAny, "refitwait", false);
     hrsCap_gt_Unbound = TriggerCreate("hrsCap_gt_Unbound_Func");
-    TriggerAddEventChatMessage(hrsCap_gt_Unbound, c_playerAny, "unbound", false);
     hrsCap_gt_BgSpeed = TriggerCreate("hrsCap_gt_BgSpeed_Func");
-    TriggerAddEventChatMessage(hrsCap_gt_BgSpeed, c_playerAny, "bgspeed", false);
     hrsCap_gt_Look = TriggerCreate("hrsCap_gt_Look_Func");
-    TriggerAddEventChatMessage(hrsCap_gt_Look, c_playerAny, "look", false);
-${input_probe_init}    hrsCap_gt_Quit = TriggerCreate("hrsCap_gt_Quit_Func");
-    TriggerAddEventChatMessage(hrsCap_gt_Quit, c_playerAny, "quit", true);
+    hrsCap_gt_Quit = TriggerCreate("hrsCap_gt_Quit_Func");
     hrsCap_gt_FastForward = TriggerCreate("hrsCap_gt_FastForward_Func");
     libCore_gv_bALOpenTheGatesDelay = hrsCap_gatesDelay;  // read when GameLib starts its countdown
     hrsCap_gt_Sweep = TriggerCreate("hrsCap_gt_Sweep_Func");
     TriggerAddEventTimePeriodic(hrsCap_gt_Sweep, 0.25, c_timeReal);
     hrsCap_gt_Quiet = TriggerCreate("hrsCap_gt_Quiet_Func");
     TriggerAddEventTimePeriodic(hrsCap_gt_Quiet, 0.0625, c_timeReal);
+    hrsCap_BoxInit();
 }
 

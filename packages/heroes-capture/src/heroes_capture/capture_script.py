@@ -22,7 +22,6 @@ from string import Template
 from . import js_json
 
 TEMPLATE = Path(__file__).with_name("capture_script.galaxy")
-INPUT_PROBE = Path(__file__).with_name("input_probe.galaxy")  # the input probe's part, only with input_probe
 
 # The status strip (hrsCap_Status* in the script, read by status.py): cells and size.
 STATUS_CELLS = 89  # 88 bits plus a fixed black cell at the top of the second column
@@ -58,7 +57,6 @@ def capture_script(
     hide_doodads: list[str] = (),
     keep_intro: bool = False,
     arena: bool = False,
-    input_probe: bool = False,
 ) -> str:
     """The script for one prepared map.
 
@@ -78,8 +76,7 @@ def capture_script(
     hide_doodads: doodad types to hide (cloud layers placed in the map as doodads). keep_intro:
     let the intro cutscene play out (diagnostic). arena: the map plays rounds (its script includes
     LibAREN: Punisher Arena), so a core killed ends only the round, and "quit" first gives the
-    other team all but its last round win. input_probe: the input probe's edit box and commands
-    (input_probe.galaxy; probes.py probe_input), kept out of every other map's script.
+    other team all but its last round win.
     """
     map_sky = map_sky or {"fixed": None, "parallax": None}
     if lens:
@@ -118,7 +115,7 @@ def capture_script(
         f'\n    libNtve_gf_ShowHideDoodadsInRegion(false, RegionEntireMap(), "{kind}");  // a cloud layer, placed as doodads'
         for kind in hide_doodads
     )
-    arena_quit_line = ("    libAREN_gv_aRM_RoundScore[libGame_gf_EnemyTeam(libGame_gf_TeamNumberOfPlayer(EventPlayer()))]"
+    arena_quit_line = ("    libAREN_gv_aRM_RoundScore[libGame_gf_EnemyTeam(libGame_gf_TeamNumberOfPlayer(hrsCap_cmdPlayer))]"
                        " = libAREN_gv_victoriesCount - 1;\n") if arena else ""
     values = {
         "hide_structures": "true" if hide_structures else "false",
@@ -150,10 +147,5 @@ def capture_script(
         "cut_short_lines": "\n".join(f"        hrsCap_CutShort({t});" for t in opening_timers),
         "skip_intro_line": "" if keep_intro else "    hrsCap_SkipIntro();\n",
         "arena_quit_line": arena_quit_line,
-        "input_probe": "",
-        "input_probe_init": "",
     }
-    if input_probe:
-        block, init = INPUT_PROBE.read_text(encoding="utf-8").split("//INIT\n")
-        values["input_probe"], values["input_probe_init"] = block, init
     return Template(TEMPLATE.read_text(encoding="utf-8")).substitute(values)
