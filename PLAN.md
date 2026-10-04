@@ -145,8 +145,9 @@ Proposed; the boundaries are chosen before each starts.
    `executable` artifact; the first release. Built: `tools/build_exe.py` makes the one-file program
    from the package (Python, the dependencies, the data files, StormLib and CascLib; on the runner
    CascLib is built with Visual Studio, its runtime linked in); checked as a Linux binary (77 MB,
-   0.8 s to start; prepare and stitch work from it). The first pre-release and a run on the PC are
-   next.
+   0.8 s to start; prepare and stitch work from it); every build runs `heroes-capture self-check`
+   on the fresh executable. The pre-release `0.1.0-feature.injector-python.alpha.0.build.14` (67 MB)
+   rendered Battlefield of Eternity on the PC from the download alone. **Done.**
 5. **Switch over.** The development loop on the PC points here; `tools/map-capture` leaves
    `heroes-replay-stats`.
 
