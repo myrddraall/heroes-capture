@@ -2,15 +2,16 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: render the arena maps (map render --category arena); a map that fails leaves
-rem its working files in tmp\, which come back with the results (pip, when it runs, writes
-rem tmp\setup.log).
+rem Current step: render the arena maps again (--force: Punisher Arena is rendered already) and
+rem close Heroes partway through the tiles: the restarted capture should show its progress and
+rem carry on at the lost tile. A map that fails leaves its working files in tmp\, which come back
+rem with the results (pip, when it runs, writes tmp\setup.log).
 setlocal
 pushd "%~dp0"
 set "PYTHONPATH=%~dp0src"
 rem The tool's dependencies, installed quietly when missing (pip's output in tmp\setup.log).
 py -c "import heroes_capture.cli, numpy, PIL, pyvips, scipy, mss, pydirectinput, dxcam, typer, rich" 2>nul || call :install || goto :copy
-py -m heroes_capture map render --category arena
+py -m heroes_capture map render --category arena --force
 if errorlevel 1 echo.& echo Stopped: the step above failed.
 popd
 
