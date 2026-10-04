@@ -29,7 +29,7 @@ Options:
   --margin <cells>         capture past the camera bounds (lifts them)      (default 0)
   --crop-margin <cells>    the stitched image reaches this far past the camera bounds
                            (or past each arena area, see below)             (default 12)
-  --out <dir>              working folder                                   (default work)
+  --out <dir>              working folder                                   (default tmp)
 """
 
 import json
@@ -57,7 +57,7 @@ def parse_args(argv: list[str]) -> dict:
         "map": None, "structures": "keep", "pxPerCell": 48.0, "screen": {"w": 3840.0, "h": 2160.0},
         "fov": 20.0, "distance": None, "pitch": 90.0, "refitYaw": None, "keep": 0.6, "lens": True,
         "showUi": False, "paintTextures": {}, "keepIntro": False, "margin": 0.0, "cropMargin": 12.0,
-        "out": "work",
+        "out": "tmp",
     }
     numbers = {"--px-per-cell": "pxPerCell", "--fov": "fov", "--distance": "distance", "--pitch": "pitch",
                "--refit-yaw": "refitYaw", "--keep": "keep", "--margin": "margin", "--crop-margin": "cropMargin"}

@@ -1,6 +1,6 @@
 """Stitch captured screenshots into one top-down image of the battleground.
 
-    heroes-capture stitch work/towers-of-doom-structures.json [--tiles]   (heroes-capture map runs it last)
+    heroes-capture stitch tmp/towers-of-doom-structures.json [--tiles] [--output-dir maps]   (heroes-capture map render runs it last)
 
 Each screenshot is anchored where the map script reported its camera (positions.json, written
 by capture.py), and every screenshot is also matched against its right and lower neighbours,
@@ -11,7 +11,8 @@ routed through their overlap where they agree best, near the halfway line, blend
 pixels. Without positions.json, the screenshots are placed by the matches alone and the
 map-to-pixel conversion is fitted from the middle of the map outward.
 
-Writes, next to the tiles folder:
+Writes into <output-dir>/<map id> (maps/towers-of-doom; the map id is the map's name in
+lower case, words joined by hyphens):
   <id>.png          the full image, with transparency where the map lets the void through
                     (matted from each tile's shots over a white and a black skybox, or the
                     black-painted void made transparent)
@@ -36,6 +37,7 @@ from PIL import Image
 
 from . import sky_stitch
 from . import viewer
+from .inject import slug
 from .frames import PNG_COMPRESSION, frame_exists, load_frame
 from .matching import phase_correlate
 from .workers import ordered_map
@@ -684,7 +686,7 @@ def other_areas_removed(rgba: np.ndarray, areas: list, own: int, scale: float, a
     return rgba, int(others.sum())
 
 
-def write_outputs(manifest: dict, base: Path, shots: Shots, layout: Layout, seams: dict, scale: float, ax: float, ay: float, pyramid: bool) -> list[str]:
+def write_outputs(manifest: dict, base: Path, out: Path, shots: Shots, layout: Layout, seams: dict, scale: float, ax: float, ay: float, pyramid: bool) -> list[str]:
     """The image cropped to the camera bounds plus a margin, or further where the map runs on
     past them, and its preview, on-white copy, geo file and pyramid. Several arenas: one image
     each, <id>-<area>.png, without the edges of the arenas next to it (other_areas_removed), so
@@ -729,15 +731,15 @@ def write_outputs(manifest: dict, base: Path, shots: Shots, layout: Layout, seam
             y0 = min(y0, max(0, int(rows_on[0] * 4) - pad))
             y1 = max(y1, min(height, int((rows_on[-1] + 1) * 4) + pad))
         image = pyvips.Image.new_from_array(composed, interpretation="srgb").crop(x0, y0, x1 - x0, y1 - y0)
-        out_png = base.parent / f"{out_id}.png"
+        out_png = out / f"{out_id}.png"
         writes = [
             lambda: image.write_to_file(str(out_png), compression=PNG_COMPRESSION),
-            lambda: image.flatten(background=[48, 48, 48]).thumbnail_image(2048).write_to_file(str(base.parent / f"{out_id}-preview.jpg"), Q=88),
+            lambda: image.flatten(background=[48, 48, 48]).thumbnail_image(2048).write_to_file(str(out / f"{out_id}-preview.jpg"), Q=88),
             # The full image over white, for looking at: transparency is hard to judge by eye.
-            lambda: image.flatten(background=[255, 255, 255]).write_to_file(str(base.parent / f"{out_id}-on-white.jpg"), Q=90),
+            lambda: image.flatten(background=[255, 255, 255]).write_to_file(str(out / f"{out_id}-on-white.jpg"), Q=90),
         ]
         if pyramid:
-            writes.append(lambda: image.dzsave(str(base.parent / f"{out_id}-tiles"), layout="google", suffix=f".png[compression={PNG_COMPRESSION}]", tile_size=256))
+            writes.append(lambda: image.dzsave(str(out / f"{out_id}-tiles"), layout="google", suffix=f".png[compression={PNG_COMPRESSION}]", tile_size=256))
         with stage("writing the map image"), ThreadPoolExecutor(max_workers=len(writes)) as pool:
             for done in [pool.submit(w) for w in writes]:
                 done.result()
@@ -751,22 +753,30 @@ def write_outputs(manifest: dict, base: Path, shots: Shots, layout: Layout, seam
             "originCell": {"x": -(ax - x0) / scale, "y": (ay - y0) / scale},
             "toPixel": "px = (x - originCell.x) * pxPerCell; py = (originCell.y - y) * pxPerCell",
         }
-        (base.parent / f"{out_id}.geo.json").write_text(json.dumps(geo, indent=2))
+        (out / f"{out_id}.geo.json").write_text(json.dumps(geo, indent=2))
         log(f"{x1 - x0}x{y1 - y0} px -> {out_png}")
         if pyramid:
-            log(f"tile pyramid -> {base.parent / f'{out_id}-tiles'}")
+            log(f"tile pyramid -> {out / f'{out_id}-tiles'}")
         written.append(out_id)
     return written
+
+
+def output_folder(output_dir: Path, manifest: dict) -> Path:
+    """<output-dir>/<map id>: where a map's images go."""
+    return output_dir / slug(manifest["map"])
 
 
 def main(argv: list[str]) -> None:
     ap = argparse.ArgumentParser(prog="heroes-capture stitch", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("manifest", type=Path)
     ap.add_argument("--tiles", action="store_true", help="also write a Google Maps style tile pyramid")
+    ap.add_argument("--output-dir", type=Path, default=Path("maps"), help="where the map's folder of images goes (default: maps)")
     args = ap.parse_args(argv)
 
     manifest = json.loads(args.manifest.read_text())
     base = args.manifest.parent / manifest["id"]
+    out = output_folder(args.output_dir, manifest)
+    out.mkdir(parents=True, exist_ok=True)
     set_log_file(base / "log.txt")
     log(f"stitch {manifest['id']}")
     shots = Shots(manifest, base)
@@ -842,8 +852,8 @@ def main(argv: list[str]) -> None:
         (base / "seams.json").write_text(json.dumps(
             {f"{i}-{j}": {"kind": k, "start": st, "path": p.tolist(), "placed": [placed[i].tolist(), placed[j].tolist()]}
              for (i, j), (k, st, p) in seams.items()}))
-    written = write_outputs(manifest, base, shots, layout, seams, scale, ax, ay, args.tiles)
+    written = write_outputs(manifest, base, out, shots, layout, seams, scale, ax, ay, args.tiles)
     # The map's own sky layers and the composites, when the capture shot them.
-    sky_stitch.build(manifest, base, written)
-    viewer.write(base.parent, manifest["id"], manifest["map"], written)
+    sky_stitch.build(manifest, base, out, written)
+    viewer.write(out, manifest["id"], manifest["map"], written)
     log_timings("stitch")

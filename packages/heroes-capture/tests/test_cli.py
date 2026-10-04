@@ -32,24 +32,77 @@ def test_prepare_passes_its_options_through(monkeypatch, tmp_path):
 
 @pytest.fixture(autouse=True)
 def in_a_scratch_folder(monkeypatch, tmp_path):
-    """Commands write work\\heroes-capture.log in the current folder."""
+    """Commands write tmp\\ and maps\\ in the current folder."""
     monkeypatch.chdir(tmp_path)
 
 
-def test_map_render_runs_the_three_steps_with_the_defaults(monkeypatch, tmp_path):
+def render_steps(monkeypatch, tmp_path, fail_stitch=False):
+    """map render with its three steps stood in for: prepare writes the working files the real
+    one would (manifest, prepared map, folder), stitch writes the map's folder."""
     from heroes_capture import inject, stitch
 
     calls = []
-    (tmp_path / "m.json").write_text(json.dumps({"map": "Dragon Shire", "tiles": [{}] * 3, "sky": {"mode": "black"}}))
-    monkeypatch.setattr(inject, "main", lambda argv: calls.append(("prepare", argv)) or tmp_path / "m.json")
+
+    def prepare(argv):
+        calls.append(("prepare", argv))
+        work = tmp_path / argv[argv.index("--out") + 1]
+        work.mkdir(exist_ok=True)
+        (work / "dragon-shire-terrain").mkdir(exist_ok=True)
+        (work / "dragon-shire-terrain.stormmap").write_text("map")
+        manifest = work / "dragon-shire-terrain.json"
+        manifest.write_text(json.dumps({"map": "Dragon Shire", "tiles": [{}] * 3, "sky": {"mode": "black"}}))
+        return manifest.resolve()
+
+    def stitching(argv):
+        calls.append(("stitch", argv))
+        if fail_stitch:
+            raise RuntimeError("stitch failed")
+        out = tmp_path / argv[argv.index("--output-dir") + 1] / "dragon-shire"
+        out.mkdir(parents=True)
+        (out / "dragon-shire-terrain.png").write_text("png")
+
+    monkeypatch.setattr(inject, "main", prepare)
     monkeypatch.setattr(cli, "run_capture", lambda argv: calls.append(("capture", argv)))
-    monkeypatch.setattr(stitch, "main", lambda argv: calls.append(("stitch", argv)))
+    monkeypatch.setattr(stitch, "main", stitching)
+    return calls
+
+
+def test_map_render_runs_the_three_steps_with_the_defaults(monkeypatch, tmp_path):
+    calls = render_steps(monkeypatch, tmp_path)
     result = runner.invoke(cli.app, ["map", "render", "dragon shire", "--structures", "hide", "--fov", "12"])
     assert result.exit_code == 0, result.output
-    assert calls[0] == ("prepare", ["dragon shire", "--structures", "hide", "--fov", "12", "--keep", "0.4"])
-    assert calls[1] == ("capture", [str(tmp_path / "m.json")]) and calls[2] == ("stitch", [str(tmp_path / "m.json"), "--tiles"])
+    manifest = str((tmp_path / "tmp" / "dragon-shire-terrain.json").resolve())
+    assert calls[0] == ("prepare", ["dragon shire", "--structures", "hide", "--fov", "12", "--out", "tmp", "--keep", "0.4"])
+    assert calls[1] == ("capture", [manifest])
+    assert calls[2] == ("stitch", [manifest, "--tiles", "--output-dir", "maps"])
     assert "Dragon Shire (hide structures): 3 tiles planned, black void" in result.output
-    assert (tmp_path / "work" / "heroes-capture.log").exists()
+    assert (tmp_path / "maps" / "dragon-shire" / "dragon-shire-terrain.png").exists()
+    assert "The map is in maps" in result.output
+    assert not (tmp_path / "tmp").exists()  # the working files removed, and their folder
+
+
+def test_map_render_keeps_the_working_files_when_asked(monkeypatch, tmp_path):
+    render_steps(monkeypatch, tmp_path)
+    result = runner.invoke(cli.app, ["map", "render", "dragon shire", "--keep-tmp", "-o", "renders"])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "renders" / "dragon-shire" / "dragon-shire-terrain.png").exists()
+    for name in ("dragon-shire-terrain.json", "dragon-shire-terrain.stormmap", "dragon-shire-terrain", "heroes-capture.log"):
+        assert (tmp_path / "tmp" / name).exists(), name
+
+
+def test_a_failed_map_render_leaves_the_working_files(monkeypatch, tmp_path):
+    render_steps(monkeypatch, tmp_path, fail_stitch=True)
+    result = runner.invoke(cli.app, ["map", "render", "dragon shire"])
+    assert result.exit_code != 0
+    assert (tmp_path / "tmp" / "dragon-shire-terrain.json").exists() and (tmp_path / "tmp" / "heroes-capture.log").exists()
+
+
+def test_clean_up_leaves_other_files_in_tmp(tmp_path):
+    (tmp_path / "tmp").mkdir()
+    (tmp_path / "tmp" / "setup.log").write_text("pip")
+    (tmp_path / "tmp" / "heroes-capture.log").write_text("run")
+    cli.clean_up([tmp_path / "tmp" / "heroes-capture.log"], keep=False)
+    assert [p.name for p in (tmp_path / "tmp").iterdir()] == ["setup.log"]
 
 
 def test_map_rows():

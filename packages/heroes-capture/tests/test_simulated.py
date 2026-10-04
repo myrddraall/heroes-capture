@@ -43,8 +43,9 @@ def test_stitch_of_a_simulated_render(tmp_path):
     result = subprocess.run([sys.executable, "-m", "heroes_capture", "stitch", "test-map.json", "--tiles"], cwd=tmp_path,
                             capture_output=True, text=True, env={"PYTHONPATH": str(PACKAGE / "src")})
     assert result.returncode == 0, result.stderr[-3000:]
+    out = tmp_path / "maps" / "test-map"  # <output-dir>/<map id>, from the map's name "Test Map"
     for name in ("test-map.png", "test-map.geo.json", "test-map-layers.json", "test-map-composite.png",
                  "test-map-viewer/index.html", "test-map-tiles"):
-        assert (tmp_path / name).exists(), name
-    layers = json.loads((tmp_path / "test-map-layers.json").read_text())
+        assert (out / name).exists(), name
+    layers = json.loads((out / "test-map-layers.json").read_text())
     assert {"map", "fixed", "background", "haze"} <= set(layers)

@@ -2,6 +2,7 @@
 
     heroes-capture map render "Battlefield of Eternity"         prepare, capture and stitch a battleground
     heroes-capture map render "Cursed Hollow" --structures hide   bare terrain
+    heroes-capture map render "Dragon Shire" -o D:\\renders        into D:\\renders\\dragon-shire
     heroes-capture map list                                     the game's maps, and which are validated
     heroes-capture --version
 
@@ -26,6 +27,8 @@ PROBES = ("probe_light", "probe_sky", "probe_depth", "probe_waits")
 DISTANCE = "214"  # camera distance: far, so tall objects lean little at the seams
 KEEP = "0.4"  # share of each screenshot used, centred
 VALIDATED = Path(__file__).with_name("validated-maps.json")
+TMP = Path("tmp")  # the working files, in the current folder
+MAPS = Path("maps")  # the default output folder
 PASS_THROUGH = {"allow_extra_args": True, "ignore_unknown_options": True}
 
 app = typer.Typer(
@@ -100,6 +103,24 @@ def log_to(folder: Path) -> None:
     ui.set_log_file(folder / "heroes-capture.log")
 
 
+def clean_up(paths: list[Path], keep: bool) -> None:
+    """A finished command's working files removed, and their folder too once empty; with keep
+    (--keep-tmp), left for diagnosis. A failed command doesn't get here: its files stay."""
+    if keep:
+        ui.done(f"Working files kept in {paths[0].parent}")
+        return
+    ui.close_log_file()
+    for path in paths:
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            path.unlink(missing_ok=True)
+    try:
+        paths[0].parent.rmdir()
+    except OSError:
+        pass  # other files in it
+
+
 # ------------------------------------------------------------------------------------------------
 # map render, map list
 # ------------------------------------------------------------------------------------------------
@@ -115,6 +136,8 @@ def render(
     ctx: typer.Context,
     map: Annotated[str, typer.Argument(help="The map as the game names it (case and punctuation don't matter), or a path to a .stormmap.", show_default=False)],  # noqa: A002
     structures: Annotated[Structures, typer.Option(help="Keep or hide forts, towers, cores and gates.")] = Structures.keep,
+    output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Where the map's folder goes: <output-dir>/<map id>, e.g. maps/dragon-shire.")] = MAPS,
+    keep_tmp: Annotated[bool, typer.Option("--keep-tmp", help="Leave the working files (screenshots, the prepared map, logs) in tmp\\ for diagnosis.")] = False,
     game: Annotated[Optional[str], typer.Option(hidden=True)] = None,  # the install, when it isn't found by itself
     probe_light: Annotated[bool, typer.Option(hidden=True)] = False,  # diagnostics instead of the tiles
     probe_sky: Annotated[bool, typer.Option(hidden=True)] = False,
@@ -124,14 +147,17 @@ def render(
 ) -> None:
     """Prepare, capture and stitch a battleground.
 
-    Writes into work\\ in the current folder. Options after the map that aren't listed here go to the preparing step (heroes-capture prepare --help).
+    The images go to <output-dir>/<map id> (maps\\<map id> in the current folder). The working files go to tmp\\ and are removed once the render finishes, unless --keep-tmp; a failed render leaves them. Options after the map that aren't listed here go to the preparing step (heroes-capture prepare --help).
     """
     map_name = map
     from . import inject, stitch
 
     prepare_options = list(ctx.args)
-    log_to(Path(prepare_options[prepare_options.index("--out") + 1] if "--out" in prepare_options else "work"))
+    work = Path(prepare_options[prepare_options.index("--out") + 1]) if "--out" in prepare_options else TMP
+    log_to(work)
     prepare = [map_name, "--structures", structures.value, *prepare_options]
+    if "--out" not in prepare_options:
+        prepare += ["--out", str(TMP)]
     if "--screen" not in prepare_options and screen_size():
         prepare += ["--screen", screen_size()]
     if not {"--distance", "--fov"} & set(prepare_options):
@@ -141,8 +167,9 @@ def render(
     if show_ui:
         prepare.append("--show-ui")
     with ui.step(f"Preparing {map_name}"):
-        manifest = str(inject.main(prepare))
-    planned = json.loads(Path(manifest).read_text())
+        manifest_path = inject.main(prepare)
+    manifest = str(manifest_path)
+    planned = json.loads(manifest_path.read_text())
     ui.done(f"{planned['map']} ({structures.value} structures): {len(planned['tiles'])} tiles planned, "
             + ("void shot over white and black" if planned["sky"]["mode"] == "matte" else "black void"))
     capture_options = ["--game", game] if game else []
@@ -160,8 +187,10 @@ def render(
     with ui.step(f"Capturing {planned['map']} in the game"):
         run_capture([manifest, *capture_options])
     with ui.step("Stitching"):
-        stitch.main([manifest, "--tiles"])
-    ui.done(f"The images are next to {manifest}")
+        stitch.main([manifest, "--tiles", "--output-dir", str(output_dir)])
+    working = [manifest_path, manifest_path.with_suffix(".stormmap"), manifest_path.with_suffix(""), work / "heroes-capture.log"]
+    clean_up(working, keep_tmp)
+    ui.done(f"The map is in {stitch.output_folder(output_dir, planned)}")
 
 
 def validated_maps() -> dict[str, dict]:
@@ -199,7 +228,9 @@ STATUS_STYLE = {"validated": "[green]✓ validated[/]", "not yet": "[yellow]not 
 
 
 @map_app.command("list")
-def list_maps() -> None:
+def list_maps(
+    keep_tmp: Annotated[bool, typer.Option("--keep-tmp", help="Leave the run's log in tmp\\ for diagnosis.")] = False,
+) -> None:
     """The game's maps by category, and which have been validated.
 
     Battleground: the game's 5v5 maps, the Versus AI / Quick Match / Storm League pool (with the custom-game-only ones: the game's data doesn't tell them apart). Arena and Brawl: the brawl modes' maps. Other: sandboxes, and Try Me Mode and the tutorials, which are unsupported (the game keeps them as folders, not map archives).
@@ -208,7 +239,7 @@ def list_maps() -> None:
     """
     from .game_data import find_install, folder_maps, map_index, open_storage
 
-    log_to(Path("work"))
+    log_to(TMP)
     with ui.step("Reading the game's maps"):
         with open_storage(find_install()) as storage:
             game_maps = {name: entry["category"] for name, entry in map_index(storage).items()}
@@ -231,6 +262,7 @@ def list_maps() -> None:
     console.print(table)
     done = sum(status == "validated" for _, _, status, _, _ in rows)
     console.print(f"{done} of {len(game_maps)} maps validated; {len(unsupported)} unsupported")
+    clean_up([TMP / "heroes-capture.log"], keep_tmp)
 
 
 # ------------------------------------------------------------------------------------------------
@@ -244,7 +276,7 @@ def prepare(ctx: typer.Context) -> None:
     from . import inject
 
     args = list(ctx.args)
-    log_to(Path(args[args.index("--out") + 1] if "--out" in args else "work"))
+    log_to(Path(args[args.index("--out") + 1]) if "--out" in args else TMP)
     print(inject.main(args))
 
 
@@ -277,7 +309,7 @@ def ui_demo() -> None:
     import time
     import warnings
 
-    log_to(Path("work"))
+    log_to(TMP)
     with ui.step("Capturing Demo Map in the game"):
         ui.info("waiting for the map's status strip ...")
         time.sleep(1.5)
@@ -296,12 +328,12 @@ def ui_demo() -> None:
                     print("and to stderr", file=sys.stderr)
                 advance()
                 time.sleep(0.15)
-    ui.done("40 screenshots in work\\demo")
+    ui.done("40 screenshots in tmp\\demo")
     with ui.step("Stitching"):
         for stage in ("matching neighbours", "routing seams", "composing", "writing the map image"):
             ui.info(stage)
             time.sleep(0.8)
-    ui.done("The images are next to work\\demo.json")
+    ui.done("The map is in maps\\demo-map")
 
 
 @app.command("self-check", hidden=True)

@@ -142,6 +142,13 @@ def set_log_file(path: Path) -> None:
     _s.file.flush()
 
 
+def close_log_file() -> None:
+    """The log file closed (before its folder is removed); messages are kept in memory again."""
+    if _s.file:
+        _s.file.close()
+        _s.file = None
+
+
 def _record(kind: str, text: str) -> None:
     line = f"{time.strftime('%H:%M:%S')} {kind:<7} {text}\n"
     if _s.file:

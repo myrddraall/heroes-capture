@@ -20,10 +20,14 @@ heroes-capture-win-x64.exe map render "Battlefield of Eternity"
 heroes-capture-win-x64.exe map list     # the game's maps by category, and which have been validated
 ```
 
-It writes into `work\` in the folder it runs from, including `heroes-capture.log` with every
-message. On a terminal the output is a live view (the step, its status, progress bars; warnings
-print above it); `--log` gives plain log lines instead, the default in CI or when the output
-isn't a terminal; `-v` / `--verbose` adds the detail messages in either.
+A render's images go to `maps\<map id>\` in the folder it runs from (`maps\battlefield-of-eternity\`;
+`-o` / `--output-dir` picks another folder for them). Its working files (the screenshots, the
+prepared map, `heroes-capture.log` with every message) go to `tmp\` and are removed when the render
+finishes; `--keep-tmp` leaves them for diagnosis, and a failed render leaves them too.
+
+On a terminal the output is a live view (the step, its status, progress bars; warnings print
+above it); `--log` gives plain log lines instead, the default in CI or when the output isn't a
+terminal; `-v` / `--verbose` adds the detail messages in either.
 
 The rest of this page is for working on the tool itself.
 
@@ -56,11 +60,13 @@ The rest of this page is for working on the tool itself.
 tracked: it contains the machine's source path.
 
 `heroes-capture map render` runs all three steps against the installed game, at the primary
-monitor's resolution, into `work\`:
+monitor's resolution, into `maps\<map id>\`, with its working files in `tmp\`:
 
 ```powershell
-heroes-capture map render "Towers of Doom"                  # structures kept
+heroes-capture map render "Towers of Doom"                  # structures kept, into maps\towers-of-doom
 heroes-capture map render "Cursed Hollow" --structures hide # bare terrain
+heroes-capture map render "Dragon Shire" -o D:\renders      # into D:\renders\dragon-shire
+heroes-capture map render "Dragon Shire" --keep-tmp         # tmp\ left for diagnosis
 ```
 
 (`py -m heroes_capture map render ...` is the same.) `heroes-capture map list` lists the game's
@@ -68,20 +74,20 @@ maps by category and which have been validated: their render reviewed and, where
 for. They're in `validated-maps.json`; add a map there once its render has been looked over. The
 categories come from the mods each map builds on: Battleground (the 5v5 maps of the Versus AI /
 Quick Match / Storm League pool, with the custom-game-only ones: the game's data doesn't tell them
-apart), Arena, Brawl, and Other (the
-sandboxes, and Try Me Mode and the tutorials, listed as unsupported: the game keeps them as
-folders rather than map archives, and the capture builds on an archive). The steps on their own:
+apart), Arena, Brawl, and Other (the sandboxes, and Try Me Mode and the tutorials, listed as
+unsupported: the game keeps them as folders rather than map archives, and the capture builds on an
+archive). The steps on their own, which leave their files in place:
 
 ```powershell
-# 1. Prepare: reads the map from the game, injects the capture script, plans the grid.
+# 1. Prepare: reads the map from the game, injects the capture script, plans the grid (into tmp\).
 heroes-capture prepare "Towers of Doom" --screen 3440x1440 --distance 214 --keep 0.4
 
 # 2. Capture: launches the map, waits for it to load and for the intro to finish; leave the
 #    mouse and keyboard alone.
-heroes-capture capture work/towers-of-doom-structures.json
+heroes-capture capture tmp/towers-of-doom-structures.json
 
-# 3. Stitch: writes work/towers-of-doom-structures.png, a preview, and the geo file.
-heroes-capture stitch work/towers-of-doom-structures.json --tiles
+# 3. Stitch: writes maps/towers-of-doom/towers-of-doom-structures.png, a preview, the geo file...
+heroes-capture stitch tmp/towers-of-doom-structures.json --tiles
 ```
 
 The screenshots are kept as raw `.npy` arrays (fast for the stitch to read; older runs' PNG tiles
@@ -338,8 +344,8 @@ between runs.
 
   ```powershell
   mkdir "D:\Games\Heroes of the Storm\maps\heroes\singleplayermaps"
-  copy work\towers-of-doom-structures.stormmap "D:\Games\Heroes of the Storm\maps\heroes\singleplayermaps\(10)trymemode.stormmap"
-  heroes-capture capture work\towers-of-doom-structures.json --no-launch
+  copy tmp\towers-of-doom-structures.stormmap "D:\Games\Heroes of the Storm\maps\heroes\singleplayermaps\(10)trymemode.stormmap"
+  heroes-capture capture tmp\towers-of-doom-structures.json --no-launch
   ```
 
   Delete that `(10)trymemode.stormmap` afterwards to get normal Try Mode back.

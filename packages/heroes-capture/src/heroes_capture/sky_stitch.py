@@ -240,10 +240,10 @@ def _warp(rgba: np.ndarray, window: np.ndarray, matrix: np.ndarray, offset: np.n
     return out[..., :3], out[..., 3], out[..., 4]
 
 
-def build(manifest: dict, base: Path, images: list[str]) -> None:
-    """The layer images and composites, when capture.py left sky shots in <id>/sky/. `images`:
-    the ids of the map images the stitch wrote (several on a map of several arenas: the layers,
-    but no composites)."""
+def build(manifest: dict, base: Path, out: Path, images: list[str]) -> None:
+    """The layer images and composites, into `out`, when capture.py left sky shots in <id>/sky/.
+    `images`: the ids of the map images the stitch wrote (several on a map of several arenas: the
+    layers, but no composites)."""
     folder = base / "sky"
     record_path, measured_path = folder / "positions.json", base / "sky-layers.json"
     if not record_path.exists() or not measured_path.exists():
@@ -255,7 +255,6 @@ def build(manifest: dict, base: Path, images: list[str]) -> None:
         warn("sky layers: no shots; skipped")
         return
     out_id = manifest["id"]
-    out = base.parent
     scale = record["mapPxPerCell"]  # the map's screen pixels per cell during the capture
     left = int((manifest.get("status") or {}).get("pageLeft", 0))
     fixed = _load(folder / "fixed")

@@ -1,6 +1,6 @@
 """Launch a prepared battleground and screenshot every tile of its capture grid.
 
-    heroes-capture capture work/towers-of-doom-structures.json [options]   (heroes-capture map runs it)
+    heroes-capture capture tmp/towers-of-doom-structures.json [options]   (heroes-capture map render runs it)
 
 The injected map script (capture_script.galaxy) takes chat commands and reports through its status
 strip (status.py) when each is done and where the camera really is. The capture:
