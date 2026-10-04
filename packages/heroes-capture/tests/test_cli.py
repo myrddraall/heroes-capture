@@ -405,3 +405,15 @@ def test_map_list_shows_names_as_written_and_no_validation_details(monkeypatch):
     assert result.exit_code == 0, result.output
     assert "Dragon Shire [bold]" in result.output and "✓ validated" in result.output
     assert "0.1.0" not in result.output and "void edges" not in result.output  # the authors' record, not shown
+
+
+def test_a_resumed_runs_progress_bar_counts_the_whole_run(ui_state):
+    from heroes_capture import ui
+
+    ui.configure()
+    ui._s.mode = "pretty"
+    with ui.step("Capturing"):
+        with ui.bar(154, "tiles", done=30) as advance:
+            advance()
+            [task] = ui._s.bars.tasks
+            assert (task.total, task.completed) == (154, 31)

@@ -16,7 +16,7 @@ SCENARIOS = {
     # name: (mode, capture args, environment, the outcome, text the run log must show)
     "matte": ("matte", [], {}, "finished", "sky layer images: 4 positions"),
     "black": ("black", [], {}, "finished", "tile 12/12"),
-    "resume": ("matte", ["--no-launch", "--start", "9"], {"FAKE_START": "map"}, "finished", "tile 12/12"),
+    "resume": ("matte", ["--no-launch", "--start", "9"], {"FAKE_START": "map"}, "finished", "Test Map: 15 tiles, carrying on at tile 10"),
     "focus": ("matte", [], {"FAKE_FAULT": "focus", "FAKE_FAULT_AT": "30.5"}, "finished", "focus lost during tile"),
     "edges": ("matte", [], {"FAKE_BOUNDS": "22,26,42,38"}, "finished", "more beyond them (ring 1)"),
     "hidden world": ("matte", [], {"FAKE_HIDDEN": "1"}, "finished", "the sky work waits until the map is ready"),

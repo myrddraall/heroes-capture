@@ -319,13 +319,13 @@ def suspend():
 
 
 @contextmanager
-def bar(total: int, label: str):
-    """A progress bar in the live view (nothing in log mode, whose messages already say it):
-    yields advance(n=1)."""
+def bar(total: int, label: str, done: int = 0):
+    """A progress bar in the live view (nothing in log mode, whose messages already say it),
+    starting at `done` of `total` (a resumed run's): yields advance(n=1)."""
     if _s.mode != "pretty" or not _s.bars:
         yield lambda n=1: None
         return
-    task = _s.bars.add_task(label, total=total)
+    task = _s.bars.add_task(label, total=total, completed=done)
     try:
         yield lambda n=1: (_s.bars.advance(task, n), _refresh())
     finally:

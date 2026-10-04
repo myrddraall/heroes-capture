@@ -599,7 +599,7 @@ def capture_tiles(session: Session, manifest: dict, start: int, settle_time: flo
     if any(t.get("edge") for t in tiles[start:]):
         # Tiles past the grid left by the run this one resumes: the camera bounds lifted again.
         step(lambda: session.send("unbound"), "lifting the camera bounds")
-    with stage("tiles"), ui.bar(len(tiles) - start, "tiles") as advance:
+    with stage("tiles"), ui.bar(len(tiles), "tiles", done=start) as advance:  # a resumed run's bar starts at the tiles kept
         state["advance"] = advance
         for tile in tiles[start:]:
             take(tile, len(tiles), sides_of(tile))
@@ -706,7 +706,8 @@ def main(argv: list[str]) -> None:
         log(f"Skybox probe on {manifest['map']}: one edge tile, a scripted sequence of skybox swaps, a shot after each.")
     else:
         shots = "two shots each (over white, over black)" if (manifest.get("sky") or {}).get("mode") == "matte" else "one shot each (over black; the void is black terrain)"
-        log(f"Capturing {manifest['map']}: {len(tiles) - args.start} tiles, {shots}. Leave the keyboard and mouse alone.")
+        resumed = f", carrying on at tile {args.start + 1}" if args.start else ""
+        log(f"Capturing {manifest['map']}: {len(tiles)} tiles{resumed}, {shots}. Leave the keyboard and mouse alone.")
     with stage("launch and load"):
         wait_for_map_load(not args.no_launch)
 
@@ -771,7 +772,7 @@ def main(argv: list[str]) -> None:
         quit_match(wait=False)  # the stitch runs while the game leaves; the next launch waits for the menu
     log(f"camera positions recorded for {len(positions)} screenshots")
     log_timings("capture")
-    done(f"{len(manifest['tiles']) - args.start} screenshots in {out}")
+    done(f"{len(manifest['tiles'])} screenshots in {out}" + (f" ({len(manifest['tiles']) - args.start} of them in this launch)" if args.start else ""))
 
 
 def recover(e: Recoverable, argv: list[str]) -> int:
