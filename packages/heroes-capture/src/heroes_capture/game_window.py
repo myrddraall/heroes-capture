@@ -198,6 +198,27 @@ def type_burst(keys: list[str]) -> None:
     ctypes.windll.user32.SendInput(len(events), batch, ctypes.sizeof(INPUT))
 
 
+KEYEVENTF_UNICODE = 0x0004
+
+
+def type_unicode(text: str) -> None:
+    """Characters as text input (KEYEVENTF_UNICODE) rather than key presses, all in one SendInput
+    call: a text field takes them; whether the game also takes them as keys (hotkeys) is one of
+    the input probe's questions."""
+    events = [INPUT(type=1, ki=KEYBDINPUT(0, ord(ch), KEYEVENTF_UNICODE | (KEYEVENTF_KEYUP if up else 0), 0, 0))
+              for ch in text for up in (False, True)]
+    batch = (INPUT * len(events))(*events)
+    ctypes.windll.user32.SendInput(len(events), batch, ctypes.sizeof(INPUT))
+
+
+def alt_tab() -> None:
+    """Alt+Tab, as someone switching away from the game does (the input probe)."""
+    for key, up, pause in (("alt", False, 0.05), ("tab", False, 0.05), ("tab", True, 0.05), ("alt", True, 0.0)):
+        event = _key_event(key, up)
+        ctypes.windll.user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT))
+        time.sleep(pause)
+
+
 def hold_key(key: str, seconds: float = 0.04) -> None:
     """Press a key and hold it for a few frames, so the game can't miss it."""
     for up in (False, True):

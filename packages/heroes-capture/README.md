@@ -144,6 +144,7 @@ storage; the first run after a game update opens each to index them by name (abo
 | `--crop-margin <cells>`   | `12`        | the stitched image reaches this far past the camera bounds (or past each arena's area)                         |
 | `--show-ui`               |             | diagnostic: leave the HUD up; `map render` then launches the map and stops                                    |
 | `--keep-intro`            |             | diagnostic: let the intro cutscene play out instead of skipping it                                             |
+| `--input-probe`           |             | diagnostic: the input probe's edit box and commands in the map script (`map render --probe-input` adds it)     |
 | `--paint-texture <t> <c>` |             | diagnostic: paint one of the map's own sky textures a solid colour, or `clear` (sky probes; repeatable)       |
 
 Diagnostics `map render` runs instead of rendering:
@@ -153,6 +154,7 @@ Diagnostics `map render` runs instead of rendering:
 | `--probe-light` | command sequences at chosen points, two shots after each (`HRS_PROBE_POINTS="x,y;x,y"`, `HRS_PROBE_TILE_PATH="tile:0.5;tile,black:0.5"`; see `probes.py`), to see what each step does to the picture |
 | `--probe-sky`   | one edge tile over each skybox; the sky part of each shot is measured (mean colour, spread); `HRS_SKY_SEQUENCE` scripts the swaps                                                           |
 | `--probe-waits` | the fixed waits (lighting-refit look, settle before the kept shot, sky swaps) tried shorter on sample tiles and compared with the current ones; and the sky pass with positions further apart (`sky-keep08/`) |
+| `--probe-input` | ways to send commands that a chat box knocked open or shut by an alt-tab can't upset, each timed against the chat: the map's own edit box (in the script only of a map prepared with `--input-probe`, which `map render --probe-input` adds), typed as key presses or Unicode text, read every 1/16 s or on its dialog events; whether Unicode text reaches the game as key presses; whether the box keeps the keyboard after an alt-tab. Findings in `probe-input/input-probe.json`, a shot of the box in `box.png` |
 
 Higher `--px-per-cell` means more screenshots and a closer camera. Past about 64–128 px per
 cell there is no more detail: that's the game's own texture resolution.
@@ -336,7 +338,8 @@ cell there is no more detail: that's the game's own texture resolution.
 | `game_menus.py`                            | recognises the game's menus over a match (Esc, Options, the exit dialog) at any screen size    |
 | `game_window.py`                           | Windows calls: the game's process and window, keyboard and cursor                              |
 | `screen.py`                                | screen grabbing and frame comparisons                                                         |
-| `probes.py`                                | the `--probe-light` and `--probe-sky` diagnostics                                             |
+| `probes.py`                                | the `--probe-*` diagnostics                                                                   |
+| `input_probe.galaxy`                       | the input probe's part of the map script (only with `--input-probe`)                          |
 | `sky_layers.py` | measures the map's sky layers' speeds and shoots them across the map |
 | `sky_stitch.py` | the sky layer images, the composites and `-layers.json` |
 | `stitch.py`                                | stitches the screenshots and writes the outputs                                               |

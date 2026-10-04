@@ -72,6 +72,9 @@ int hrsCap_statusBackdropDialog = c_invalidDialogId;
 int hrsCap_statusFiller = c_invalidDialogControlId;
 int hrsCap_seq = 0;
 int hrsCap_tick = 0;
+bool hrsCap_inProbe = false;  // the input probe is running (input_probe.galaxy, in a map prepared with --input-probe)
+int hrsCap_inEvents = 0;  // input probe: bit k set once dialog event type k fired on its box
+int hrsCap_inKeys = 0;  // input probe: backslash presses the game saw as a key
 int hrsCap_statusParity = 0;
 int hrsCap_statusPlayer = 1;
 
@@ -146,9 +149,16 @@ void hrsCap_StatusDraw () {
     hrsCap_StatusBits(53, 1, hrsCap_tick);
     hrsCap_StatusBits(54, 1, BoolToInt(hrsCap_ready));
     hrsCap_StatusBits(55, 16, hrsCap_mapId);
-    hrsCap_StatusBits(73, 8, MinI(255, hrsCap_clearedSinceReady));
-    hrsCap_StatusBits(81, 1, BoolToInt(hrsCap_introOn));
-    hrsCap_StatusBits(82, 4, MinI(15, hrsCap_openingCuts));
+    if (hrsCap_inProbe) {  // the input probe's findings in these two fields instead (see the input probe)
+        hrsCap_StatusBits(73, 8, hrsCap_inEvents);
+        hrsCap_StatusBits(81, 1, BoolToInt(hrsCap_introOn));
+        hrsCap_StatusBits(82, 4, ModI(hrsCap_inKeys, 16));
+    }
+    else {
+        hrsCap_StatusBits(73, 8, MinI(255, hrsCap_clearedSinceReady));
+        hrsCap_StatusBits(81, 1, BoolToInt(hrsCap_introOn));
+        hrsCap_StatusBits(82, 4, MinI(15, hrsCap_openingCuts));
+    }
     if (hrsCap_leaving) {
         hrsCap_StatusBits(71, 2, 3);
     }
@@ -825,7 +835,7 @@ ${arena_quit_line}    UnitKill(libGame_gv_teams[libGame_gf_TeamNumberOfPlayer(Ev
     return true;
 }
 
-void hrsCap_Init () {
+${input_probe}void hrsCap_Init () {
     hrsCap_InitTiles();
     hrsCap_StatusInit();
     // (Chat events match a word anywhere in the message, so "sky black" also runs "black";
@@ -856,7 +866,7 @@ void hrsCap_Init () {
     TriggerAddEventChatMessage(hrsCap_gt_BgSpeed, c_playerAny, "bgspeed", false);
     hrsCap_gt_Look = TriggerCreate("hrsCap_gt_Look_Func");
     TriggerAddEventChatMessage(hrsCap_gt_Look, c_playerAny, "look", false);
-    hrsCap_gt_Quit = TriggerCreate("hrsCap_gt_Quit_Func");
+${input_probe_init}    hrsCap_gt_Quit = TriggerCreate("hrsCap_gt_Quit_Func");
     TriggerAddEventChatMessage(hrsCap_gt_Quit, c_playerAny, "quit", true);
     hrsCap_gt_FastForward = TriggerCreate("hrsCap_gt_FastForward_Func");
     libCore_gv_bALOpenTheGatesDelay = hrsCap_gatesDelay;  // read when GameLib starts its countdown

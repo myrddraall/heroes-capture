@@ -56,11 +56,12 @@ def test_tilesets_light_sets_and_sky_models(storage):
         assert model and spec["base"].encode().lower() in model.lower()
 
 
-@pytest.mark.parametrize("map_name, sky_mode, arenas", [
-    ("Battlefield of Eternity", "matte", 0), ("Punisher Arena", "matte", 3), ("Dragon Shire", "black", 0),
+@pytest.mark.parametrize("map_name, sky_mode, arenas, extra", [
+    ("Battlefield of Eternity", "matte", 0, []), ("Punisher Arena", "matte", 3, []), ("Dragon Shire", "black", 0, []),
+    ("Dragon Shire", "black", 0, ["--input-probe"]),  # the input probe's part of the script too
 ])
-def test_prepared_maps(map_name, sky_mode, arenas, tmp_path, blizzard_galaxy):
-    manifest_path = inject.main([map_name, "--screen", "3440x1440", "--distance", "214", "--keep", "0.4", "--out", str(tmp_path)])
+def test_prepared_maps(map_name, sky_mode, arenas, extra, tmp_path, blizzard_galaxy):
+    manifest_path = inject.main([map_name, "--screen", "3440x1440", "--distance", "214", "--keep", "0.4", "--out", str(tmp_path), *extra])
     manifest = json.loads(manifest_path.read_text())
     assert manifest["map"] == map_name and manifest["sky"]["mode"] == sky_mode
     assert len(manifest["areas"] or []) == arenas and len(manifest["tiles"]) > 50
@@ -75,3 +76,4 @@ def test_prepared_maps(map_name, sky_mode, arenas, tmp_path, blizzard_galaxy):
     unknown = sorted(n for n in names if not n.startswith("hrsCap_") and n not in KEYWORDS | ACCEPTED
                      and not re.search(r"\b" + re.escape(n) + r"\b", blizzard_galaxy))
     assert not unknown, f"names Blizzard's code doesn't have: {unknown}"
+    assert ("hrsCap_gt_InBox" in script) == bool(extra)  # only a map prepared for the input probe has its part

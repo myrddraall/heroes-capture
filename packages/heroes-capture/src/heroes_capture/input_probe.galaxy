@@ -1,0 +1,155 @@
+//--------------------------------------------------------------------------------------------------
+// The input probe (probes.py probe_input; in the script only of a map prepared with --input-probe,
+// as capture_script.py fills it in): an edit box of our own in the strip's column, as a way
+// to send commands that doesn't depend on the chat box being open or closed. Chat
+// "inputbox <mode> <refocus>" creates it (once) and gives it the keyboard: mode 1 reads it every
+// 1/16 s, mode 2 only when one of its dialog events fires (a trigger for each event type 0-7,
+// each setting its bit: which ones fire is one of the probe's questions); refocus 1 asks for the
+// keyboard again at every read. A command in the box ends with "." and is carried out, the box
+// emptied: "ping <seq>" only acknowledges; "mode <mode> <refocus> <seq>" switches, as the chat
+// can't once the box has the keyboard. Chat "inputkeys" counts the backslash key's presses
+// (does input reach the game as a key press, where it would be a hotkey?). While the probe runs,
+// the strip's cleared-units field shows the event types that fired and its opening-cuts field
+// the backslash presses.
+//--------------------------------------------------------------------------------------------------
+int hrsCap_inDialog = c_invalidDialogId;
+int hrsCap_inBox = c_invalidDialogControlId;
+int hrsCap_inMode = 1;
+bool hrsCap_inRefocus = false;
+trigger[8] hrsCap_gt_InEvent;
+trigger hrsCap_gt_InPoll;
+trigger hrsCap_gt_InBox;
+trigger hrsCap_gt_InKeys;
+trigger hrsCap_gt_InKey;
+
+// A command from the box: its words, the sequence number last.
+void hrsCap_InRun (string lp_s) {
+    string lv_word;
+    string lv_last;
+    int lv_n;
+
+    lv_last = "";
+    lv_n = 1;
+    for ( ; lv_n <= 8 ; lv_n += 1 ) {
+        lv_word = StringWord(lp_s, lv_n);
+        if ((lv_word == "")) {
+            break;
+        }
+        lv_last = lv_word;
+    }
+    if ((StringWord(lp_s, 1) == "mode")) {
+        hrsCap_inMode = StringToInt(StringWord(lp_s, 2));
+        hrsCap_inRefocus = (StringWord(lp_s, 3) == "1");
+        TriggerEnable(hrsCap_gt_InPoll, (hrsCap_inMode == 1));
+    }
+    hrsCap_statusPlayer = hrsCap_LocalPlayer();
+    hrsCap_seq = (StringToInt(lv_last) & 255);
+    hrsCap_StatusDraw();
+}
+
+// The box read: a command up to its ".", carried out and emptied from the box.
+void hrsCap_InRead () {
+    string lv_s;
+    int lv_end;
+
+    if ((hrsCap_inBox == c_invalidDialogControlId)) {
+        return;
+    }
+    lv_s = DialogControlGetPropertyAsString(hrsCap_inBox, c_triggerControlPropertyEditText, hrsCap_LocalPlayer());
+    lv_end = StringFind(lv_s, ".", c_stringCase);
+    if ((lv_end > 0)) {
+        DialogControlSetPropertyAsString(hrsCap_inBox, c_triggerControlPropertyEditText, PlayerGroupAll(), "");
+        hrsCap_InRun(StringSub(lv_s, 1, (lv_end - 1)));
+    }
+    if (hrsCap_inRefocus) {
+        DialogControlRequestFocus(hrsCap_inBox, PlayerGroupAll());
+    }
+}
+
+bool hrsCap_gt_InPoll_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    hrsCap_InRead();
+    return true;
+}
+
+// One of the box's dialog events: its type's bit (which trigger this is), then a read in mode 2.
+bool hrsCap_gt_InEvent_Func (bool testConds, bool runActions) {
+    int lv_k;
+
+    if (!runActions) {
+        return true;
+    }
+    if ((EventDialogControl() != hrsCap_inBox)) {
+        return true;
+    }
+    lv_k = 0;
+    for ( ; lv_k < 8 ; lv_k += 1 ) {
+        if ((TriggerGetCurrent() == hrsCap_gt_InEvent[lv_k])) {
+            hrsCap_inEvents = (hrsCap_inEvents | (1 << lv_k));
+        }
+    }
+    if ((hrsCap_inMode == 2)) {
+        hrsCap_InRead();
+    }
+    hrsCap_StatusDraw();
+    return true;
+}
+
+bool hrsCap_gt_InBox_Func (bool testConds, bool runActions) {
+    int lv_k;
+
+    if (!runActions) {
+        return true;
+    }
+    hrsCap_inProbe = true;
+    if ((hrsCap_inBox == c_invalidDialogControlId)) {
+        hrsCap_inDialog = DialogCreate((hrsCap_statusCellW * 2), 30, c_anchorBottomLeft, 0, 40, false);
+        hrsCap_inBox = DialogControlCreate(hrsCap_inDialog, c_triggerControlTypeEditBox);
+        DialogControlSetSize(hrsCap_inBox, PlayerGroupAll(), (hrsCap_statusCellW * 2), 30);
+        DialogControlSetPosition(hrsCap_inBox, PlayerGroupAll(), c_anchorTopLeft, 0, 0);
+        DialogSetVisible(hrsCap_inDialog, PlayerGroupAll(), true);
+        lv_k = 0;
+        for ( ; lv_k < 8 ; lv_k += 1 ) {
+            hrsCap_gt_InEvent[lv_k] = TriggerCreate("hrsCap_gt_InEvent_Func");
+            TriggerAddEventDialogControl(hrsCap_gt_InEvent[lv_k], c_playerAny, hrsCap_inBox, lv_k);
+        }
+        hrsCap_gt_InPoll = TriggerCreate("hrsCap_gt_InPoll_Func");
+        TriggerAddEventTimePeriodic(hrsCap_gt_InPoll, 0.0625, c_timeReal);
+    }
+    hrsCap_inMode = StringToInt(StringWord(EventChatMessage(false), 2));
+    hrsCap_inRefocus = (StringWord(EventChatMessage(false), 3) == "1");
+    TriggerEnable(hrsCap_gt_InPoll, (hrsCap_inMode == 1));
+    DialogControlRequestFocus(hrsCap_inBox, PlayerGroupAll());
+    hrsCap_Ack();
+    return true;
+}
+
+bool hrsCap_gt_InKey_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    hrsCap_inKeys += 1;
+    hrsCap_StatusDraw();
+    return true;
+}
+
+bool hrsCap_gt_InKeys_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    hrsCap_inProbe = true;
+    if ((hrsCap_gt_InKey == null)) {
+        hrsCap_gt_InKey = TriggerCreate("hrsCap_gt_InKey_Func");
+        TriggerAddEventKeyPressed(hrsCap_gt_InKey, c_playerAny, c_keyBackSlash, true, c_keyModifierStateIgnore, c_keyModifierStateIgnore, c_keyModifierStateIgnore);
+    }
+    hrsCap_Ack();
+    return true;
+}
+
+//INIT
+    hrsCap_gt_InBox = TriggerCreate("hrsCap_gt_InBox_Func");
+    TriggerAddEventChatMessage(hrsCap_gt_InBox, c_playerAny, "inputbox", false);
+    hrsCap_gt_InKeys = TriggerCreate("hrsCap_gt_InKeys_Func");
+    TriggerAddEventChatMessage(hrsCap_gt_InKeys, c_playerAny, "inputkeys", false);

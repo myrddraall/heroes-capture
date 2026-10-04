@@ -26,6 +26,7 @@ SCENARIOS = {
     "game menu": ("matte", [], {"FAKE_FAULT": "menu", "FAKE_FAULT_AT": "36"}, "finished", "a game menu is open"),  # waited out, not a lost match
     "probe sky": ("matte", ["--probe-sky"], {}, "finished", "05-none-layer0"),
     "probe depth": ("matte", ["--probe-depth"], {}, "finished", "sky layers: parallax rate"),
+    "probe input": ("matte", ["--probe-input"], {}, "finished", "dialog event types that fired on the box: [2]"),
     "launch only": ("matte", ["--launch-only"], {}, "finished", ""),
 }
 

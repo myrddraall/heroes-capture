@@ -9,7 +9,10 @@ chat, carries out the capture script's commands, and draws frames with the statu
 capture_script.galaxy does. Environment: FAKE_FAULT (focus, wrongmap, silent, crash, menu: the
 Esc menu open for 6 s, taking the keys) and
 FAKE_FAULT_AT (virtual seconds), FAKE_START=map (the map already running), FAKE_BOUNDS,
-FAKE_HIDDEN (the world hidden until the map is ready), FAKE_NO_KEY, FAKE_SKY_RATE.
+FAKE_HIDDEN (the world hidden until the map is ready), FAKE_NO_KEY, FAKE_SKY_RATE. The input probe's
+edit box is there too: it takes key presses and Unicode text while it has the keyboard, is read
+every tick (mode 1) or as it changes (mode 2, dialog event type 2), loses the keyboard to an
+alt-tab unless the map asks for it again; Unicode text never reaches the game as keys.
 """
 
 import ctypes
@@ -43,7 +46,7 @@ def _sleep(s):
 time.sleep = _sleep
 
 # ---------------------------------------------------------------- keys
-KEYS = {"enter": 28, "space": 57, "backspace": 14, "alt": 56, "esc": 1}
+KEYS = {"enter": 28, "space": 57, "backspace": 14, "alt": 56, "esc": 1, "tab": 15, "\\": 43}
 for i, ch in enumerate("abcdefghijklmnopqrstuvwxyz0123456789.-:,@_"):
     KEYS[ch] = 100 + i
 CODE_TO_KEY = {v: k for k, v in KEYS.items()}
@@ -81,6 +84,8 @@ class Game:
         self.haze_alpha = np.asarray(Image.fromarray((haze * 255).astype(np.uint8)).resize((64 * 48, 64 * 48), Image.BILINEAR), np.float32) / 255
         self.sky_rate = float(os.environ.get("FAKE_SKY_RATE", "0.4"))
         self.menu = self._menu_frame()
+        self.box, self.box_focus, self.box_mode, self.box_refocus = None, False, 1, False  # the input probe's edit box
+        self.probe, self.events, self.keys, self.key_counting, self.alt_down = False, 0, 0, False, False
 
     def _menu_frame(self):
         frame = np.full((H, W, 3), 60, np.uint8)
@@ -107,6 +112,31 @@ class Game:
         self.pending = [p for p in self.pending if p[0] > _now[0]]
         for _, fn in sorted(due, key=lambda p: p[0]):
             fn()
+        if self.box is not None and self.box_mode == 1:
+            self.box_read()
+
+    def box_read(self):
+        if "." in self.box:
+            text, self.box = self.box.split(".", 1)[0], ""
+            words = text.split()
+            if words and words[0] == "mode":
+                self.box_mode, self.box_refocus = int(words[1]), words[2] == "1"
+            self.seq = int(words[-1]) & 255 if words else self.seq
+        if self.box_refocus and FOREGROUND[0] == 100:
+            self.box_focus = True
+
+    def box_typed(self, ch):
+        self.box += ch
+        if self.box_mode == 2:  # a dialog event (type 2) as the text changes
+            self.events |= 1 << 2
+            self.box_read()
+
+    def char(self, ch):
+        """Unicode text: into the edit box or the chat box, never a key to the game."""
+        if self.chat is not None:
+            self.chat += ch
+        elif self.box is not None and self.box_focus:
+            self.box_typed(ch)
 
     # match timeline (seconds since the map state began)
     def t(self):
@@ -119,9 +149,21 @@ class Game:
         return 0 if t < 3 else 1 if t < 13 else 2
 
     def key(self, code, up):
+        k = CODE_TO_KEY[code]
+        if k == "alt":
+            self.alt_down = not up
+            return
         if up or _menu_open():
             return  # with the Esc menu open, keys go to it
-        k = CODE_TO_KEY[code]
+        if k == "tab" and self.alt_down:
+            FOREGROUND[0], self.box_focus = 200, False
+            return
+        if self.chat is None and self.box is not None and self.box_focus and k not in ("enter", "numpad5"):
+            self.box_typed(" " if k == "space" else k)
+            return
+        if k == "\\":
+            self.keys += self.key_counting and self.chat is None
+            return
         if k == "numpad5":
             if self.chat is None and self.state == "map" and not os.environ.get("FAKE_NO_KEY"):
                 self.log.append(f"{_now[0] - START:.2f} key numpad5")
@@ -189,6 +231,13 @@ class Game:
             ack(0.05)
         elif cmd in ("clean", "pause", "bgspeed", "refitwait", "hidemap"):
             ack(0.05)
+        elif cmd == "inputbox":
+            self.box = "" if self.box is None else self.box
+            self.box_mode, self.box_refocus, self.box_focus, self.probe = int(words[1]), words[2] == "1", True, True
+            ack(0.05)
+        elif cmd == "inputkeys":
+            self.key_counting = self.probe = True
+            ack(0.05)
         elif cmd == "quit":
             self.leaving = True
             self.pending.append((_now[0] + 4.0, lambda: self.set_state("loading")))
@@ -202,6 +251,8 @@ class Game:
                   (51, 1, int(self.sky == 1)), (52, 1, int(self.sky == 2)), (53, 1, int(t * 4) % 2), (54, 1, int(phase == 2)),
                   (55, 16, self.map_id), (71, 2, phase), (73, 8, min(255, int(max(0, t - 13) // 8))), (81, 1, 0),
                   (82, 4, 5 if phase >= 1 else 0)]
+        if self.probe:
+            fields[-3:] = [(73, 8, self.events), (81, 1, 0), (82, 4, self.keys % 16)]
         bits = [0] * 88
         bits[0] = 1
         for start, count, value in fields:
@@ -296,7 +347,11 @@ def _send_input(n, events, size):
     events = _obj(events)
     seq = [events] if not hasattr(events, "__len__") else list(events)
     for e in seq[:n]:
-        GAME.key(e.ki.wScan, bool(e.ki.dwFlags & 0x0002))
+        if e.ki.dwFlags & 0x0004:  # Unicode text
+            if not e.ki.dwFlags & 0x0002:
+                GAME.char(chr(e.ki.wScan))
+        else:
+            GAME.key(e.ki.wScan, bool(e.ki.dwFlags & 0x0002))
     return n
 
 
@@ -329,9 +384,17 @@ def _crashed():
     return _fault("crash")
 
 
+FOREGROUND = [100]  # the window in front: the game (100), or another after an alt-tab
+
+
+def _to_front(*a):
+    FOREGROUND[0] = 100
+    return 1
+
+
 def _foreground():
     t = _now[0] - START
-    return 200 if FAULT == "focus" and FAULT_AT <= t < FAULT_AT + 3 else 100
+    return 200 if FAULT == "focus" and FAULT_AT <= t < FAULT_AT + 3 else FOREGROUND[0]
 
 
 def _enum_processes(pids, size, used):
@@ -358,8 +421,8 @@ class User32:
     IsWindowVisible = Fn(lambda hwnd: 1)
     EnumWindows = Fn(lambda visit, lp: visit(100, None))
     ShowWindow = Fn(lambda *a: 1)
-    SwitchToThisWindow = Fn(lambda *a: 1)
-    SetForegroundWindow = Fn(lambda *a: 1)
+    SwitchToThisWindow = Fn(_to_front)
+    SetForegroundWindow = Fn(_to_front)
     SetCursorPos = Fn(lambda x, y: 1)
     SetProcessDPIAware = Fn(lambda: 1)
 
