@@ -2,14 +2,13 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: the CLI on Typer and Rich: map list (quick), then Battlefield of Eternity
-rem through map render.
+rem Current step: the CLI on Typer and Rich: map list, reading the maps from the install (no render:
+rem the render itself is unchanged).
 setlocal
 pushd "%~dp0"
 set "PYTHONPATH=%~dp0src"
 py -c "import heroes_capture.cli, numpy, PIL, pyvips, scipy, mss, pydirectinput, dxcam, typer, rich" 2>nul || py -m pip install -e . || goto :copy
 py -m heroes_capture map list
-py -m heroes_capture map render "Battlefield of Eternity"
 if errorlevel 1 echo.& echo Stopped: the step above failed.
 popd
 
