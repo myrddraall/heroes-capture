@@ -26,7 +26,7 @@ SCENARIOS = {
     "game menu": ("matte", [], {"FAKE_FAULT": "menu", "FAKE_FAULT_AT": "36"}, "finished", "a game menu is open"),  # waited out, not a lost match
     "probe sky": ("matte", ["--probe-sky"], {}, "finished", "05-none-layer0"),
     "probe depth": ("matte", ["--probe-depth"], {}, "finished", "sky layers: parallax rate"),
-    "probe input": ("matte", ["--probe-input"], {}, "finished", "dialog event types that fired on the box: [2]"),
+    "probe input": ("matte", ["--probe-input"], {}, "finished", ("dialog event types that fired on the box: [2]", "(back at the menu)")),
     "launch only": ("matte", ["--launch-only"], {}, "finished", ""),
 }
 
@@ -36,7 +36,8 @@ def test_scenario(name, tmp_path):
     mode, args, env, outcome, shown = SCENARIOS[name]
     run = simulate(tmp_path, mode, *args, **env)
     assert run["outcome"].startswith(outcome), run["outcome"]
-    assert shown in run["log"], run["log"][-3000:]
+    for text in (shown,) if isinstance(shown, str) else shown:
+        assert text in run["log"], run["log"][-3000:]
 
 
 def test_stitch_of_a_simulated_render(tmp_path):

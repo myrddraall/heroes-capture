@@ -7,7 +7,8 @@
 // each setting its bit: which ones fire is one of the probe's questions); refocus 1 asks for the
 // keyboard again at every read. A command in the box ends with "." and is carried out, the box
 // emptied: "ping <seq>" only acknowledges; "mode <mode> <refocus> <seq>" switches, as the chat
-// can't once the box has the keyboard. Chat "inputkeys" counts the backslash key's presses
+// can't once the box has the keyboard (Enter doesn't open the chat box then: a "quit" sent as chat
+// lands in the box); "close <seq>" removes the box, giving the chat back. Chat "inputkeys" counts the backslash key's presses
 // (does input reach the game as a key press, where it would be a hotkey?). While the probe runs,
 // the strip's cleared-units field shows the event types that fired and its opening-cuts field
 // the backslash presses.
@@ -37,6 +38,12 @@ void hrsCap_InRun (string lp_s) {
         }
         lv_last = lv_word;
     }
+    if ((StringWord(lp_s, 1) == "close")) {
+        TriggerEnable(hrsCap_gt_InPoll, false);
+        DialogDestroy(hrsCap_inDialog);
+        hrsCap_inDialog = c_invalidDialogId;
+        hrsCap_inBox = c_invalidDialogControlId;
+    }
     if ((StringWord(lp_s, 1) == "mode")) {
         hrsCap_inMode = StringToInt(StringWord(lp_s, 2));
         hrsCap_inRefocus = (StringWord(lp_s, 3) == "1");
@@ -61,7 +68,7 @@ void hrsCap_InRead () {
         DialogControlSetPropertyAsString(hrsCap_inBox, c_triggerControlPropertyEditText, PlayerGroupAll(), "");
         hrsCap_InRun(StringSub(lv_s, 1, (lv_end - 1)));
     }
-    if (hrsCap_inRefocus) {
+    if (hrsCap_inRefocus && (hrsCap_inBox != c_invalidDialogControlId)) {
         DialogControlRequestFocus(hrsCap_inBox, PlayerGroupAll());
     }
 }

@@ -121,6 +121,10 @@ class Game:
             words = text.split()
             if words and words[0] == "mode":
                 self.box_mode, self.box_refocus = int(words[1]), words[2] == "1"
+            if words and words[0] == "close":
+                self.box, self.box_focus, self.box_refocus = None, False, False
+                self.seq = int(words[-1]) & 255
+                return
             self.seq = int(words[-1]) & 255 if words else self.seq
         if self.box_refocus and FOREGROUND[0] == 100:
             self.box_focus = True
@@ -158,8 +162,9 @@ class Game:
         if k == "tab" and self.alt_down:
             FOREGROUND[0], self.box_focus = 200, False
             return
-        if self.chat is None and self.box is not None and self.box_focus and k not in ("enter", "numpad5"):
-            self.box_typed(" " if k == "space" else k)
+        if self.chat is None and self.box is not None and self.box_focus and k not in ("numpad5",):
+            if k != "enter":  # Enter doesn't open the chat box while the edit box has the keyboard
+                self.box_typed(" " if k == "space" else k)
             return
         if k == "\\":
             self.keys += self.key_counting and self.chat is None

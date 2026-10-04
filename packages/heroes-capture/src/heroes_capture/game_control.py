@@ -367,4 +367,7 @@ def wait_for_menu(quit_sent: bool = False, until_leaving: bool = False) -> None:
             log("  the game hadn't come back to the menu after 2 minutes; carrying on")
         if phases[1:] or quit_sent:  # more than "menu" from the start: there was a match to leave
             log("  leaving: " + ", ".join(phases))
-            log(f"left the match after {time.time() - started:.1f} s (back at the menu)")
+            if menu_looks >= 2:
+                log(f"left the match after {time.time() - started:.1f} s (back at the menu)")
+            elif state != NOT_RUNNING:
+                warn(f"gave up waiting for the menu after {time.time() - started:.0f} s: the match may still be running")

@@ -382,6 +382,10 @@ def probe_input(session, manifest: dict, out: Path) -> None:
         log(f"  dialog event types that fired on the box: {results['event types seen'] or 'none'}")
     else:
         log("  the box took no input; the alt-tab and event tests are skipped")
+    # The box goes before the quit: while it has the keyboard, Enter doesn't open the chat box, and
+    # a "quit" sent as chat lands in the box instead.
+    if made and not in_box("close", unicode):
+        warn("the edit box didn't take \"close\"; leaving may need doing by hand (Esc, Quit)")
     quit_match()
     (probe_dir / "input-probe.json").write_text(json.dumps(results, indent=2))
     done(f"input probe findings in {probe_dir / 'input-probe.json'}")
