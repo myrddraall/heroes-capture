@@ -13,6 +13,11 @@ on:
         description: 'GitHub Release ID (numeric) or tag (e.g. v0.2.0)'
         required: true
         type: string
+      deploy_type:
+        description: 'Deploy method, naming the bundle deploy-<type>.zip (gitflow deploy sends it).'
+        required: false
+        type: string
+        default: 'gh-pages'
       deploy_env:
         description: 'Per-run deploy env overrides as KEY=VAL lines (highest priority).'
         required: false
@@ -35,6 +40,7 @@ jobs:
       - name: Deploy to GitHub Pages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEPLOY_TYPE: ${{ inputs.deploy_type }}
           DEPLOY_ENV_LINES: |
             ${{ vars.DEPLOY_ENV }}
             ${{ inputs.deploy_env }}
@@ -45,4 +51,4 @@ jobs:
           pnpm config set "//npm.pkg.github.com/:_authToken" "$GITHUB_TOKEN"
           pnpm config set @cpdevtools:registry https://npm.pkg.github.com
           pnpm dlx @cpdevtools/git-flow-deploy-cli deploy "$GITHUB_REPOSITORY" \
-            "${{ inputs.release_id }}" --bundle deploy-gh-pages.zip
+            "${{ inputs.release_id }}" --bundle "deploy-${DEPLOY_TYPE:-gh-pages}.zip"
