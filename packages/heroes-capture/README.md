@@ -172,10 +172,14 @@ root is the format, written as the contract with the map viewer that reads it.
     from the full image down to one tile, read by range requests.
   - `fixed.webp` (the fixed skybox, a screen backdrop), `thumbnail.webp`, and `images\`: the
     map's own pictures from the game (minimap, custom minimap, replay preview, map-select
-    picture, loading screen and its icons, where the map has them).
+    picture, loading screen and its icons, where the map has them), and the custom minimap
+    redrawn as an SVG (`custom-minimap.svg`) that lies exactly on the map.
   - `index.html`: the reference viewer. `heroes-capture map view "<map>"` serves the pack on
     this computer and opens it: drag to pan, mouse wheel to zoom; tiles load coarse first and
-    sharpen as you zoom; the sky layers move at their rates behind the map.
+    sharpen as you zoom; the sky layers move at their rates behind the map. The custom minimap
+    shows on the map while the first view loads, then fades away; the buttons show or hide
+    each layer (the background, sky, haze, terrain and minimap; over the terrain the minimap is
+    see-through).
 - `raw\`: the layers at full resolution as PNG (`map.png`, `background.png`, `haze.png`,
   `fixed.png`), the composites (`composite.png`, background, haze and map together;
   `composite-on-black.png`; `composite-with-fixed.png`, over the fixed skybox), and
@@ -349,6 +353,7 @@ parallax sky also keeps `<id>\sky-layers.json` in its working files, the measure
 | `sky_layers.py` | measures the map's sky layers' speeds and shoots them across the map |
 | `sky_stitch.py` | the sky layer images, the composites and `-layers.json` |
 | `pack.py` | the pack (PACK.md): `raw\`, the tile pyramids, the pictures from the game, `pack.json` |
+| `minimap_svg.py` | the custom minimap redrawn as an SVG of its shapes, for the pack |
 | `serve.py` | `map view`: the pack served locally with byte ranges, for the reference viewer |
 | `stitch.py`                                | stitches the screenshots and writes the outputs                                               |
 | `runlog.py`                                | the run's log (printed and written to `log.txt`)                                              |

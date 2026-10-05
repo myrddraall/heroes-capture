@@ -2,9 +2,13 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: Punisher Arena again (--force) to write its first pack: maps\punisher-arena\pack\
-rem (tile pyramids, pictures, pack.json, the reference viewer) and raw\. Afterwards,
-rem "py -m heroes_capture map view "Punisher Arena"" opens it in the browser (Ctrl+C stops it).
+rem Current step: Punisher Arena again (--force), so its pack gets the custom minimap as SVG
+rem (maps\punisher-arena\pack\images\custom-minimap.svg, images.customMinimapSvg in pack.json) and
+rem the new viewer. Afterwards, "py -m heroes_capture map view "Punisher Arena"" opens it (Ctrl+C
+rem stops it): the minimap lies on the map while the first view loads, then fades away; the
+rem Layers buttons show or hide the background, sky, haze, terrain and minimap. The minimap is
+rem placed from the camera bounds and the walkable cells now, and its lines keep their width
+rem however far you zoom.
 rem A map that fails leaves its working files in tmp\ (pip, when it runs, writes tmp\setup.log).
 setlocal
 pushd "%~dp0"

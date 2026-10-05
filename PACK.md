@@ -203,8 +203,9 @@ The map's own pictures from the game, converted to PNG (the thumbnail is WebP). 
 |---|---|---|
 | `thumbnail` | `thumbnail.webp` | none: the map layer, 512 px wide, over the dark backdrop |
 | `minimap` | `images/minimap.png` | `Minimap.tga`, in the map |
-| `customMinimap` | `images/custom-minimap.png` | `CustomMiniMap.dds`, in the map: the drawn minimap the game shows |
-| `customMinimapHover` | `images/custom-minimap-hover.png` | `CustomMiniMap_Hover.dds`, in the map |
+| `customMinimap` | `images/custom-minimap.png` | the custom minimap `MapInfo` names (`CustomMiniMap.dds`, `.tga` on some maps), in the map: the drawn minimap the game shows |
+| `customMinimapSvg` | `images/custom-minimap.svg` | none: `customMinimap` redrawn as vector shapes (below) |
+| `customMinimapHover` | `images/custom-minimap-hover.png` | `CustomMiniMap_Hover.dds` (or the `.tga` `MapInfo` names), in the map |
 | `replayPreview` | `images/replay-preview.png` | `ReplaysPreviewImage.tga`, in the map |
 | `mapSelect` | `images/map-select.png` | the map-select picture `DocumentInfo` names (`Storm_UI_Gamemode_MapSelect_<Map>.png`), in the map |
 | `loadingScreen` | `images/loading-screen.png` | the loading screen `MapInfo` names (`ui_ingame_mapmechanic_loadscreen_<map>.dds`), in the game's textures |
@@ -213,6 +214,43 @@ The map's own pictures from the game, converted to PNG (the thumbnail is WebP). 
 Each entry is `{"file", "size", "source"}`, `source` being the game file it came from;
 `loadingScreenIcons` is a list of them. The loading screen is the background picture only. The
 layout's text and the icons' positions on it aren't composed into it.
+
+### The custom minimap as SVG
+
+`customMinimapSvg` is the custom minimap redrawn from the shapes it's made of. Its entry also has
+`boundsCells`, `{left, bottom, right, top}`: the map cells it covers. Draw the SVG stretched to that
+rectangle and it lies on the map layer (its viewBox is the picture's size in pixels, and it has
+`preserveAspectRatio="none"`).
+
+The rectangle is the picture at the map's scale: a whole number of pixels per cell (the picture's
+width over the map's, 2 on most maps, 4 on Trial Grounds). It isn't centred on the map: it's centred
+on the middle of the map's camera bounds, 2.25 cells lower (measured over the maps that have one),
+then moved to where its shape best covers the map's walkable cells (`CellAttribute_Pnp` in the map),
+by no more than 6 cells. Where those can't be read, the camera bounds alone place it.
+
+Its parts, by id, back to front, with their classes:
+
+| Id | Class | What |
+|---|---|---|
+| `#outline` (in `defs`) | | one path down the middle of the light outline, round the whole map; at each nexus the circle's arc running on into the cut-ins, and one curve from each cut-in's tip out to the border |
+| `#out-stroke` | `out-stroke` | the black: the outline stroked wide behind the main shape, so only the half outside it shows, and `#cut-ins`, the black in each cut-in between the circle's arc and the curve out to the border, narrowing to the tip |
+| `#body` | `bg inner-stroke` | the main shape: the outline filled with the body colour (`bg`) and stroked with the light line (`inner-stroke`) |
+| `#fog` | `fog` | the soft lighter areas: one shape, blurred, clipped to the outline |
+| `g#camps` | `camps` (each path) | the darker spots (camps) |
+| `g#parts` | `terrain` (each path) | the light parts, each in its own colour |
+| `g#nexus-<n>` | `nexus` (each path) | each nexus's swirl |
+
+The colours are written as presentation attributes, so a stylesheet overrides them when the SVG is
+in the page: `.bg { fill: … }`, `.inner-stroke { stroke: … }`, `.out-stroke { stroke: …; fill: … }`
+(the fill colours the cut-ins), and `fill` for `.fog`, `.terrain`, `.camps` and `.nexus`.
+
+The outline's strokes don't scale (`vector-effect: non-scaling-stroke`, on `#outline` itself): at any
+size the black edge and the light line keep the widths they have at the picture's own size, in screen
+pixels. That holds where the SVG is part of the page (inline); drawn as an `<img>`, a browser scales
+the whole picture, strokes and all.
+
+Maps whose custom minimap isn't in their archive have neither image (Alterac Pass, Hanamura
+Temple and Pull Party name one in `MapInfo` that the game's data doesn't have).
 
 ## Raw layers
 
@@ -236,6 +274,5 @@ pack's tiles come from them.
 
 ## Later
 
-- The minimap as SVG (the custom minimap traced into vector shapes), as `images.customMinimapSvg`.
 - Map data in `data`: objectives, camps, structures and lanes, from the map's placed units.
 - The map without its structures, as a second map layer a viewer can switch to.

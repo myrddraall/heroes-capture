@@ -18,12 +18,14 @@ import re
 import shutil
 from pathlib import Path
 
+import numpy as np
 import pyvips
 from PIL import Image
+from scipy import ndimage
 from pmtiles.tile import Compression, TileType, zxy_to_tileid
 from pmtiles.writer import Writer
 
-from . import ui, viewer
+from . import minimap_svg, ui, viewer
 from .runlog import log, stage, warn
 from .stormlib import Archive
 from .workers import ordered_map
@@ -37,7 +39,8 @@ SKY = ("background", "haze")  # the parallax layers, back to front
 COMPOSITES = ("", "-on-black", "-with-fixed")  # the stitch's composites: <id>-composite<suffix>.png
 VALIDATED = Path(__file__).with_name("validated-maps.json")
 
-# The map's pictures in its archive: pack key, file in the archive, file in the pack.
+# The map's pictures in its archive: pack key, file in the archive, file in the pack. The custom
+# minimap's files are the ones MapInfo names (a .tga on some maps); these are the usual names.
 ARCHIVE_IMAGES = (
     ("minimap", "Minimap.tga", "minimap.png"),
     ("customMinimap", "CustomMiniMap.dds", "custom-minimap.png"),
@@ -157,7 +160,11 @@ def map_images(stormmap: Path | None, storage, folder: Path) -> dict:
         warn(f"the map's pictures couldn't be read ({e}); the pack has none")
         return found
     with archive:
+        info = archive.read("MapInfo") if archive.has("MapInfo") else b""
+        named = {bool(m.group(1)): m.group(0).decode() for m in re.finditer(rb"(?i)customminimap(_hover)?\.(?:dds|tga)", info)}
         for key, inside, name in ARCHIVE_IMAGES:
+            if key.startswith("customMinimap"):
+                inside = named.get(key.endswith("Hover"), inside)
             if archive.has(inside) and (entry := keep(key, name, archive.read(inside), inside)):
                 found[key] = entry
         document = (archive.read_text("DocumentInfo") or "") if archive.has("DocumentInfo") else ""
@@ -165,7 +172,6 @@ def map_images(stormmap: Path | None, storage, folder: Path) -> dict:
         select = next((p for p in pictures if "mapselect" in p.lower()), pictures[0] if pictures else None)
         if select and archive.has(select) and (entry := keep("mapSelect", "map-select.png", archive.read(select), select)):
             found["mapSelect"] = entry
-        info = archive.read("MapInfo") if archive.has("MapInfo") else b""
     screen = re.search(rb"Assets[\\/]Textures[\\/]([\w.-]+\.dds)", info)
     if screen:
         name = screen.group(1).decode()
@@ -180,6 +186,84 @@ def map_images(stormmap: Path | None, storage, folder: Path) -> dict:
         if entries:
             found["loadingScreenIcons"] = entries
     return found
+
+
+MINIMAP_BELOW_CAMERA = 2.25  # cells the custom minimap's middle lies below the camera bounds' (measured)
+MINIMAP_SEARCH = 6  # cells around that the fit to the map's walkable cells may move it
+
+
+def custom_minimap_bounds(picture: Image.Image, map_size: dict, camera: dict, walkable=None) -> dict:
+    """The map cells the custom minimap covers (PACK.md, The custom minimap as SVG). It is drawn at
+    the map's scale, a whole number of pixels per cell (the picture's width over the map's), and
+    centred on the camera bounds' middle, MINIMAP_BELOW_CAMERA lower (measured over the maps with
+    one: the shapes then lie on the walkable areas). With the map's walkable cells (a bool array,
+    [cell y][cell x]), it is moved to where its shape best covers them, within MINIMAP_SEARCH."""
+    k = picture.width / map_size["width"]
+    w, h = picture.width / k, picture.height / k
+    left = (camera["left"] + camera["right"]) / 2 - w / 2
+    top = (camera["bottom"] + camera["top"]) / 2 - MINIMAP_BELOW_CAMERA + h / 2
+    if walkable is not None and walkable.any() and not walkable.all() and k == round(k):
+        k = int(k)
+        shape = np.asarray(picture.convert("RGBA"))[..., 3] > 127
+        # The walkable areas (not the ones along the map's edge, outside the play area), grown by
+        # a cell (the drawn shape runs a little past them), at the picture's scale, row 0 the map's
+        # top, padded so every trial position fits.
+        areas, count = ndimage.label(walkable)
+        rim = np.unique(np.concatenate([areas[0], areas[-1], areas[:, 0], areas[:, -1]]))
+        cells = ndimage.binary_dilation(np.isin(areas, np.setdiff1d(np.arange(1, count + 1), rim)), iterations=1)[::-1]
+        pad = (MINIMAP_SEARCH + 1) * k + max(shape.shape)
+        grid = np.pad(np.kron(cells, np.ones((k, k), bool)), pad)
+        row0 = int(round((map_size["height"] - top) * k)) + pad  # where the picture's corner lies on the grid
+        col0 = int(round(left * k)) + pad
+
+        def overlap(r, c):
+            window = grid[r : r + shape.shape[0], c : c + shape.shape[1]]
+            both = np.count_nonzero(window & shape)
+            return both / (np.count_nonzero(window) + np.count_nonzero(shape) - both)
+
+        reach = MINIMAP_SEARCH * k
+        scores = np.array([[overlap(row0 + dr, col0 + dc) for dc in range(-reach, reach + 1)] for dr in range(-reach, reach + 1)])
+        i, j = np.unravel_index(int(np.argmax(scores)), scores.shape)
+        if scores[i, j] > 0.6 and 0 < i < scores.shape[0] - 1 and 0 < j < scores.shape[1] - 1:
+
+            def vertex(a, b, c):  # the peak of the parabola through three neighbours
+                return 0.5 * (a - c) / (a - 2 * b + c) if a - 2 * b + c else 0.0
+
+            row = row0 + i - reach + vertex(scores[i - 1, j], scores[i, j], scores[i + 1, j])
+            col = col0 + j - reach + vertex(scores[i, j - 1], scores[i, j], scores[i, j + 1])
+            top = map_size["height"] - (row - pad) / k
+            left = (col - pad) / k
+    return {"left": round(float(left), 3), "bottom": round(float(top - h), 3), "right": round(float(left + w), 3), "top": round(float(top), 3)}
+
+
+def walkable_cells(stormmap: Path | None, map_size: dict):
+    """The map's walkable cells from its archive (CellAttribute_Pnp: a bit count, then a byte per
+    cell, 0 where units may walk), as a bool array [cell y][cell x]; None if it hasn't them."""
+    if not stormmap or not stormmap.exists():
+        return None
+    width, height = map_size["width"], map_size["height"]
+    try:
+        with Archive(stormmap) as archive:
+            raw = archive.read("CellAttribute_Pnp") if archive.has("CellAttribute_Pnp") else None
+    except OSError:
+        return None
+    if not raw or len(raw) < 4 + width * height:
+        return None
+    return np.frombuffer(raw[4 : 4 + width * height], np.uint8).reshape(height, width) == 0
+
+
+def minimap_svg_image(pack: Path, custom: dict, map_size: dict, camera: dict, walkable=None) -> dict | None:
+    """The custom minimap redrawn as an SVG (minimap_svg) next to its PNG: its entry (PACK.md,
+    Images), with the map cells it covers; None, with a warning, if it can't be redrawn."""
+    picture = Image.open(pack / custom["file"])
+    try:
+        svg = minimap_svg.to_svg(picture)
+    except Exception as e:  # noqa: BLE001 - the pack is written without it
+        warn(f"the custom minimap couldn't be redrawn as an SVG ({e}); the pack has only its PNG")
+        return None
+    (pack / "images" / "custom-minimap.svg").write_text(svg, encoding="utf-8")
+    return {"file": "images/custom-minimap.svg", "size": custom["size"], "source": custom["source"],
+            "boundsCells": custom_minimap_bounds(picture, map_size, camera, walkable)}
 
 
 def _version() -> str:
@@ -286,6 +370,10 @@ def write(out: Path, manifest: dict, images: list[str]) -> Path:
         finally:
             if storage is not None:
                 storage.close()
+        if "customMinimap" in found_images and manifest.get("mapSize") and manifest.get("cameraBounds"):
+            walkable = walkable_cells(stormmap, manifest["mapSize"])
+            if entry := minimap_svg_image(pack, found_images["customMinimap"], manifest["mapSize"], manifest["cameraBounds"], walkable):
+                found_images["customMinimapSvg"] = entry
 
         validated = manifest["map"] in json.loads(VALIDATED.read_text(encoding="utf-8"))["maps"]
         screen = manifest.get("screen") or {}
