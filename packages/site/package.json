@@ -1,0 +1,12 @@
+{
+  "name": "@myrddraall/heroes-capture-site",
+  "version": "0.0.0-MAIN",
+  "private": true,
+  "description": "The maps heroes-capture rendered, as a static site for GitHub Pages: each map's pack and its reference viewer",
+  "scripts": {
+    "add-map": "node tools/add-map.mjs",
+    "build": "node tools/build.mjs",
+    "github.actions.build": "node tools/build.mjs",
+    "github.actions.pack": "gitflow pack"
+  }
+}

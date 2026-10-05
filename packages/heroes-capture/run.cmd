@@ -2,15 +2,15 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: Punisher Arena again (--force: it is rendered already), with every command now
-rem typed into the map's own command box instead of the chat. Alt-tab away or open the Esc menu
-rem part way if you like: both should pause it. A map that fails leaves its working files in tmp\,
-rem which come back with the results (pip, when it runs, writes tmp\setup.log).
+rem Current step: Punisher Arena again (--force) to write its first pack: maps\punisher-arena\pack\
+rem (tile pyramids, pictures, pack.json, the reference viewer) and raw\. Afterwards,
+rem "py -m heroes_capture map view "Punisher Arena"" opens it in the browser (Ctrl+C stops it).
+rem A map that fails leaves its working files in tmp\ (pip, when it runs, writes tmp\setup.log).
 setlocal
 pushd "%~dp0"
 set "PYTHONPATH=%~dp0src"
 rem The tool's dependencies, installed quietly when missing (pip's output in tmp\setup.log).
-py -c "import heroes_capture.cli, numpy, PIL, pyvips, scipy, mss, pydirectinput, dxcam, typer, rich" 2>nul || call :install || goto :copy
+py -c "import heroes_capture.cli, numpy, PIL, pyvips, scipy, mss, pydirectinput, dxcam, typer, rich, pmtiles" 2>nul || call :install || goto :copy
 py -m heroes_capture map render "Punisher Arena" --force
 if errorlevel 1 echo.& echo Stopped: the step above failed.
 popd

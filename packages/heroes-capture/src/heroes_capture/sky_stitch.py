@@ -6,7 +6,6 @@ Layers, written next to the map image:
   <id>-layer-background.png  the parallax model's background art, with transparency where it lets
                              the fixed skybox through
   <id>-layer-haze.png        the parallax model's haze, matted (colour and transparency)
-  <id>-layer-map.png         the map (the same image as <id>.png)
   <id>-composite.png         background, haze and map together, transparent where none of them is
   <id>-composite-on-black.png  the haze and the map over black (no background art, no fixed skybox)
   <id>-composite-with-fixed.png  the same over the fixed skybox, stretched behind everything like a
@@ -36,7 +35,6 @@ position.
 """
 
 import json
-import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -341,7 +339,6 @@ def build(manifest: dict, base: Path, out: Path, images: list[str]) -> None:
         write_layers({"rate": [1.0, 1.0], "areas": [{"image": f"{i}.png", "geo": f"{i}.geo.json"} for i in images]})
         log(f"  sky layers: {len(images)} map images; no composites")
         return
-    shutil.copyfile(map_png, out / f"{out_id}-layer-map.png")
     geo = json.loads(geo_path.read_text())
     s, origin = geo["pxPerCell"], geo["originCell"]
     mw, mh = geo["width"], geo["height"]
@@ -372,14 +369,11 @@ def build(manifest: dict, base: Path, out: Path, images: list[str]) -> None:
         with_fixed = backdrop.composite2(composite, "over").flatten(background=[0, 0, 0]).copy_memory()
         writes = [
             lambda: composite.write_to_file(str(out / f"{out_id}-composite.png"), compression=PNG_COMPRESSION),
-            lambda: composite.flatten(background=[40, 40, 40]).thumbnail_image(2048).write_to_file(str(out / f"{out_id}-composite-preview.jpg"), Q=88),
             lambda: on_black.write_to_file(str(out / f"{out_id}-composite-on-black.png"), compression=PNG_COMPRESSION),
-            lambda: on_black.thumbnail_image(2048).write_to_file(str(out / f"{out_id}-composite-on-black-preview.jpg"), Q=88),
             lambda: with_fixed.write_to_file(str(out / f"{out_id}-composite-with-fixed.png"), compression=PNG_COMPRESSION),
-            lambda: with_fixed.thumbnail_image(2048).write_to_file(str(out / f"{out_id}-composite-with-fixed-preview.jpg"), Q=88),
         ]
         with ThreadPoolExecutor(max_workers=len(writes)) as pool:
             for done in [pool.submit(w) for w in writes]:
                 done.result()
-    write_layers({"image": f"{out_id}-layer-map.png", "rate": [1.0, 1.0], "geo": geo_path.name})
+    write_layers({"image": map_png.name, "rate": [1.0, 1.0], "geo": geo_path.name})
     log(f"  composites: {out_id}-composite.png, -composite-on-black.png, -composite-with-fixed.png ({mw}x{mh} px)")

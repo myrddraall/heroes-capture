@@ -46,14 +46,18 @@ In PowerShell, start each with `.\heroes-capture.exe` instead of `heroes-capture
 While it renders, leave the keyboard and mouse alone. Alt-tabbing away, or opening the game's
 Esc menu, pauses it until you come back.
 
-- Each map ends up in `maps\<map id>\`, for example `maps\battlefield-of-eternity\`. Open
-  `…-viewer\index.html` there to look around the map.
+- Each map ends up in `maps\<map id>\`, for example `maps\battlefield-of-eternity\`: `pack\`
+  is the map for a viewer ([PACK.md](PACK.md)), `raw\` the full-size images.
+  `heroes-capture map view "Battlefield of Eternity"` opens it in your browser to look around.
 - Running the same command again skips maps already rendered (`--force` renders them again), and
   picks up a render that failed or was stopped from where it got to.
 - `logs\heroes-capture.log` keeps what each run printed. Working files go to `tmp\` and are
   removed after a successful render; `heroes-capture clean-up` removes those a failed run left
   behind.
 - `heroes-capture --help` and `heroes-capture map render --help` list the options.
+
+Rendered maps are published to GitHub Pages from [`packages/site`](packages/site): each map's
+pack with its viewer, and a page listing them.
 
 The tool's own README, [`packages/heroes-capture`](packages/heroes-capture), covers everything
 else: how a render works, the options, troubleshooting, and working on the tool.
