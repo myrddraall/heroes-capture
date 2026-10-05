@@ -53,8 +53,7 @@ from .workers import ordered_map
 MATCH_PATCH = 128  # the side of a matched patch, in half-size pixels (256 screen pixels)
 MATCH_STRENGTH = 0.12  # a patch match weaker than this is left out (soft haze matches falsely below it)
 MIN_TILT_MATCHES = 12  # fewer matches in all: the shells taken as level (each shot only shifted)
-KEY_FULL = 200  # the white key's level (230 in full) from which the haze matte trusts it
-KEY_BLEND = 200  # pixels over which the haze matte goes from its estimate to the measured alpha, away from where the key ends
+KEY_FULL = 200  # the white key's level (230 in full) from which the haze matte trusts it; below it the haze is cut off
 MIN_DEPTH_MATCHES = 40  # fewer for a layer: its depth at the middle from its measured rate (a few tenths of a percent off)
 
 
@@ -70,34 +69,27 @@ def _haze(white: np.ndarray, black: np.ndarray, level: np.ndarray, left: int) ->
     """RGBA (float, 0..1 alpha) of the haze: alpha from how much the background shows through,
     the difference between the shots over white and over black against the white level.
 
-    Where the white key isn't behind the haze (past the end of the sky shells: the far south of
-    Punisher Arena, whose map reaches further than its sky), that difference says nothing. The
-    shot over black is still the haze exactly (its colour times its alpha), so there the alpha
-    is estimated as its brightness against the haze's own colour, taken from where the key
-    showed in the same shot (the haze is a fairly even blue-grey; thin haze a little darker,
-    so all the haze seen there counts, as most of it is thin), blending from the measured
-    alpha to the estimate gradually towards the key's edge."""
+    Only where the white key is behind the haze: past the end of the sky shells (the far south
+    of Punisher Arena, whose haze reaches further than its background art: a misalignment in the
+    map) that difference says nothing, and the haze is cut off there, transparent, so the layer
+    shows it over the art only."""
     key_level = _mean3(level)
     alpha = np.clip(1.0 - _mean3(white - black) / np.maximum(key_level, 1.0), 0.0, 1.0)
-    keyed = key_level >= KEY_FULL
-    keyed[:, :left] = True  # the status strip's column, blanked in every shot and left out of the layer
-    if not keyed.all():
-        from scipy import ndimage
-
-        seen = keyed[::4, ::4] & (alpha[::4, ::4] > 0.1)
-        if seen.sum() >= 1000:
-            own = float(np.median(_mean3(black[::4, ::4])[seen] / alpha[::4, ::4][seen]))
-            guess = np.clip(_mean3(black) / max(own, 1.0), 0.0, 1.0)
-        else:
-            guess = np.zeros_like(alpha)  # no haze to learn its colour from: left transparent there
-        # From the estimate to the measured alpha over KEY_BLEND pixels into the keyed part, so a
-        # small difference between them fades in rather than showing as a line along the key's edge.
-        inside = ndimage.distance_transform_edt(keyed[::4, ::4]) * 4
-        trust = np.clip(np.repeat(np.repeat(inside, 4, axis=0), 4, axis=1)[: alpha.shape[0], : alpha.shape[1]] / KEY_BLEND, 0.0, 1.0)
-        alpha = trust * alpha + (1 - trust) * guess
+    alpha[key_level < KEY_FULL] = 0.0
     alpha[alpha < 1 / 255] = 0.0
     colour = np.where(alpha[..., None] > 0, np.clip(black / np.maximum(alpha, 1 / 255)[..., None], 0, 255), 0)
     return np.dstack([colour, alpha])
+
+
+def _crop_to_content(image: np.ndarray, low: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """An RGBA layer image cropped to its pixels that aren't transparent, and its canvas origin
+    (`low`, the canvas's top-left in the centre view) moved with the crop, so each pixel left stays
+    where it was behind the map."""
+    ys, xs = np.nonzero(image[:, :, 3])
+    if not len(xs):
+        return image, low
+    x0, x1, y0, y1 = int(xs.min()), int(xs.max()) + 1, int(ys.min()), int(ys.max()) + 1
+    return np.ascontiguousarray(image[y0:y1, x0:x1]), low + np.array([x0, y0])
 
 
 def _background(over_black: np.ndarray, over_fixed: np.ndarray, fixed: np.ndarray) -> np.ndarray:
@@ -317,6 +309,11 @@ def build(manifest: dict, base: Path, out: Path, images: list[str]) -> None:
                 return rgb, alpha, weight, boxes[k][0], boxes[k][1]
 
             image = _blend(ordered_map(placed, range(len(names))), canvas_w, canvas_h)
+            if layer == "haze":
+                # Cut off past the art (_haze): the image cropped to what is left, so its extent
+                # is the art's, not the haze's (a viewer centres on its layers).
+                image, low = _crop_to_content(image, low)
+                canvas_h, canvas_w = image.shape[:2]
             path = out / f"{out_id}-layer-{layer}.png"
             Image.fromarray(image).save(path, compress_level=PNG_COMPRESSION)
             # The layer's pixel behind the screen's middle with the camera at `centre`, and how fast
