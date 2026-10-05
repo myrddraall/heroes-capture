@@ -224,9 +224,10 @@ rectangle and it lies on the map layer (its viewBox is the picture's size in pix
 
 The rectangle is the picture at the map's scale: a whole number of pixels per cell (the picture's
 width over the map's, 2 on most maps, 4 on Trial Grounds). It isn't centred on the map: it's centred
-on the middle of the map's camera bounds, 2.25 cells lower (measured over the maps that have one),
-then moved to where its shape best covers the map's walkable cells (`CellAttribute_Pnp` in the map),
-by no more than 6 cells. Where those can't be read, the camera bounds alone place it.
+on the middle of the map's camera bounds, 2.25 cells lower (measured over the maps that have one,
+against their renders). A few maps' minimaps don't follow that exactly; their corrections, set by
+looking at the minimap over the render, are in `minimap-placement.json` (Volskaya Foundry's is
+drawn 2 cells shorter).
 
 Its parts, by id, back to front, with their classes:
 

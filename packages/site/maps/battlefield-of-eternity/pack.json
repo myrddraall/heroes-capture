@@ -1,0 +1,215 @@
+{
+  "format": 1,
+  "tool": "heroes-capture 0.0.0-dev",
+  "gameBuild": 98348,
+  "map": {
+    "id": "battlefield-of-eternity",
+    "name": "Battlefield of Eternity",
+    "category": "Battleground",
+    "validated": true,
+    "structures": "keep",
+    "sizeCells": [
+      248,
+      208
+    ],
+    "cameraBounds": {
+      "left": 20.0,
+      "bottom": 28.0,
+      "right": 228.0,
+      "top": 178.0
+    }
+  },
+  "capture": {
+    "pxPerCell": 48,
+    "screen": [
+      3440,
+      1440
+    ],
+    "fov": 8.019003082878507
+  },
+  "arenas": null,
+  "layers": [
+    {
+      "id": "fixed",
+      "kind": "fixed",
+      "file": "fixed.webp",
+      "size": [
+        3376,
+        1440
+      ]
+    },
+    {
+      "id": "background",
+      "kind": "parallax",
+      "file": "background.pmtiles",
+      "size": [
+        8506,
+        4788
+      ],
+      "rate": 0.45725638628510895,
+      "centreCell": [
+        124.0,
+        103.0
+      ],
+      "centrePixel": [
+        4221.0,
+        2570.0
+      ],
+      "pxPerCell": 22.140354223924977,
+      "levels": 6,
+      "tileSize": 512
+    },
+    {
+      "id": "haze",
+      "kind": "parallax",
+      "file": "haze.pmtiles",
+      "size": [
+        8719,
+        4912
+      ],
+      "rate": 0.47485,
+      "centreCell": [
+        124.0,
+        103.0
+      ],
+      "centrePixel": [
+        4327.0,
+        2647.0
+      ],
+      "pxPerCell": 22.992237,
+      "levels": 6,
+      "tileSize": 512
+    },
+    {
+      "id": "map",
+      "kind": "map",
+      "file": "map.pmtiles",
+      "size": [
+        12866,
+        9260
+      ],
+      "rate": 1.0,
+      "originCell": [
+        -2.251892250254496,
+        204.42636528686458
+      ],
+      "pxPerCell": 48.40373689623979,
+      "levels": 6,
+      "tileSize": 512
+    }
+  ],
+  "images": {
+    "thumbnail": {
+      "file": "thumbnail.webp",
+      "size": [
+        512,
+        368
+      ]
+    },
+    "minimap": {
+      "file": "images/minimap.png",
+      "size": [
+        512,
+        512
+      ],
+      "source": "Minimap.tga"
+    },
+    "customMinimap": {
+      "file": "images/custom-minimap.png",
+      "size": [
+        496,
+        416
+      ],
+      "source": "CustomMiniMap.dds"
+    },
+    "customMinimapHover": {
+      "file": "images/custom-minimap-hover.png",
+      "size": [
+        496,
+        416
+      ],
+      "source": "CustomMiniMap_Hover.dds"
+    },
+    "replayPreview": {
+      "file": "images/replay-preview.png",
+      "size": [
+        417,
+        234
+      ],
+      "source": "ReplaysPreviewImage.tga"
+    },
+    "mapSelect": {
+      "file": "images/map-select.png",
+      "size": [
+        572,
+        348
+      ],
+      "source": "Storm_UI_Gamemode_MapSelect_BattleOfEternity.png"
+    },
+    "customMinimapSvg": {
+      "file": "images/custom-minimap.svg",
+      "size": [
+        496,
+        416
+      ],
+      "source": "CustomMiniMap.dds",
+      "boundsCells": {
+        "left": 0.0,
+        "bottom": -3.25,
+        "right": 248.0,
+        "top": 204.75
+      }
+    }
+  },
+  "data": {},
+  "files": {
+    "background.pmtiles": {
+      "bytes": 1635472,
+      "sha256": "b6277dd08554217653199b7423e1aeaf1f3a8d4e5c7cdd07d6983515d3058aa3"
+    },
+    "fixed.webp": {
+      "bytes": 24998,
+      "sha256": "a098236698fd737f89cd7bbc4a8026fd5af4395c5a717d0e02cb1e80af13327d"
+    },
+    "haze.pmtiles": {
+      "bytes": 5131684,
+      "sha256": "921a7caf94f1f4de398b7d307b60c1857bc74d14d522e324b1d8ec7f5f72da6b"
+    },
+    "images/custom-minimap-hover.png": {
+      "bytes": 16366,
+      "sha256": "2b54dc3908b1a87ced3f11ec20f6555a339f53f4b4d35b406764043be0f2f987"
+    },
+    "images/custom-minimap.png": {
+      "bytes": 49177,
+      "sha256": "d0fb6ed9ebe98b00e736ab95fc3baff25d627e672665b66556fc4fed53f76f35"
+    },
+    "images/custom-minimap.svg": {
+      "bytes": 52235,
+      "sha256": "7de9a0086dbe42a692555b3d1729739343d6afdbd3d2a38f7783309c3474a089"
+    },
+    "images/map-select.png": {
+      "bytes": 334449,
+      "sha256": "1f6e2d2916191fe97ad583baf96210f2fa1821995fca25562dbe72f6314c51fb"
+    },
+    "images/minimap.png": {
+      "bytes": 54642,
+      "sha256": "eae2909c84929f46e96e82c96375c6c242bd54aa69a1ad43c8621636169ce68f"
+    },
+    "images/replay-preview.png": {
+      "bytes": 187074,
+      "sha256": "fd3e0eca3636781779654e706bee05a8b8da8f494b0e52f3b57475ed3a2ad9be"
+    },
+    "index.html": {
+      "bytes": 20673,
+      "sha256": "961cd3792e636cc3932389032ca883b7ddbcfc73fcaa75e9d2d27f3738ad8c9b"
+    },
+    "map.pmtiles": {
+      "bytes": 13607692,
+      "sha256": "535cd02aaee7ed8822e34bb97a1a88b4d1ab9cbccbdec189f4161e6994d5b651"
+    },
+    "thumbnail.webp": {
+      "bytes": 22242,
+      "sha256": "6b715bbff5cc9183e71890ee4114cec2350bd0e0ee841d1bceda2c2339bce729"
+    }
+  }
+}

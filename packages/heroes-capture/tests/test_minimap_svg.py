@@ -79,18 +79,11 @@ def test_the_custom_minimap_lies_at_the_map_s_scale_below_the_camera_bounds_midd
     assert bounds == {"left": 0.0, "bottom": -1.25, "right": 120.0, "top": 88.75}
 
 
-def test_the_custom_minimap_moves_onto_the_map_s_walkable_cells():
-    """Where the walkable cells say its shape lies (here 3 cells right of and 2 above where the
-    camera bounds put it), it goes."""
-    picture = drawn_minimap()
-    shape = np.asarray(picture)[..., 3] > 0
-    left, top = 0 + 3, 88.75 + 2  # where it really lies
-    cy, cx = np.mgrid[0:90, 0:120] + 0.5  # each cell's middle
-    px, py = ((cx - left) * 2).astype(int), ((top - cy) * 2).astype(int)
-    walkable = shape[np.clip(py, 0, 179), np.clip(px, 0, 239)] & (px >= 0) & (px < 240) & (py >= 0) & (py < 180)
-    walkable = ndimage.binary_erosion(walkable, iterations=1)  # the drawn shape runs a little past them
-    bounds = pack.custom_minimap_bounds(picture, {"width": 120, "height": 90}, CAMERA, walkable)
-    assert abs(bounds["left"] - left) <= 0.5 and abs(bounds["top"] - top) <= 0.5
+def test_a_map_s_minimap_placement_correction_applies():
+    """minimap-placement.json corrects maps that don't follow the rule exactly (Volskaya Foundry's
+    is drawn 2 cells shorter: its top comes down)."""
+    bounds = pack.custom_minimap_bounds(drawn_minimap(), {"width": 120, "height": 90}, CAMERA, "Volskaya Foundry")
+    assert bounds == {"left": 0.0, "bottom": -1.25, "right": 120.0, "top": 86.75}
 
 
 def test_the_pack_s_svg_entry(tmp_path):

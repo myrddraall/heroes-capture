@@ -1,0 +1,9 @@
+{
+  "_comment": "Corrections to where a map's custom minimap is placed (PACK.md, The custom minimap as SVG), for maps whose minimap doesn't follow the general rule exactly: map name as the game names it -> cells added to each edge of the rectangle the rule gives (left, bottom, right, top; positive is right or up), and what was seen. Hand-curated, set by looking at the minimap over the map's render.",
+  "maps": {
+    "Volskaya Foundry": {
+      "top": -2,
+      "note": "drawn about 2 cells shorter than the map's scale: with the rule, the bottom lies on the render and the top runs 2 cells past the top building's wall"
+    }
+  }
+}
