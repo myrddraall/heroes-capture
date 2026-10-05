@@ -1,11 +1,39 @@
 #owner @myrddraall/heroes-capture-site
-#version 0.3.0-alpha.0
+#version 0.4.0
 index.html
+maps/battlefield-of-eternity/background.pmtiles
+maps/battlefield-of-eternity/fixed.webp
+maps/battlefield-of-eternity/haze.pmtiles
+maps/battlefield-of-eternity/images/custom-minimap-hover.png
+maps/battlefield-of-eternity/images/custom-minimap.png
+maps/battlefield-of-eternity/images/custom-minimap.svg
+maps/battlefield-of-eternity/images/map-select.png
+maps/battlefield-of-eternity/images/minimap.png
+maps/battlefield-of-eternity/images/replay-preview.png
+maps/battlefield-of-eternity/index.html
+maps/battlefield-of-eternity/map.pmtiles
+maps/battlefield-of-eternity/pack.json
+maps/battlefield-of-eternity/thumbnail.webp
+maps/dragon-shire/images/custom-minimap-hover.png
+maps/dragon-shire/images/custom-minimap.png
+maps/dragon-shire/images/custom-minimap.svg
+maps/dragon-shire/images/loading-screen-icon-1.png
+maps/dragon-shire/images/loading-screen-icon-2.png
+maps/dragon-shire/images/loading-screen-icon-3.png
+maps/dragon-shire/images/loading-screen.png
+maps/dragon-shire/images/map-select.png
+maps/dragon-shire/images/minimap.png
+maps/dragon-shire/images/replay-preview.png
+maps/dragon-shire/index.html
+maps/dragon-shire/map.pmtiles
+maps/dragon-shire/pack.json
+maps/dragon-shire/thumbnail.webp
 maps/punisher-arena/background.pmtiles
 maps/punisher-arena/fixed.webp
 maps/punisher-arena/haze.pmtiles
 maps/punisher-arena/images/custom-minimap-hover.png
 maps/punisher-arena/images/custom-minimap.png
+maps/punisher-arena/images/custom-minimap.svg
 maps/punisher-arena/images/loading-screen-icon-1.png
 maps/punisher-arena/images/loading-screen-icon-2.png
 maps/punisher-arena/images/loading-screen.png
@@ -18,3 +46,15 @@ maps/punisher-arena/map-m2.pmtiles
 maps/punisher-arena/map-m3.pmtiles
 maps/punisher-arena/pack.json
 maps/punisher-arena/thumbnail.webp
+maps/volskaya-foundry/images/custom-minimap-hover.png
+maps/volskaya-foundry/images/custom-minimap.png
+maps/volskaya-foundry/images/custom-minimap.svg
+maps/volskaya-foundry/images/loading-screen-icon-1.png
+maps/volskaya-foundry/images/loading-screen-icon-2.png
+maps/volskaya-foundry/images/loading-screen-icon-3.png
+maps/volskaya-foundry/images/loading-screen.png
+maps/volskaya-foundry/images/minimap.png
+maps/volskaya-foundry/index.html
+maps/volskaya-foundry/map.pmtiles
+maps/volskaya-foundry/pack.json
+maps/volskaya-foundry/thumbnail.webp

@@ -1,7 +1,7 @@
 {
   "format": 1,
   "tool": "heroes-capture 0.0.0-dev",
-  "gameBuild": 98304,
+  "gameBuild": 98348,
   "map": {
     "id": "punisher-arena",
     "name": "Punisher Arena",
@@ -92,7 +92,7 @@
         7626,
         6715
       ],
-      "rate": 0.4595509462338062,
+      "rate": 0.4595711392673761,
       "centreCell": [
         123.25,
         135.40885416666666
@@ -101,7 +101,7 @@
         3780,
         3737
       ],
-      "pxPerCell": 22.290059096124537,
+      "pxPerCell": 22.290349182315907,
       "levels": 5,
       "tileSize": 512
     },
@@ -122,7 +122,7 @@
         3860,
         3850
       ],
-      "pxPerCell": 23.027274000000002,
+      "pxPerCell": 23.026561875,
       "levels": 5,
       "tileSize": 512
     },
@@ -131,15 +131,15 @@
       "kind": "map",
       "file": "map-m1.pmtiles",
       "size": [
-        9692,
+        9696,
         4966
       ],
       "rate": 1,
       "originCell": [
-        18.939121836340174,
-        266.61249617758614
+        18.938189209803934,
+        266.619997110573
       ],
-      "pxPerCell": 48.471096386240674,
+      "pxPerCell": 48.47348338481956,
       "levels": 6,
       "tileSize": 512
     },
@@ -149,14 +149,14 @@
       "file": "map-m2.pmtiles",
       "size": [
         9095,
-        5033
+        5034
       ],
       "rate": 1,
       "originCell": [
-        29.687795558271795,
-        189.82446624854677
+        29.686333630618584,
+        189.83574848433094
       ],
-      "pxPerCell": 48.471096386240674,
+      "pxPerCell": 48.47348338481956,
       "levels": 6,
       "tileSize": 512
     },
@@ -170,10 +170,10 @@
       ],
       "rate": 1,
       "originCell": [
-        30.43050621852043,
-        104.57778713334241
+        30.42900771727756,
+        104.5932672044727
       ],
-      "pxPerCell": 48.471096386240674,
+      "pxPerCell": 48.47348338481956,
       "levels": 6,
       "tileSize": 512
     }
@@ -251,21 +251,35 @@
         ],
         "source": "Assets\\Textures\\ui_ingame_mapmechanic_loadscreen_punisherarena_icon2.dds"
       }
-    ]
+    ],
+    "customMinimapSvg": {
+      "file": "images/custom-minimap.svg",
+      "size": [
+        512,
+        512
+      ],
+      "source": "CustomMiniMap.dds",
+      "boundsCells": {
+        "left": 0,
+        "bottom": -2.25,
+        "right": 256,
+        "top": 253.75
+      }
+    }
   },
   "data": {},
   "files": {
     "background.pmtiles": {
-      "bytes": 1707931,
-      "sha256": "1b39ea142143f067a0da3e23bdfe71b3ce595b4b70a0ef2a84dafb8d566eb5ae"
+      "bytes": 1710827,
+      "sha256": "a2dba3ba271c0434f2754ba27aae978f3d4449bab084726778e80e53b423cfdf"
     },
     "fixed.webp": {
       "bytes": 24998,
-      "sha256": "a098236698fd737f89cd7bbc4a8026fd5af4395c5a717d0e02cb1e80af13327d"
+      "sha256": "3d54184e4ecd1a61ab96143ea539c1e93ca379a27946ca0fb6a5243b84541314"
     },
     "haze.pmtiles": {
-      "bytes": 5197427,
-      "sha256": "04dc680c16fe361038db05868abac7bd090caf1cbd161d5fcbb774b3199f3fd0"
+      "bytes": 5196755,
+      "sha256": "18ef56ac79e2a9f18784562639b80f7ef4321163472d45becd9cac97ddc8500e"
     },
     "images/custom-minimap-hover.png": {
       "bytes": 28042,
@@ -274,6 +288,10 @@
     "images/custom-minimap.png": {
       "bytes": 47169,
       "sha256": "1b8a4e0733172b2d63091139ff8c4ce89056dd4a9ab55cf7d8a9c4875f94dd10"
+    },
+    "images/custom-minimap.svg": {
+      "bytes": 40821,
+      "sha256": "6c846f543c4da84328258cd848de5119dfae72faf1edfdd2271e52b2adc0762b"
     },
     "images/loading-screen-icon-1.png": {
       "bytes": 60638,
@@ -300,24 +318,24 @@
       "sha256": "eb7913790d06a2731900fca3b096e8752157cf061f4c82520ef4d8ecca1c0db9"
     },
     "index.html": {
-      "bytes": 15416,
-      "sha256": "e70ea69160a152d567a653b0bf975f03f95d7c54984d34a8cd408f5b1de2c3d8"
+      "bytes": 21148,
+      "sha256": "d659c4ee66a095604b73db9a11e4a25677800493db65898bc50f34346018966e"
     },
     "map-m1.pmtiles": {
-      "bytes": 8591666,
-      "sha256": "237982e577fd51100d527f1e7990d4691d3f585a90e8a442a0813f5d57e4cb89"
+      "bytes": 8608765,
+      "sha256": "8127b6d4e2444b8e043917cb30e02f390920645d92f01ab748d2f7308db81df0"
     },
     "map-m2.pmtiles": {
-      "bytes": 6631957,
-      "sha256": "acbc1ee6621248eaa1b2e59a0c523e2e24f00748f5a71a98bdcf14f121512c13"
+      "bytes": 6631231,
+      "sha256": "eb649305ea86533b3ba5288dff894132ea6877a8b02bbdd02fe80eaf5f739e98"
     },
     "map-m3.pmtiles": {
-      "bytes": 6243653,
-      "sha256": "91544cf48490807e2a96bed2e5d855b9cae59eb62d8ba739bc79f4d88746aa9a"
+      "bytes": 6275345,
+      "sha256": "660849d11d75fc879bc5932ea4e98cd2ef4677dff94e75aeb7d58efcf52487e1"
     },
     "thumbnail.webp": {
-      "bytes": 23232,
-      "sha256": "3a49f2a58d2326f70ded79942d8528b4866f7283ee5a5e45f5cd15899ee45925"
+      "bytes": 23274,
+      "sha256": "be1bc7be5819f5aaacaaea0b25a46b2e39b2818ed055e8619990c106216e3f2f"
     }
   }
 }
