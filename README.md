@@ -56,6 +56,9 @@ Esc menu, pauses it until you come back.
   behind.
 - `heroes-capture --help` and `heroes-capture map render --help` list the options.
 
+Rendered maps are published to GitHub Pages from [`packages/site`](packages/site): each map's
+pack with its viewer, and a page listing them.
+
 The tool's own README, [`packages/heroes-capture`](packages/heroes-capture), covers everything
 else: how a render works, the options, troubleshooting, and working on the tool.
 [PLAN.md](PLAN.md) records the decisions behind it.

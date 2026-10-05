@@ -224,7 +224,9 @@ pack's tiles come from them.
 
 ## Hosting
 
-- **Range requests.** A viewer reads PMTiles by range requests, which GitHub Pages serves.
+- **Range requests.** A viewer reads PMTiles by range requests, which GitHub Pages serves. This
+  repository publishes its packs to Pages from `packages/site` (a home page listing the maps,
+  each pack at `maps/<map id>/`).
 - **Size limits.** git refuses files over 100 MB, and GitHub Pages expects a site under about
   1 GB. One map's pack is expected to come to about 60–100 MB, so Pages holds a handful of maps,
   not all of them. Past that, packs can move to an S3-style bucket (Cloudflare R2, for example)

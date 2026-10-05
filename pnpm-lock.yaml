@@ -47,6 +47,8 @@ importers:
 
   packages/heroes-capture: {}
 
+  packages/site: {}
+
 packages:
 
   '@actions/core@1.11.1':
