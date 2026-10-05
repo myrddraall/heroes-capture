@@ -15,6 +15,14 @@
   #bar button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
   #bar button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   #status { opacity: 0.75; font-variant-numeric: tabular-nums; }
+  #open { position: fixed; inset: 0; display: grid; place-items: center; }
+  #open[hidden] { display: none; }
+  #open div { max-width: 30rem; margin: 16px; padding: 20px 24px; border-radius: 10px; background: var(--panel); }
+  #open p { margin: 0 0 12px; }
+  #open label { display: inline-block; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--accent); color: var(--accent); cursor: pointer; }
+  #open input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  #open input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #open small { display: block; margin-top: 12px; opacity: 0.75; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/pmtiles@4.5.0/dist/pmtiles.js"></script>
 </head>
@@ -22,6 +30,16 @@
 <div id="fixed"></div>
 <canvas id="view" aria-label="Map; drag to pan, mouse wheel to zoom"></canvas>
 <div id="bar"><strong id="title">Loading…</strong><span id="arenas"></span><span id="status" aria-live="polite"></span></div>
+<div id="open" hidden>
+  <div>
+    <p>This page was opened from disk, and a browser won't let a page read the files next to it by itself.
+       Choose this pack's folder (the one with this <code>index.html</code>) to show the map.</p>
+    <input type="file" id="folder" webkitdirectory multiple>
+    <label for="folder">Choose the pack folder</label>
+    <small>The files stay on your computer: the browser only reads them. Or run
+      <code>heroes-capture map view "&lt;map&gt;"</code>, which opens it without asking.</small>
+  </div>
+</div>
 <script>
 "use strict";
 // The pack's reference viewer (heroes-capture). It draws a pack as PACK.md says: each layer scaled
@@ -34,8 +52,38 @@ const MAX_TILES = 900;  // decoded tiles kept (least recently drawn dropped firs
 
 const statusEl = document.getElementById("status");
 
+// The pack: fetched next to the page when it is served over HTTP (heroes-capture map view, a web
+// host); opened from disk, read from the folder the user chooses, each archive through the
+// pmtiles reader's FileSource.
+async function openPack() {
+  if (location.protocol !== "file:") {
+    const answer = await fetch("pack.json");
+    if (!answer.ok) throw new Error(`pack.json: ${answer.status} ${answer.statusText}`);
+    return { pack: await answer.json(), archive: (name) => name, url: (name) => name };
+  }
+  const panel = document.getElementById("open");
+  panel.hidden = false;
+  document.getElementById("title").textContent = "Map pack";
+  return new Promise((resolve) => {
+    document.getElementById("folder").addEventListener("change", async (e) => {
+      const files = {};
+      for (const file of e.target.files) files[file.webkitRelativePath.split("/").slice(1).join("/")] = file;
+      if (!files["pack.json"]) {
+        statusEl.textContent = "That folder has no pack.json: choose a map's pack folder.";
+        return;
+      }
+      panel.hidden = true;
+      resolve({
+        pack: JSON.parse(await files["pack.json"].text()),
+        archive: (name) => new pmtiles.FileSource(files[name]),
+        url: (name) => URL.createObjectURL(files[name]),
+      });
+    });
+  });
+}
+
 (async () => {
-  const pack = await (await fetch("pack.json")).json();
+  const { pack, archive, url } = await openPack();
   if (pack.format !== 1) {
     statusEl.textContent = `This viewer reads pack format 1; this pack is format ${pack.format}.`;
     return;
@@ -50,10 +98,10 @@ const statusEl = document.getElementById("status");
   const layers = [];
   for (const meta of pack.layers) {
     if (meta.kind === "fixed") {
-      document.getElementById("fixed").style.backgroundImage = `url("${meta.file}")`;
+      document.getElementById("fixed").style.backgroundImage = `url("${url(meta.file)}")`;
       continue;
     }
-    layers.push({ meta, archive: new pmtiles.PMTiles(meta.file), tiles: new Map() });
+    layers.push({ meta, archive: new pmtiles.PMTiles(archive(meta.file)), tiles: new Map() });
   }
   const maps = layers.filter((l) => l.meta.kind === "map");
   const pxPerCell = maps[0].meta.pxPerCell;  // the camera's scale: the map's pixels per cell
