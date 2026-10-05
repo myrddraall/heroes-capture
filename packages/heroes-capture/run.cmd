@@ -2,17 +2,21 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: Punisher Arena again (--force) to write its first pack: maps\punisher-arena\pack\
-rem (tile pyramids, pictures, pack.json, the reference viewer) and raw\. Afterwards,
-rem "py -m heroes_capture map view "Punisher Arena"" opens it in the browser (Ctrl+C stops it).
+rem Current step: the maps for the site's next release, each rendered fresh (--force) into
+rem maps\<map id>\pack: Battlefield of Eternity, Dragon Shire and Volskaya Foundry (new on the
+rem site), and Punisher Arena again (its site copy predates the minimap as SVG). One after the
+rem other; one that fails doesn't stop the rest. Afterwards, "py -m heroes_capture map view
+rem "<map>"" opens one (Ctrl+C stops it).
 rem A map that fails leaves its working files in tmp\ (pip, when it runs, writes tmp\setup.log).
 setlocal
 pushd "%~dp0"
 set "PYTHONPATH=%~dp0src"
 rem The tool's dependencies, installed quietly when missing (pip's output in tmp\setup.log).
 py -c "import heroes_capture.cli, numpy, PIL, pyvips, scipy, mss, pydirectinput, dxcam, typer, rich, pmtiles" 2>nul || call :install || goto :copy
-py -m heroes_capture map render "Punisher Arena" --force
-if errorlevel 1 echo.& echo Stopped: the step above failed.
+for %%M in ("Battlefield of Eternity" "Dragon Shire" "Volskaya Foundry" "Punisher Arena") do (
+  py -m heroes_capture map render %%M --force
+  if errorlevel 1 echo.& echo %%~M failed; going on with the next.
+)
 popd
 
 :copy

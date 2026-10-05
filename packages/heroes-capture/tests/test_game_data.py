@@ -168,3 +168,44 @@ def test_a_map_s_own_pictures(storage, tmp_path):
     assert len(found["loadingScreenIcons"]) == 3
     for entry in [found["minimap"], found["loadingScreen"], *found["loadingScreenIcons"]]:
         assert (tmp_path / entry["file"]).read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_a_custom_minimap_mapinfo_names_as_a_tga(storage, tmp_path):
+    """The custom minimap is the file MapInfo names: on Escape From Braxis, a .tga."""
+    from heroes_capture import pack
+
+    name, data = game_data.map_file(storage, "Escape From Braxis")
+    (tmp_path / "map.stormmap").write_bytes(data)
+    found = pack.map_images(tmp_path / "map.stormmap", None, tmp_path / "images")
+    assert found["customMinimap"] == {"file": "images/custom-minimap.png", "size": [384, 464], "source": "CustomMiniMap.tga"}
+    assert found["customMinimapHover"]["source"] == "CustomMiniMap_Hover.tga"
+
+
+def test_cursed_hollow_s_custom_minimap_as_svg(storage, tmp_path):
+    """Cursed Hollow's custom minimap redrawn (PACK.md, The custom minimap as SVG): each nexus an arc
+    of the outline and its swirl, the camps, and drawn it looks like the picture."""
+    import io
+
+    import numpy as np
+    import pyvips
+    from PIL import Image
+
+    from heroes_capture import minimap_svg
+
+    name, data = game_data.map_file(storage, "Cursed Hollow")
+    (tmp_path / "map.stormmap").write_bytes(data)
+    with Archive(tmp_path / "map.stormmap") as archive:
+        picture = Image.open(io.BytesIO(archive.read("CustomMiniMap.dds"))).convert("RGBA")
+    svg = minimap_svg.to_svg(picture)
+    outline = re.search(r'<path id="outline"[^>]* d="([^"]+)"', svg).group(1)
+    assert outline.count("A") == 2  # each nexus: the circle's arc between its cut-ins' tips
+    assert re.search(r'<path id="cut-ins" d="([^"]+)"', svg).group(1).count("Z") == 4  # their black, one per cut-in
+    for nexus in ("nexus-1", "nexus-2"):
+        assert re.search(rf'<g id="{nexus}">(.*?)</g>', svg, re.S).group(1).count('<path class="nexus"') == 1  # its swirl
+    assert re.search(r'<g id="camps">(.*?)</g>', svg, re.S).group(1).count('<path class="camps"') == 6
+    drawn = pyvips.Image.svgload_buffer(svg.encode())
+    drawn = np.ndarray(buffer=drawn.write_to_memory(), dtype=np.uint8, shape=[drawn.height, drawn.width, drawn.bands]).astype(float)
+    original = np.asarray(picture).astype(float)
+    inside = original[..., 3] > 0
+    diff = np.abs(drawn[..., :3] * drawn[..., 3:] / 255 - original[..., :3] * original[..., 3:] / 255).max(axis=2)[inside]
+    assert diff.mean() < 3 and (diff > 25).mean() < 0.01

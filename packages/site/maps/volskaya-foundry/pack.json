@@ -1,0 +1,178 @@
+{
+  "format": 1,
+  "tool": "heroes-capture 0.0.0-dev",
+  "gameBuild": 98348,
+  "map": {
+    "id": "volskaya-foundry",
+    "name": "Volskaya Foundry",
+    "category": "Battleground",
+    "validated": false,
+    "structures": "keep",
+    "sizeCells": [
+      248,
+      208
+    ],
+    "cameraBounds": {
+      "left": 15.0,
+      "bottom": 8.0,
+      "right": 233.0,
+      "top": 192.0
+    }
+  },
+  "capture": {
+    "pxPerCell": 48,
+    "screen": [
+      3440,
+      1440
+    ],
+    "fov": 8.019003082878507
+  },
+  "arenas": null,
+  "layers": [
+    {
+      "id": "map",
+      "kind": "map",
+      "file": "map.pmtiles",
+      "size": [
+        12786,
+        10351
+      ],
+      "rate": 1.0,
+      "originCell": [
+        -7.992237972714808,
+        206.88950907146497
+      ],
+      "pxPerCell": 48.42198159279079,
+      "levels": 6,
+      "tileSize": 512
+    }
+  ],
+  "images": {
+    "thumbnail": {
+      "file": "thumbnail.webp",
+      "size": [
+        512,
+        414
+      ]
+    },
+    "minimap": {
+      "file": "images/minimap.png",
+      "size": [
+        512,
+        512
+      ],
+      "source": "Minimap.tga"
+    },
+    "customMinimap": {
+      "file": "images/custom-minimap.png",
+      "size": [
+        496,
+        416
+      ],
+      "source": "CustomMiniMap.dds"
+    },
+    "customMinimapHover": {
+      "file": "images/custom-minimap-hover.png",
+      "size": [
+        496,
+        416
+      ],
+      "source": "CustomMiniMap_Hover.dds"
+    },
+    "loadingScreen": {
+      "file": "images/loading-screen.png",
+      "size": [
+        2560,
+        1440
+      ],
+      "source": "storm_ui_homescreenbackground_volskaya.dds"
+    },
+    "loadingScreenIcons": [
+      {
+        "file": "images/loading-screen-icon-1.png",
+        "size": [
+          180,
+          180
+        ],
+        "source": "Assets\\Textures\\ui_ingame_mapmechanic_loadscreen_Volskaya_icon1.dds"
+      },
+      {
+        "file": "images/loading-screen-icon-2.png",
+        "size": [
+          180,
+          180
+        ],
+        "source": "Assets\\Textures\\ui_ingame_mapmechanic_loadscreen_Volskaya_icon2.dds"
+      },
+      {
+        "file": "images/loading-screen-icon-3.png",
+        "size": [
+          272,
+          292
+        ],
+        "source": "Assets\\Textures\\ui_ingame_mapmechanic_loadscreen_Volskaya_icon3.dds"
+      }
+    ],
+    "customMinimapSvg": {
+      "file": "images/custom-minimap.svg",
+      "size": [
+        496,
+        416
+      ],
+      "source": "CustomMiniMap.dds",
+      "boundsCells": {
+        "left": 0.0,
+        "bottom": -6.25,
+        "right": 248.0,
+        "top": 199.75
+      }
+    }
+  },
+  "data": {},
+  "files": {
+    "images/custom-minimap-hover.png": {
+      "bytes": 13546,
+      "sha256": "8d9ae25823f3149feb13024ff09dfaa5d0b912728472fee04675d3129a60ff06"
+    },
+    "images/custom-minimap.png": {
+      "bytes": 38944,
+      "sha256": "7f747b4a7c4d88ab33cda7d89c0343ac26c27532840fe2f745d6db768997dcf8"
+    },
+    "images/custom-minimap.svg": {
+      "bytes": 38646,
+      "sha256": "e700dcc20b0bad39b15f04228330bdd8ee8c361a35885bb168c1c679aa70e315"
+    },
+    "images/loading-screen-icon-1.png": {
+      "bytes": 45171,
+      "sha256": "d42cb693b0560d42f94fc1cd2803fe8725dfb85fad8498603c7d719ba3ef298f"
+    },
+    "images/loading-screen-icon-2.png": {
+      "bytes": 43246,
+      "sha256": "43d7137899164105e8c1056106dbfb21adc793859d287314f3957ee8e15c09ae"
+    },
+    "images/loading-screen-icon-3.png": {
+      "bytes": 129721,
+      "sha256": "30589f32c69e532195e8756f452562e3a44016c15b55f413eab25a007336f862"
+    },
+    "images/loading-screen.png": {
+      "bytes": 5032667,
+      "sha256": "c2de3ac874d4de4f8f7af85f66e78ae9eab4ee4de293285ee08a4a3fbee09d9b"
+    },
+    "images/minimap.png": {
+      "bytes": 77259,
+      "sha256": "6ec73549eb880575b31b45a4d39b33291fce2d992708a44a9b314d7ad5cef3d8"
+    },
+    "index.html": {
+      "bytes": 20673,
+      "sha256": "961cd3792e636cc3932389032ca883b7ddbcfc73fcaa75e9d2d27f3738ad8c9b"
+    },
+    "map.pmtiles": {
+      "bytes": 18924499,
+      "sha256": "1ca88340b8215047b2c124189354305ab2313b3ecba855104b0667d30a21c38a"
+    },
+    "thumbnail.webp": {
+      "bytes": 54654,
+      "sha256": "4eecd364e79212a995c71309fbc378e180aff2931fc7b5500790106b64a9c774"
+    }
+  }
+}

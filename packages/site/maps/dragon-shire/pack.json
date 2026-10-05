@@ -1,0 +1,202 @@
+{
+  "format": 1,
+  "tool": "heroes-capture 0.0.0-dev",
+  "gameBuild": 98348,
+  "map": {
+    "id": "dragon-shire",
+    "name": "Dragon Shire",
+    "category": "Battleground",
+    "validated": true,
+    "structures": "keep",
+    "sizeCells": [
+      248,
+      208
+    ],
+    "cameraBounds": {
+      "left": 20.0,
+      "bottom": 28.0,
+      "right": 228.0,
+      "top": 178.0
+    }
+  },
+  "capture": {
+    "pxPerCell": 48,
+    "screen": [
+      3440,
+      1440
+    ],
+    "fov": 8.019003082878507
+  },
+  "arenas": null,
+  "layers": [
+    {
+      "id": "map",
+      "kind": "map",
+      "file": "map.pmtiles",
+      "size": [
+        12932,
+        9249
+      ],
+      "rate": 1.0,
+      "originCell": [
+        -10.25365655296328,
+        203.95905167524143
+      ],
+      "pxPerCell": 48.47051365850247,
+      "levels": 6,
+      "tileSize": 512
+    }
+  ],
+  "images": {
+    "thumbnail": {
+      "file": "thumbnail.webp",
+      "size": [
+        512,
+        366
+      ]
+    },
+    "minimap": {
+      "file": "images/minimap.png",
+      "size": [
+        512,
+        512
+      ],
+      "source": "Minimap.tga"
+    },
+    "customMinimap": {
+      "file": "images/custom-minimap.png",
+      "size": [
+        496,
+        416
+      ],
+      "source": "CustomMiniMap.dds"
+    },
+    "customMinimapHover": {
+      "file": "images/custom-minimap-hover.png",
+      "size": [
+        496,
+        416
+      ],
+      "source": "CustomMiniMap_Hover.dds"
+    },
+    "replayPreview": {
+      "file": "images/replay-preview.png",
+      "size": [
+        417,
+        234
+      ],
+      "source": "ReplaysPreviewImage.tga"
+    },
+    "mapSelect": {
+      "file": "images/map-select.png",
+      "size": [
+        574,
+        348
+      ],
+      "source": "Storm_UI_Gamemode_MapSelect_Dragonshire.png"
+    },
+    "loadingScreen": {
+      "file": "images/loading-screen.png",
+      "size": [
+        1920,
+        1080
+      ],
+      "source": "ui_ingame_mapmechanic_loadscreen_dragonshire.dds"
+    },
+    "loadingScreenIcons": [
+      {
+        "file": "images/loading-screen-icon-1.png",
+        "size": [
+          214,
+          204
+        ],
+        "source": "Assets\\Textures\\ui_ingame_mapmechanic_loadscreen_dragonshire_icon1.dds"
+      },
+      {
+        "file": "images/loading-screen-icon-2.png",
+        "size": [
+          164,
+          154
+        ],
+        "source": "Assets\\Textures\\ui_ingame_mapmechanic_loadscreen_dragonshire_icon2.dds"
+      },
+      {
+        "file": "images/loading-screen-icon-3.png",
+        "size": [
+          184,
+          164
+        ],
+        "source": "Assets\\Textures\\ui_ingame_mapmechanic_loadscreen_Dragonshire_icon3.dds"
+      }
+    ],
+    "customMinimapSvg": {
+      "file": "images/custom-minimap.svg",
+      "size": [
+        496,
+        416
+      ],
+      "source": "CustomMiniMap.dds",
+      "boundsCells": {
+        "left": 0.0,
+        "bottom": -3.25,
+        "right": 248.0,
+        "top": 204.75
+      }
+    }
+  },
+  "data": {},
+  "files": {
+    "images/custom-minimap-hover.png": {
+      "bytes": 15004,
+      "sha256": "6fc7c5617a24e8b33922f267721da27db2a73e750d26a7d2ec0ff96147ee9aec"
+    },
+    "images/custom-minimap.png": {
+      "bytes": 38752,
+      "sha256": "ffbdc9d04fa3307a5ec51d9cf4291b264a298264bd6d5dd534c034050a840117"
+    },
+    "images/custom-minimap.svg": {
+      "bytes": 37781,
+      "sha256": "8590d2d0506719cf93f471ce271e025cf2ddc7e934d4ad98cef799c1f79d316e"
+    },
+    "images/loading-screen-icon-1.png": {
+      "bytes": 38404,
+      "sha256": "f7215002e43df58796d3e31335729b8a7093cf7a1006bdffd02c3fbb560a0508"
+    },
+    "images/loading-screen-icon-2.png": {
+      "bytes": 44275,
+      "sha256": "bee0f96cdbb09deb358cb6a93e01c68113bb50aa974a224f752fe47d831b92c1"
+    },
+    "images/loading-screen-icon-3.png": {
+      "bytes": 55582,
+      "sha256": "1eafbdf46d59c917148af2c95e9c02f534af5140f74a26469b923fc49848d0d4"
+    },
+    "images/loading-screen.png": {
+      "bytes": 1684794,
+      "sha256": "a1863908878cda4b0344bc40b946974a99428082ed1560563b8f54d5c76a51b7"
+    },
+    "images/map-select.png": {
+      "bytes": 362947,
+      "sha256": "703e8485692b06052163d3eaa675fd10e4e4b2540fc589440f7f5ca10065039a"
+    },
+    "images/minimap.png": {
+      "bytes": 106409,
+      "sha256": "7066b41da356cb178ed2b748692bde4fb2e782391fd734fb4b81336c91568ee4"
+    },
+    "images/replay-preview.png": {
+      "bytes": 228133,
+      "sha256": "7b0f3e30aa4fbf398aaf4ee9a057cb592c75d58ba0fab69acd0f55e44e958d1e"
+    },
+    "index.html": {
+      "bytes": 20673,
+      "sha256": "961cd3792e636cc3932389032ca883b7ddbcfc73fcaa75e9d2d27f3738ad8c9b"
+    },
+    "map.pmtiles": {
+      "bytes": 20346235,
+      "sha256": "ee80db4c878e9abe314b99ec676a97c9e35f0178853cc0e855d2e7744918180e"
+    },
+    "thumbnail.webp": {
+      "bytes": 29704,
+      "sha256": "ad2c7ff519dc791350e2112a101f2c598bed067f99c95b6da966c4c6aa9f5be1"
+    }
+  }
+}
