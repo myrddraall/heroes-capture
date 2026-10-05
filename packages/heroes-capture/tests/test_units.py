@@ -168,3 +168,40 @@ def sky_layers(monkeypatch):
 def test_sky_rates_agree_across_and_down(sky_layers, rate, strength, expected):
     sky_layers.consistent("haze", rate, strength)
     assert rate == expected
+
+
+def test_the_haze_is_cut_off_where_the_white_key_isnt_behind_it():
+    """Past the end of the sky shells (Punisher Arena's haze reaches further than its art) the haze
+    is transparent, not estimated; where the key is behind it, its measured alpha and colour."""
+    import numpy as np
+
+    from heroes_capture.sky_stitch import _haze
+
+    h, w = 40, 80
+    level = np.zeros((h, w, 3), np.float32)
+    level[:, :40] = 230  # the white key behind the left half only
+    haze_colour, haze_alpha = np.array([120.0, 130.0, 150.0]), 0.5
+    black = np.full((h, w, 3), haze_colour * haze_alpha, np.float32)  # the haze over black, everywhere
+    white = black + level * (1 - haze_alpha)  # over the key, where there is one
+    out = _haze(white, black, level, 0)
+    assert np.allclose(out[:, :40, 3], haze_alpha, atol=0.01) and np.allclose(out[:, :40, :3], haze_colour, atol=1)
+    assert (out[:, 40:, 3] == 0).all()
+
+
+def test_a_layer_cropped_to_its_content_stays_in_place():
+    """The cropped haze keeps each pixel where it was behind the map: its canvas origin moves with
+    the crop."""
+    import numpy as np
+
+    from heroes_capture.sky_stitch import _crop_to_content
+
+    image = np.zeros((10, 20, 4), np.uint8)
+    image[2:5, 3:9] = (10, 20, 30, 255)
+    image[4, 8] = (1, 2, 3, 200)  # a marked pixel, at canvas (8, 4)
+    low = np.array([-100.0, -50.0])
+    cropped, moved = _crop_to_content(image, low)
+    assert cropped.shape == (3, 6, 4)
+    assert tuple(cropped[4 - 2, 8 - 3]) == (1, 2, 3, 200)
+    assert tuple(moved + [8 - 3, 4 - 2]) == tuple(low + [8, 4])  # the same place in the centre view
+    empty, same = _crop_to_content(np.zeros((4, 4, 4), np.uint8), low)
+    assert empty.shape == (4, 4, 4) and tuple(same) == tuple(low)

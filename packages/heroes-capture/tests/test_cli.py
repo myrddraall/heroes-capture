@@ -122,9 +122,8 @@ def render_steps(monkeypatch, tmp_path, fail_stitch=(), fail_capture=None):
         if manifest["map"] in fail_stitch:
             raise RuntimeError("stitch failed")
         out = tmp_path / argv[argv.index("--output-dir") + 1] / inject.slug(manifest["map"])
-        (out / f"{manifest['id']}-viewer").mkdir(parents=True, exist_ok=True)
-        (out / f"{manifest['id']}.png").write_text("png")
-        (out / f"{manifest['id']}-viewer" / "index.html").write_text("viewer")
+        (out / "pack").mkdir(parents=True, exist_ok=True)
+        (out / "pack" / "pack.json").write_text("{}")
 
     monkeypatch.setattr(inject, "main", prepare)
     monkeypatch.setattr(cli, "run_capture", capture)
@@ -139,10 +138,10 @@ def test_map_render_runs_the_three_steps_with_the_defaults(monkeypatch, tmp_path
     manifest = str((tmp_path / "tmp" / "dragon-shire-terrain.json").resolve())
     assert calls[0] == ("prepare", ["Dragon Shire", "--structures", "hide", "--fov", "12", "--out", "tmp", "--keep", "0.4"])
     assert calls[1] == ("capture", [manifest])
-    assert calls[2] == ("stitch", [manifest, "--tiles", "--output-dir", "maps"])
+    assert calls[2] == ("stitch", [manifest, "--output-dir", "maps"])
     assert "Dragon Shire (hide structures): 10 tiles planned, black void" in result.output
     assert "not validated" not in result.output  # Dragon Shire is
-    assert (tmp_path / "maps" / "dragon-shire" / "dragon-shire-terrain.png").exists()
+    assert (tmp_path / "maps" / "dragon-shire" / "pack" / "pack.json").exists()
     assert "Dragon Shire: the map is in maps" in result.output
     assert not (tmp_path / "tmp").exists()  # the working files removed, and their folder
     plain = (tmp_path / "logs" / "heroes-capture.log").read_text()  # the plain log stays
@@ -178,7 +177,7 @@ def test_map_render_keeps_the_working_files_when_asked(monkeypatch, tmp_path):
     render_steps(monkeypatch, tmp_path)
     result = runner.invoke(cli.app, ["map", "render", "dragon shire", "--keep-tmp", "-o", "renders"])
     assert result.exit_code == 0, result.output
-    assert (tmp_path / "renders" / "dragon-shire" / "dragon-shire-structures.png").exists()
+    assert (tmp_path / "renders" / "dragon-shire" / "pack" / "pack.json").exists()
     for name in ("dragon-shire-structures.json", "dragon-shire-structures.stormmap", "dragon-shire-structures"):
         assert (tmp_path / "tmp" / name).exists(), name
     assert len(list((tmp_path / "tmp").glob("heroes-capture-*.log"))) == 1
@@ -433,3 +432,25 @@ def test_a_pause_shows_while_it_lasts_and_is_gone_after(tmp_path, ui_state):
         assert ui._s.notice == ""
     lines = (tmp_path / "plain.log").read_text().splitlines()
     assert "paused: the game isn't in front" in lines and any(line.startswith("carrying on after") for line in lines)
+
+
+def test_map_view_serves_a_rendered_pack_until_stopped(monkeypatch, tmp_path):
+    from heroes_capture import serve as serving
+
+    (tmp_path / "maps" / "dragon-shire" / "pack").mkdir(parents=True)
+    (tmp_path / "maps" / "dragon-shire" / "pack" / "pack.json").write_text("{}")
+    served = []
+
+    class Server:
+        server_port = 8123
+
+        def shutdown(self):
+            served.append("stopped")
+
+    monkeypatch.setattr(serving, "serve", lambda folder: served.append(folder) or Server())
+    monkeypatch.setattr(cli.time, "sleep", lambda s: (_ for _ in ()).throw(KeyboardInterrupt))
+    result = runner.invoke(cli.app, ["--log", "map", "view", "Dragon Shire"])
+    assert result.exit_code == 0, result.output
+    assert served == [Path("maps/dragon-shire/pack"), "stopped"] and "http://127.0.0.1:8123/index.html" in result.output
+    result = runner.invoke(cli.app, ["map", "view", "dragon shire", "--structures", "hide"])
+    assert result.exit_code != 0 and "no pack in" in result.output

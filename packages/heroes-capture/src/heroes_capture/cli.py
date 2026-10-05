@@ -289,16 +289,16 @@ def first_missing_tile(manifest_path: Path, manifest: dict) -> int:
 
 def render_one(map_spec: str, name: str, options: list[str], output_dir: Path, keep_tmp: bool, force: bool,
                capture_options: list[str], validated: dict) -> bool:
-    """One map: skipped when its viewer is in the output folder already (unless force), carried on
-    from a kept run of it, or prepared, captured and stitched; its working files removed after
-    (unless keep_tmp). False when skipped."""
-    from . import inject, stitch
+    """One map: skipped when its pack is in the output folder already (unless force), carried on
+    from a kept run of it, or prepared, captured and stitched (the stitch writes its pack); its
+    working files removed after (unless keep_tmp). False when skipped."""
+    from . import inject, pack, stitch
 
     structures = options[options.index("--structures") + 1]
     work = Path(options[options.index("--out") + 1])
     map_id = inject.render_id(name, structures)
     out = output_dir / inject.slug(name)
-    if not force and (out / f"{map_id}-viewer" / "index.html").exists():
+    if not force and pack.is_written(out, structures):
         ui.done(f"{name}: already rendered in {out} (--force renders it again)")
         return False
     note = "" if name in validated else "; not validated: it may not come out right"
@@ -323,10 +323,10 @@ def render_one(map_spec: str, name: str, options: list[str], output_dir: Path, k
         with ui.step(f"Capturing {name} in the game"):
             run_capture([manifest, *(["--start", str(start)] if start else []), *capture_options])
     with ui.step(f"Stitching {name}"):
-        stitch.main([manifest, "--tiles", "--output-dir", str(output_dir)])
+        stitch.main([manifest, "--output-dir", str(output_dir)])
     if not keep_tmp:
         remove([manifest_path, manifest_path.with_suffix(".stormmap"), manifest_path.with_suffix("")])
-    ui.done(f"{name}: the map is in {stitch.output_folder(output_dir, planned)}")
+    ui.done(f"{name}: the map is in {stitch.output_folder(output_dir, planned)} (heroes-capture map view \"{name}\" shows it)")
     return True
 
 
@@ -450,6 +450,38 @@ def map_rows(game_maps: dict[str, str], folder_maps: list[str], validated: dict[
 
 STATUS_STYLE = {"validated": "[green]✓ validated[/]", "not yet": "[yellow]not yet[/]", "unsupported": "[dim]unsupported[/]",
                 "not in the game": "[red]not in the game[/]"}
+
+
+@map_app.command("view")
+def view(
+    map: Annotated[str, typer.Argument(help="The map as the game names it (case and punctuation don't matter), or its folder's name.", show_default=False)],  # noqa: A002
+    output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Where the maps' folders are.")] = MAPS,
+    structures: Annotated[Structures, typer.Option(help="Which render: with the structures kept or hidden.")] = Structures.keep,
+) -> None:
+    """Open a rendered map's pack in its reference viewer, in the browser.
+
+    The pack is served on this computer until you stop it (Ctrl+C): the viewer reads its tiles by range requests, which a browser won't make to files opened from disk.
+    """
+    from . import pack
+    from .inject import slug
+    from .serve import serve
+
+    folder = output_dir / slug(map)
+    if not folder.is_dir():
+        from . import game_data
+
+        with game_data.open_storage(game_data.find_install()) as storage:
+            folder = output_dir / slug(game_data.find_map(storage, map))
+    packed = pack.variant_folder(folder, structures.value) / "pack"
+    if not (packed / "pack.json").exists():
+        raise SystemExit(f"no pack in {packed}: render the map first (heroes-capture map render \"{map}\")")
+    server = serve(packed)
+    ui.done(f"{packed} at http://127.0.0.1:{server.server_port}/index.html (Ctrl+C stops it)")
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        server.shutdown()
 
 
 @map_app.command("list")

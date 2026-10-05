@@ -37,6 +37,7 @@ fixed hrsCap_bgSpeed = 100.0;  // animation speed (percent) "sky" gives a backgr
 const string hrsCap_mapSky = "${map_sky}";  // the map's own sky models (probes)
 const string hrsCap_mapParallax = "${map_parallax}";
 bool hrsCap_paused = false;  // the map's animations have been paused (once the game started)
+bool[64] hrsCap_frameShown;  // which interface frame types the match showed at its start (hrsCap_SaveFrames), by type less c_syncFrameTypeFirst
 bool hrsCap_forwardStarted = false;  // the fast-forward after the gates opened has begun
 bool hrsCap_ready = false;  // fast-forward done: the map's opening events have happened
 bool hrsCap_leaving = false;  // "quit" received: the match is ending
@@ -556,9 +557,26 @@ void hrsCap_Restore () {
         }
     }
     UISetMode(PlayerGroupAll(), c_uiModeConsole, c_transitionDurationImmediate);
+    // The frame types the match showed at its start, and only those: every type shown rolled the
+    // end credits over the map (a frame a match keeps hidden).
     lv_f = c_syncFrameTypeFirst;
     for ( ; lv_f <= c_syncFrameTypeLast ; lv_f += 1 ) {
-        UISetFrameVisible(PlayerGroupAll(), lv_f, true);
+        if (((lv_f - c_syncFrameTypeFirst) < 64)) {
+            UISetFrameVisible(PlayerGroupAll(), lv_f, hrsCap_frameShown[(lv_f - c_syncFrameTypeFirst)]);
+        }
+    }
+}
+
+// Which interface frame types the match shows, at its start (hrsCap_Init: before the scene or
+// the intro cutscene hides any), for hrsCap_Restore to put back.
+void hrsCap_SaveFrames () {
+    int lv_f;
+
+    lv_f = c_syncFrameTypeFirst;
+    for ( ; lv_f <= c_syncFrameTypeLast ; lv_f += 1 ) {
+        if (((lv_f - c_syncFrameTypeFirst) < 64)) {
+            hrsCap_frameShown[(lv_f - c_syncFrameTypeFirst)] = UIFrameVisible(hrsCap_LocalPlayer(), lv_f);
+        }
     }
 }
 
@@ -930,6 +948,7 @@ ${arena_quit_line}    UnitKill(libGame_gv_teams[libGame_gf_TeamNumberOfPlayer(hr
 }
 
 void hrsCap_Init () {
+    hrsCap_SaveFrames();
     hrsCap_InitTiles();
     hrsCap_StatusInit();
     // The commands' triggers, run by hrsCap_RunCommand (the first word of what was typed into the

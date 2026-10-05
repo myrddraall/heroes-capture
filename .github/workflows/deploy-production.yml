@@ -1,0 +1,54 @@
+name: Deploy — Production
+
+# Publishes a release's GitHub Pages site (the site project's static-site artifact) to the
+# gh-pages branch. Dispatched by `gitflow deploy` (convention: deploy-{env}.yml), or by hand from
+# the Actions tab with a release id or tag. There is no deploy host: the job runs the release's
+# deploy-gh-pages.zip bundle itself, with its own token. The repository's Pages source must be
+# the gh-pages branch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: 'GitHub Release ID (numeric) or tag (e.g. v0.2.0)'
+        required: true
+        type: string
+      deploy_type:
+        description: 'Deploy method, naming the bundle deploy-<type>.zip (gitflow deploy sends it).'
+        required: false
+        type: string
+        default: 'gh-pages'
+      deploy_env:
+        description: 'Per-run deploy env overrides as KEY=VAL lines (highest priority).'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: 'Production'
+    steps:
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+
+      - name: Deploy to GitHub Pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEPLOY_TYPE: ${{ inputs.deploy_type }}
+          DEPLOY_ENV_LINES: |
+            ${{ vars.DEPLOY_ENV }}
+            ${{ inputs.deploy_env }}
+        run: |
+          while IFS= read -r line; do
+            case "$line" in ''|'#'*) ;; *=*) export "$line" ;; esac
+          done <<< "$DEPLOY_ENV_LINES"
+          pnpm config set "//npm.pkg.github.com/:_authToken" "$GITHUB_TOKEN"
+          pnpm config set @cpdevtools:registry https://npm.pkg.github.com
+          pnpm dlx @cpdevtools/git-flow-deploy-cli deploy "$GITHUB_REPOSITORY" \
+            "${{ inputs.release_id }}" --bundle "deploy-${DEPLOY_TYPE:-gh-pages}.zip"

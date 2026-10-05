@@ -152,3 +152,19 @@ def test_prepared_maps(map_name, sky_mode, arenas, extra, tmp_path, blizzard_gal
                 if literal_kind(arg) and seen and literal_kind(arg) not in seen:
                     wrong.append(f"{name}(...): argument {k + 1} is a {literal_kind(arg)}, Blizzard passes {sorted(seen)}")
     assert not wrong, "calls unlike Blizzard's: " + "; ".join(wrong)
+
+
+def test_a_map_s_own_pictures(storage, tmp_path):
+    """The pictures a pack carries from the game (PACK.md, Images), from Dragon Shire's archive and
+    the textures its MapInfo names."""
+    from heroes_capture import pack
+
+    name, data = game_data.map_file(storage, "Dragon Shire")
+    (tmp_path / "map.stormmap").write_bytes(data)
+    found = pack.map_images(tmp_path / "map.stormmap", storage, tmp_path / "images")
+    assert {"minimap", "customMinimap", "customMinimapHover", "replayPreview", "mapSelect", "loadingScreen", "loadingScreenIcons"} <= set(found)
+    assert found["minimap"] == {"file": "images/minimap.png", "size": [512, 512], "source": "Minimap.tga"}
+    assert found["loadingScreen"]["source"] == "ui_ingame_mapmechanic_loadscreen_dragonshire.dds" and found["loadingScreen"]["size"] == [1920, 1080]
+    assert len(found["loadingScreenIcons"]) == 3
+    for entry in [found["minimap"], found["loadingScreen"], *found["loadingScreenIcons"]]:
+        assert (tmp_path / entry["file"]).read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
