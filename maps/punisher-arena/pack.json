@@ -1,0 +1,323 @@
+{
+  "format": 1,
+  "tool": "heroes-capture 0.0.0-dev",
+  "gameBuild": 98304,
+  "map": {
+    "id": "punisher-arena",
+    "name": "Punisher Arena",
+    "category": "Arena",
+    "validated": true,
+    "structures": "keep",
+    "sizeCells": [
+      256,
+      256
+    ],
+    "cameraBounds": {
+      "left": 0,
+      "bottom": 1,
+      "right": 256,
+      "top": 255
+    }
+  },
+  "capture": {
+    "pxPerCell": 48,
+    "screen": [
+      3440,
+      1440
+    ],
+    "fov": 8.019003082878507
+  },
+  "arenas": [
+    {
+      "id": "m1",
+      "label": "M1",
+      "layer": "map-m1",
+      "boundsCells": {
+        "left": 41.2631,
+        "bottom": 181,
+        "right": 204.706,
+        "top": 251.752
+      },
+      "middleCell": [
+        122.98455,
+        216.376
+      ]
+    },
+    {
+      "id": "m2",
+      "label": "M2",
+      "layer": "map-m2",
+      "boundsCells": {
+        "left": 41.6882,
+        "bottom": 98,
+        "right": 204.838,
+        "top": 172.5
+      },
+      "middleCell": [
+        123.2631,
+        135.25
+      ]
+    },
+    {
+      "id": "m3",
+      "label": "M3",
+      "layer": "map-m3",
+      "boundsCells": {
+        "left": 42.4443,
+        "bottom": 19.068,
+        "right": 205.2434,
+        "top": 83.9704
+      },
+      "middleCell": [
+        123.84385,
+        51.5192
+      ]
+    }
+  ],
+  "layers": [
+    {
+      "id": "fixed",
+      "kind": "fixed",
+      "file": "fixed.webp",
+      "size": [
+        3376,
+        1440
+      ]
+    },
+    {
+      "id": "background",
+      "kind": "parallax",
+      "file": "background.pmtiles",
+      "size": [
+        7626,
+        6715
+      ],
+      "rate": 0.4595509462338062,
+      "centreCell": [
+        123.25,
+        135.40885416666666
+      ],
+      "centrePixel": [
+        3780,
+        3737
+      ],
+      "pxPerCell": 22.290059096124537,
+      "levels": 5,
+      "tileSize": 512
+    },
+    {
+      "id": "haze",
+      "kind": "parallax",
+      "file": "haze.pmtiles",
+      "size": [
+        7785,
+        6302
+      ],
+      "rate": 0.47475,
+      "centreCell": [
+        123.25,
+        135.40885416666666
+      ],
+      "centrePixel": [
+        3860,
+        3850
+      ],
+      "pxPerCell": 23.027274000000002,
+      "levels": 5,
+      "tileSize": 512
+    },
+    {
+      "id": "map-m1",
+      "kind": "map",
+      "file": "map-m1.pmtiles",
+      "size": [
+        9692,
+        4966
+      ],
+      "rate": 1,
+      "originCell": [
+        18.939121836340174,
+        266.61249617758614
+      ],
+      "pxPerCell": 48.471096386240674,
+      "levels": 6,
+      "tileSize": 512
+    },
+    {
+      "id": "map-m2",
+      "kind": "map",
+      "file": "map-m2.pmtiles",
+      "size": [
+        9095,
+        5033
+      ],
+      "rate": 1,
+      "originCell": [
+        29.687795558271795,
+        189.82446624854677
+      ],
+      "pxPerCell": 48.471096386240674,
+      "levels": 6,
+      "tileSize": 512
+    },
+    {
+      "id": "map-m3",
+      "kind": "map",
+      "file": "map-m3.pmtiles",
+      "size": [
+        9059,
+        4866
+      ],
+      "rate": 1,
+      "originCell": [
+        30.43050621852043,
+        104.57778713334241
+      ],
+      "pxPerCell": 48.471096386240674,
+      "levels": 6,
+      "tileSize": 512
+    }
+  ],
+  "images": {
+    "thumbnail": {
+      "file": "thumbnail.webp",
+      "size": [
+        512,
+        262
+      ]
+    },
+    "minimap": {
+      "file": "images/minimap.png",
+      "size": [
+        512,
+        512
+      ],
+      "source": "Minimap.tga"
+    },
+    "customMinimap": {
+      "file": "images/custom-minimap.png",
+      "size": [
+        512,
+        512
+      ],
+      "source": "CustomMiniMap.dds"
+    },
+    "customMinimapHover": {
+      "file": "images/custom-minimap-hover.png",
+      "size": [
+        512,
+        512
+      ],
+      "source": "CustomMiniMap_Hover.dds"
+    },
+    "replayPreview": {
+      "file": "images/replay-preview.png",
+      "size": [
+        417,
+        234
+      ],
+      "source": "ReplaysPreviewImage.tga"
+    },
+    "mapSelect": {
+      "file": "images/map-select.png",
+      "size": [
+        574,
+        378
+      ],
+      "source": "Storm_UI_Gamemode_MapSelect_PunisherArena.png"
+    },
+    "loadingScreen": {
+      "file": "images/loading-screen.png",
+      "size": [
+        2560,
+        1440
+      ],
+      "source": "storm_loading_generic.dds"
+    },
+    "loadingScreenIcons": [
+      {
+        "file": "images/loading-screen-icon-1.png",
+        "size": [
+          284,
+          288
+        ],
+        "source": "Assets\\Textures\\ui_ingame_mapmechanic_loadscreen_shrines_icon2.dds"
+      },
+      {
+        "file": "images/loading-screen-icon-2.png",
+        "size": [
+          164,
+          200
+        ],
+        "source": "Assets\\Textures\\ui_ingame_mapmechanic_loadscreen_punisherarena_icon2.dds"
+      }
+    ]
+  },
+  "data": {},
+  "files": {
+    "background.pmtiles": {
+      "bytes": 1707931,
+      "sha256": "1b39ea142143f067a0da3e23bdfe71b3ce595b4b70a0ef2a84dafb8d566eb5ae"
+    },
+    "fixed.webp": {
+      "bytes": 24998,
+      "sha256": "a098236698fd737f89cd7bbc4a8026fd5af4395c5a717d0e02cb1e80af13327d"
+    },
+    "haze.pmtiles": {
+      "bytes": 5197427,
+      "sha256": "04dc680c16fe361038db05868abac7bd090caf1cbd161d5fcbb774b3199f3fd0"
+    },
+    "images/custom-minimap-hover.png": {
+      "bytes": 28042,
+      "sha256": "010dd10e9a225c62814600d63a8e0a7432bad76eaf16878e39c0ac13aa2a125b"
+    },
+    "images/custom-minimap.png": {
+      "bytes": 47169,
+      "sha256": "1b8a4e0733172b2d63091139ff8c4ce89056dd4a9ab55cf7d8a9c4875f94dd10"
+    },
+    "images/loading-screen-icon-1.png": {
+      "bytes": 60638,
+      "sha256": "267bf3f0c7d6f8799f2febaa6ee73f3195a301090fb488754a8c1da454842b6b"
+    },
+    "images/loading-screen-icon-2.png": {
+      "bytes": 28183,
+      "sha256": "dcf453191b7035345c6f847bfdcee150dc968bb7d9efe8ec6f8ff2a140dabee8"
+    },
+    "images/loading-screen.png": {
+      "bytes": 3343437,
+      "sha256": "6bc7309a35c5f20a4b3327e5c1266d6c3cc2ad75a303e2230c432ae167676e9b"
+    },
+    "images/map-select.png": {
+      "bytes": 375685,
+      "sha256": "c44a634412eefa4e12856b6c51b116bd52f68e8f7d3abe11e8fb6444b050d42e"
+    },
+    "images/minimap.png": {
+      "bytes": 65012,
+      "sha256": "1597755ddb8c2fa6b23c0fc05fb5e766e48c0006282bea4e2a10d0162a0b2c9c"
+    },
+    "images/replay-preview.png": {
+      "bytes": 183754,
+      "sha256": "eb7913790d06a2731900fca3b096e8752157cf061f4c82520ef4d8ecca1c0db9"
+    },
+    "index.html": {
+      "bytes": 15416,
+      "sha256": "e70ea69160a152d567a653b0bf975f03f95d7c54984d34a8cd408f5b1de2c3d8"
+    },
+    "map-m1.pmtiles": {
+      "bytes": 8591666,
+      "sha256": "237982e577fd51100d527f1e7990d4691d3f585a90e8a442a0813f5d57e4cb89"
+    },
+    "map-m2.pmtiles": {
+      "bytes": 6631957,
+      "sha256": "acbc1ee6621248eaa1b2e59a0c523e2e24f00748f5a71a98bdcf14f121512c13"
+    },
+    "map-m3.pmtiles": {
+      "bytes": 6243653,
+      "sha256": "91544cf48490807e2a96bed2e5d855b9cae59eb62d8ba739bc79f4d88746aa9a"
+    },
+    "thumbnail.webp": {
+      "bytes": 23232,
+      "sha256": "3a49f2a58d2326f70ded79942d8528b4866f7283ee5a5e45f5cd15899ee45925"
+    }
+  }
+}

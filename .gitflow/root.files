@@ -1,0 +1,20 @@
+#owner @myrddraall/heroes-capture-site
+#version 0.3.0-alpha.0
+index.html
+maps/punisher-arena/background.pmtiles
+maps/punisher-arena/fixed.webp
+maps/punisher-arena/haze.pmtiles
+maps/punisher-arena/images/custom-minimap-hover.png
+maps/punisher-arena/images/custom-minimap.png
+maps/punisher-arena/images/loading-screen-icon-1.png
+maps/punisher-arena/images/loading-screen-icon-2.png
+maps/punisher-arena/images/loading-screen.png
+maps/punisher-arena/images/map-select.png
+maps/punisher-arena/images/minimap.png
+maps/punisher-arena/images/replay-preview.png
+maps/punisher-arena/index.html
+maps/punisher-arena/map-m1.pmtiles
+maps/punisher-arena/map-m2.pmtiles
+maps/punisher-arena/map-m3.pmtiles
+maps/punisher-arena/pack.json
+maps/punisher-arena/thumbnail.webp
