@@ -115,14 +115,14 @@ heroes-capture prepare "Towers of Doom" --screen 3440x1440 --distance 214 --keep
 #    mouse and keyboard alone.
 heroes-capture capture tmp/towers-of-doom-structures.json
 
-# 3. Stitch: writes maps/towers-of-doom/towers-of-doom-structures.png, a preview, the geo file...
-heroes-capture stitch tmp/towers-of-doom-structures.json --tiles
+# 3. Stitch: writes maps/towers-of-doom/: the pack (pack/) and the full-size layers (raw/).
+heroes-capture stitch tmp/towers-of-doom-structures.json
 ```
 
 The screenshots are kept as raw `.npy` arrays (fast for the stitch to read; older runs' PNG tiles
 still stitch).
 
-Use `--structures hide` for bare terrain; it writes `…-terrain` files alongside.
+Use `--structures hide` for bare terrain; it goes to the map folder's `terrain\`.
 
 Map names are as the game shows them (case and punctuation don't matter), or pass a path to any
 `.stormmap`. The battleground maps are `.s2ma` archives under content-hash names in the game's
@@ -159,32 +159,35 @@ cell there is no more detail: that's the game's own texture resolution.
 
 ### Outputs
 
-- `<id>.png`: the full image, cropped to the camera bounds plus `--crop-margin` cells, widened
-  to take in all of the map the screenshots show (a map of several arenas: `<id>-m1.png`,
-  `<id>-m2.png`, ..., one per arena, each cropped to its own content).
-  It has an alpha channel: the void is transparent
-- `<id>-preview.jpg`: 2048 px wide (transparency shown over dark grey)
-- `<id>-on-white.jpg`: the full image flattened over white, for looking at
-- `<id>.geo.json`: pixels per map cell and the image origin in map cells, to place replay
-  positions: `px = (x - originCell.x) * pxPerCell`, `py = (originCell.y - y) * pxPerCell`
-- `<id>-tiles/` (with `--tiles`): a Google Maps style pyramid, `{z}/{y}/{x}.jpg`, 256 px tiles
-- On a map with keyed copies of its own sky (Battlefield of Eternity so far): the sky layers
-  for a parallax viewer. `<id>-layer-map.png` (the map), `<id>-layer-background.png` (the sky's
-  background art), `<id>-layer-haze.png` (the haze over it, with transparency),
-  `<id>-layer-fixed.png` (the fixed skybox: it moves with the camera, so it is a screen
-  backdrop), `<id>-composite.png` (background, haze and map together, with transparency),
-  `<id>-composite-on-black.png`, `<id>-composite-with-fixed.png` (over the fixed skybox, stretched
-  behind everything as a backdrop), and `<id>-layers.json` with each layer's speed against the map
-  and where it sits. The sky layers are the sky seen from the middle camera position: the
-  shells are a tilted plane (fitted from the sky shots' overlaps), so the map's straight edges
-  come out slanted and the layer is a trapezoid, transparent in the corners no shot reaches.
-  Every render of a map with its own parallax sky also writes `<id>/sky-layers.json`, the
-  measured speeds.
-- `<id>-viewer/`: a prototype viewer, `index.html` and the layer images it shows (the map, on a
-  map of several arenas each arena's, shown one at a time with buttons to switch, the sky
-  layers centred on it; and where the map has them the fixed skybox, background art and haze). Drag to pan, mouse wheel to
-  zoom; the sky layers move at their rates behind the map, and zooming moves the camera up and
-  down, so they shrink less than the map. Opens straight from the folder (no server needed).
+Each render writes its map's folder, `maps\<map id>\` (with `--structures hide`, its
+`terrain\` subfolder the same way), in two parts. [PACK.md](../../PACK.md) at the repository
+root is the format, written as the contract with the map viewer that reads it.
+
+- `pack\`: what a viewer loads, made to be hosted as it is:
+  - `pack.json`: what's in the pack and how to draw each layer: the map, its arenas, the
+    layers' scales, positions and parallax rates in map cells, the pictures, and every file
+    with its SHA-256.
+  - A tile pyramid per layer (`map.pmtiles`, `background.pmtiles`, `haze.pmtiles`; one map
+    layer per arena on a map of several): PMTiles archives of 512 px WebP tiles, every level
+    from the full image down to one tile, read by range requests.
+  - `fixed.webp` (the fixed skybox, a screen backdrop), `thumbnail.webp`, and `images\`: the
+    map's own pictures from the game (minimap, custom minimap, replay preview, map-select
+    picture, loading screen and its icons, where the map has them).
+  - `index.html`: the reference viewer. `heroes-capture map view "<map>"` serves the pack on
+    this computer and opens it: drag to pan, mouse wheel to zoom; tiles load coarse first and
+    sharpen as you zoom; the sky layers move at their rates behind the map.
+- `raw\`: the layers at full resolution as PNG (`map.png`, `background.png`, `haze.png`,
+  `fixed.png`), the composites (`composite.png`, background, haze and map together;
+  `composite-on-black.png`; `composite-with-fixed.png`, over the fixed skybox), and
+  `layers.json`, placing them as `pack.json` does.
+
+The map image is cropped to the camera bounds plus `--crop-margin` cells, widened to take in all
+of the map the screenshots show, with the void transparent. Map cells convert to its pixels by
+`px = (x - originCell.x) * pxPerCell`, `py = (originCell.y - y) * pxPerCell`. The sky layers
+(on maps with keyed copies of their own sky) are the sky seen from the middle camera position:
+the shells are a tilted plane (fitted from the sky shots' overlaps), so they come out as
+trapezoids, transparent in the corners no shot reaches. Every render of a map with its own
+parallax sky also keeps `<id>\sky-layers.json` in its working files, the measured speeds.
 
 ## How it works
 
@@ -345,12 +348,14 @@ cell there is no more detail: that's the game's own texture resolution.
 | `probes.py`                                | the `--probe-*` diagnostics                                                                   |
 | `sky_layers.py` | measures the map's sky layers' speeds and shoots them across the map |
 | `sky_stitch.py` | the sky layer images, the composites and `-layers.json` |
+| `pack.py` | the pack (PACK.md): `raw\`, the tile pyramids, the pictures from the game, `pack.json` |
+| `serve.py` | `map view`: the pack served locally with byte ranges, for the reference viewer |
 | `stitch.py`                                | stitches the screenshots and writes the outputs                                               |
 | `runlog.py`                                | the run's log (printed and written to `log.txt`)                                              |
 | `frames.py` | screenshots on disk (`.npy`, or PNG from older runs) |
 | `workers.py` | the ordered thread pool the stitches use |
 | `matching.py` | phase correlation, for the stitches' matching |
-| `viewer.py`, `viewer.html` | the prototype viewer folder the stitch writes per map image |
+| `viewer.py`, `viewer.html` | the pack's reference viewer (`index.html`) |
 
 ## Tests
 

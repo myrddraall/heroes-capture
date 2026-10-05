@@ -3,151 +3,308 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>/*TITLE*/</title>
+<title>Map pack</title>
 <style>
-  :root { --backdrop: #000; --panel: rgba(0, 0, 0, 0.7); --text: #fff; --accent: #ffd479; }
-  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--backdrop); }
-  #view { position: fixed; inset: 0; cursor: grab; touch-action: none; user-select: none; }
+  :root { --backdrop: #202024; --text: #e8e8ec; --panel: rgba(16, 16, 20, 0.78); --accent: #8fb4ff; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--backdrop); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
+  #fixed { position: fixed; inset: 0; background: center / cover no-repeat; }
+  #view { position: fixed; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; }
   #view.dragging { cursor: grabbing; }
-  #view img { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; pointer-events: none; }
-  #view img.fixed { inset: 0; width: 100%; height: 100%; object-fit: cover; transform: none; }
-  #view img[hidden] { display: none; }
-  #arenas { position: fixed; top: 16px; left: 16px; display: flex; gap: 8px; padding: 8px; border-radius: 8px; background: var(--panel); }
-  #arenas[hidden] { display: none; }
-  #arenas button { font: 600 15px/1 system-ui, sans-serif; color: var(--text); background: transparent; border: 2px solid var(--text); border-radius: 6px; padding: 8px 14px; cursor: pointer; }
-  #arenas button[aria-pressed="true"] { color: #000; background: var(--accent); border-color: var(--accent); }
-  #arenas button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  #bar { position: fixed; top: 12px; left: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 10px; border-radius: 8px; background: var(--panel); max-width: calc(100vw - 48px); }
+  #bar button { font: inherit; color: var(--text); background: transparent; border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
+  #bar button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  #bar button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #status { opacity: 0.75; font-variant-numeric: tabular-nums; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/pmtiles@4.5.0/dist/pmtiles.js"></script>
 </head>
 <body>
-<div id="view" role="application" aria-label="/*TITLE*/: drag to pan, mouse wheel to zoom"></div>
-<nav id="arenas" aria-label="Arenas" hidden></nav>
+<div id="fixed"></div>
+<canvas id="view" aria-label="Map; drag to pan, mouse wheel to zoom"></canvas>
+<div id="bar"><strong id="title">Loading…</strong><span id="arenas"></span><span id="status" aria-live="polite"></span></div>
 <script>
-// Written by the map-capture stitch (viewer.py). Each layer is placed so the pixel the game shows
-// at the screen's middle, with the camera over map cell (cx, cy), is at the middle of the window.
-// Zooming moves the camera up or down: a layer moving at `rate` against the map is drawn at
-// 1 / (1 + rate * (1 / zoom - 1)) of its size (the map, rate 1, at `zoom`; the fixed skybox not at all).
-// A map of several arenas (one image each) shows one arena at a time, with the sky layers
-// centred on it: their middle behind the arena's middle.
-const data = /*DATA*/;
-const view = document.getElementById("view");
-const layers = [];
+"use strict";
+// The pack's reference viewer (heroes-capture). It draws a pack as PACK.md says: each layer scaled
+// by the zoom and its rate, placed by the pixel at the window's middle; every visible tile at the
+// level whose pixels are about one screen pixel, drawn from the finest level loaded so far until
+// its own arrives, which then fades in. A check that the pack works, not the map viewer itself.
+const FADE_MS = 250;  // a tile's fade-in once loaded
+const MAX_LOADS = 8;  // tiles fetched at once
+const MAX_TILES = 900;  // decoded tiles kept (least recently drawn dropped first)
 
-// Each map image's extent in map cells, and its middle.
-const arenas = data.maps.map((map) => {
-  const west = map.originCell.x, north = map.originCell.y;
-  const east = west + map.width / map.pxPerCell, south = north - map.height / map.pxPerCell;
-  return { map, west, east, north, south, middle: [(west + east) / 2, (north + south) / 2] };
-});
-let current = 0;
+const statusEl = document.getElementById("status");
 
-if (data.fixed) {
-  const img = new Image();
-  img.src = data.fixed;
-  img.alt = "";
-  img.className = "fixed";
-  view.appendChild(img);
-}
-function addLayer(src, rate, place) {
-  const img = new Image();
-  img.src = src;
-  img.alt = "";
-  img.draggable = false;
-  view.appendChild(img);
-  layers.push({ img, rate, place });
-  return img;
-}
-for (const sky of data.sky) {
-  addLayer(sky.src, sky.rate, (cx, cy) => {
-    // One map: the sky where the game has it. Several arenas: centred on the arena shown.
-    const [ox, oy] = arenas.length > 1 ? arenas[current].middle : sky.centreCell;
-    return [sky.centrePixel[0] + sky.pxPerMapCell[0] * (cx - ox), sky.centrePixel[1] - sky.pxPerMapCell[1] * (cy - oy)];
-  });
-}
-for (const arena of arenas) {
-  const map = arena.map;
-  arena.img = addLayer(map.src, 1, (cx, cy) => [(cx - map.originCell.x) * map.pxPerCell, (map.originCell.y - cy) * map.pxPerCell]);
-}
-
-// The camera: the map cell at the window's middle, and the map's screen pixels per image pixel.
-const pxPerCell = data.maps[0].pxPerCell;  // one scale for all the map's images
-let cx = 0, cy = 0, zoom = 1;
-const fit = () => {
-  const a = arenas[current];
-  return Math.min(innerWidth / ((a.east - a.west) * pxPerCell), innerHeight / ((a.north - a.south) * pxPerCell));
-};
-
-function draw() {
-  const w = view.clientWidth / 2, h = view.clientHeight / 2;
-  for (const { img, rate, place } of layers) {
-    if (img.hidden) continue;
-    const s = 1 / (1 + rate * (1 / zoom - 1));
-    const [px, py] = place(cx, cy);
-    img.style.transform = `translate(${w - px * s}px, ${h - py * s}px) scale(${s})`;
+(async () => {
+  const pack = await (await fetch("pack.json")).json();
+  if (pack.format !== 1) {
+    statusEl.textContent = `This viewer reads pack format 1; this pack is format ${pack.format}.`;
+    return;
   }
-}
-function clampCamera() {
-  const a = arenas[current];
-  cx = Math.min(a.east, Math.max(a.west, cx));
-  cy = Math.min(a.north, Math.max(a.south, cy));
-}
-function show(index) {
-  current = index;
-  arenas.forEach((a, k) => { a.img.hidden = k !== index; });
-  for (const button of document.querySelectorAll("#arenas button")) {
-    button.setAttribute("aria-pressed", String(Number(button.dataset.index) === index));
+  document.title = pack.map.name;
+  document.getElementById("title").textContent = pack.map.name;
+
+  const canvas = document.getElementById("view");
+  const ctx = canvas.getContext("2d");
+
+  // The layers, back to front. The fixed skybox is the page's backdrop.
+  const layers = [];
+  for (const meta of pack.layers) {
+    if (meta.kind === "fixed") {
+      document.getElementById("fixed").style.backgroundImage = `url("${meta.file}")`;
+      continue;
+    }
+    layers.push({ meta, archive: new pmtiles.PMTiles(meta.file), tiles: new Map() });
   }
-  [cx, cy] = arenas[index].middle;
-  zoom = fit();
-  draw();
-}
+  const maps = layers.filter((l) => l.meta.kind === "map");
+  const pxPerCell = maps[0].meta.pxPerCell;  // the camera's scale: the map's pixels per cell
 
-if (arenas.length > 1) {
-  const nav = document.getElementById("arenas");
-  arenas.forEach((a, k) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.dataset.index = String(k);
-    button.textContent = a.map.label || `Arena ${k + 1}`;
-    button.addEventListener("click", () => show(k));
-    nav.appendChild(button);
+  // The arenas (one, the whole map, unless the pack has several): each one's map layer, extent
+  // in map cells, the cell the sky is anchored to, and where the camera may go.
+  const arenas = pack.arenas || [{ layer: maps[0].meta.id }];
+  for (const a of arenas) {
+    const m = maps.find((l) => l.meta.id === a.layer).meta;
+    a.west = m.originCell[0];
+    a.north = m.originCell[1];
+    a.east = a.west + m.size[0] / m.pxPerCell;
+    a.south = a.north - m.size[1] / m.pxPerCell;
+    a.middle = a.middleCell || [(a.west + a.east) / 2, (a.north + a.south) / 2];
+    a.bounds = a.boundsCells || pack.map.cameraBounds || { left: a.west, right: a.east, bottom: a.south, top: a.north };
+  }
+  let current = 0;
+
+  // The camera: the map cell at the window's middle, and the zoom (screen pixels per map pixel).
+  let cx = 0, cy = 0, zoom = 1, width = 0, height = 0, dpr = 1;
+  let frame = 0, drawPending = false;
+  const queue = [];
+  let loading = 0;
+
+  // The pixel of a layer that belongs at the window's middle (PACK.md, Layers and drawing).
+  function middlePixel(meta) {
+    if (meta.kind === "map") {
+      return [(cx - meta.originCell[0]) * meta.pxPerCell, (meta.originCell[1] - cy) * meta.pxPerCell];
+    }
+    const [ox, oy] = pack.arenas ? arenas[current].middle : meta.centreCell;
+    return [meta.centrePixel[0] + meta.pxPerCell * (cx - ox), meta.centrePixel[1] - meta.pxPerCell * (cy - oy)];
+  }
+
+  function tileAt(layer, level, x, y) {
+    const key = `${level}/${x}/${y}`;
+    let t = layer.tiles.get(key);
+    if (!t) {
+      t = { state: "new", bitmap: null, at: 0, used: 0 };
+      layer.tiles.set(key, t);
+    }
+    t.used = frame;
+    return t;
+  }
+
+  function request(layer, level, x, y, t, priority) {
+    if (t.state !== "new") return;
+    t.state = "queued";
+    queue.push({ layer, level, x, y, t, priority });
+  }
+
+  function pump() {
+    queue.sort((a, b) => a.priority - b.priority);
+    while (loading < MAX_LOADS && queue.length) {
+      const job = queue.shift();
+      if (job.t.used < frame - 2) {  // scrolled away before its turn
+        job.t.state = "new";
+        continue;
+      }
+      loading++;
+      job.layer.archive.getZxy(job.level, job.x, job.y)
+        .then(async (found) => {
+          if (found && found.data) {
+            job.t.bitmap = await createImageBitmap(new Blob([found.data], { type: "image/webp" }));
+            job.t.state = "loaded";
+          } else {
+            job.t.state = "empty";  // not stored: transparent
+          }
+          job.t.at = performance.now();
+        })
+        .catch((error) => {
+          job.t.state = "new";  // asked for again next time it's needed
+          statusEl.textContent = `A tile failed to load: ${error.message}`;
+        })
+        .finally(() => {
+          loading--;
+          redraw();
+          pump();
+        });
+    }
+  }
+
+  function evict() {
+    const loaded = [];
+    for (const layer of layers) {
+      for (const [key, t] of layer.tiles) {
+        if (t.state === "loaded") loaded.push([layer, key, t]);
+      }
+    }
+    if (loaded.length <= MAX_TILES) return;
+    loaded.sort((a, b) => a[2].used - b[2].used);
+    for (const [layer, key, t] of loaded.slice(0, loaded.length - MAX_TILES)) {
+      if (t.used >= frame) continue;
+      t.bitmap.close();
+      layer.tiles.delete(key);
+    }
+  }
+
+  // Edges rounded to device pixels, so neighbouring tiles meet without hairline gaps.
+  const snap = (v) => Math.round(v * dpr) / dpr;
+
+  // A tile's area from the finest coarser level loaded: true if covered (or known empty).
+  function drawFromAbove(layer, level, x, y, box, priority) {
+    const size = layer.meta.tileSize;
+    for (let above = level - 1; above >= 0; above--) {
+      const f = 2 ** (level - above);
+      const ax = Math.floor(x / f), ay = Math.floor(y / f);
+      const t = tileAt(layer, above, ax, ay);
+      if (t.state === "empty") return true;
+      if (t.state === "loaded") {
+        const part = size / f;
+        ctx.drawImage(t.bitmap, (x - ax * f) * part, (y - ay * f) * part, part, part, box.x, box.y, box.w, box.h);
+        return true;
+      }
+      if (above === 0 || above === level - 2) request(layer, above, ax, ay, t, priority - 1e6 * (level - above));
+    }
+    return false;
+  }
+
+  function draw() {
+    drawPending = false;
+    frame++;
+    const now = performance.now();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    let fading = false, mapLevel = null;
+    for (const layer of layers) {
+      const meta = layer.meta;
+      if (meta.kind === "map" && meta.id !== arenas[current].layer) continue;
+      const s = 1 / (1 + meta.rate * (1 / zoom - 1));
+      const [u, v] = middlePixel(meta);
+      const level = Math.max(0, Math.min(meta.levels - 1, meta.levels - 1 - Math.floor(Math.log2(1 / (s * dpr)))));
+      if (meta.kind === "map") mapLevel = level;
+      const span = meta.tileSize * 2 ** (meta.levels - 1 - level);  // a tile, in full-size layer pixels
+      const cols = Math.ceil(meta.size[0] / span), rows = Math.ceil(meta.size[1] / span);
+      const x0 = Math.max(0, Math.floor((u - width / 2 / s) / span)), x1 = Math.min(cols - 1, Math.floor((u + width / 2 / s) / span));
+      const y0 = Math.max(0, Math.floor((v - height / 2 / s) / span)), y1 = Math.min(rows - 1, Math.floor((v + height / 2 / s) / span));
+      for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+          const left = snap(width / 2 + (x * span - u) * s), top = snap(height / 2 + (y * span - v) * s);
+          const box = { x: left, y: top, w: snap(width / 2 + ((x + 1) * span - u) * s) - left, h: snap(height / 2 + ((y + 1) * span - v) * s) - top };
+          const priority = level * 1e6 + Math.hypot(box.x + box.w / 2 - width / 2, box.y + box.h / 2 - height / 2);
+          const t = tileAt(layer, level, x, y);
+          request(layer, level, x, y, t, priority);
+          if (t.state === "empty") continue;
+          if (t.state === "loaded") {
+            const age = now - t.at;
+            if (age < FADE_MS) {
+              drawFromAbove(layer, level, x, y, box, priority);
+              ctx.globalAlpha = age / FADE_MS;
+              fading = true;
+            }
+            ctx.drawImage(t.bitmap, box.x, box.y, box.w, box.h);
+            ctx.globalAlpha = 1;
+          } else {
+            drawFromAbove(layer, level, x, y, box, priority);
+          }
+        }
+      }
+    }
+    const waiting = loading + queue.length;
+    statusEl.textContent = mapLevel === null ? "" : `detail level ${mapLevel + 1}` + (waiting ? ` · loading ${waiting}` : "");
+    pump();
+    evict();
+    if (fading) redraw();
+  }
+
+  function redraw() {
+    if (!drawPending) {
+      drawPending = true;
+      requestAnimationFrame(draw);
+    }
+  }
+
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    width = canvas.clientWidth;
+    height = canvas.clientHeight;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    redraw();
+  }
+
+  const fit = () => {
+    const a = arenas[current];
+    return Math.min(width / ((a.east - a.west) * pxPerCell), height / ((a.north - a.south) * pxPerCell));
+  };
+  function clampCamera() {
+    const b = arenas[current].bounds;
+    cx = Math.min(b.right, Math.max(b.left, cx));
+    cy = Math.min(b.top, Math.max(b.bottom, cy));
+  }
+  function show(index) {
+    current = index;
+    for (const button of document.querySelectorAll("#arenas button")) {
+      button.setAttribute("aria-pressed", String(Number(button.dataset.index) === index));
+    }
+    [cx, cy] = arenas[index].middle;
+    zoom = fit();
+    redraw();
+  }
+
+  if (pack.arenas) {
+    const nav = document.getElementById("arenas");
+    arenas.forEach((a, k) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.index = String(k);
+      button.textContent = a.label || `Arena ${k + 1}`;
+      button.addEventListener("click", () => show(k));
+      nav.appendChild(button);
+    });
+  }
+
+  let last = null;
+  canvas.addEventListener("pointerdown", (e) => {
+    last = [e.clientX, e.clientY];
+    canvas.setPointerCapture(e.pointerId);
+    canvas.classList.add("dragging");
   });
-  nav.hidden = false;
-}
+  canvas.addEventListener("pointermove", (e) => {
+    if (!last) return;
+    const cells = zoom * pxPerCell;
+    cx -= (e.clientX - last[0]) / cells;
+    cy += (e.clientY - last[1]) / cells;
+    last = [e.clientX, e.clientY];
+    clampCamera();
+    redraw();
+  });
+  const endDrag = () => { last = null; canvas.classList.remove("dragging"); };
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    // About the cursor: the map cell under it stays under it.
+    const dx = e.clientX - width / 2, dy = e.clientY - height / 2;
+    const ux = cx + dx / (zoom * pxPerCell), uy = cy - dy / (zoom * pxPerCell);
+    zoom = Math.min(2, Math.max(fit() * 0.5, zoom * Math.exp(-e.deltaY * 0.0015)));
+    cx = ux - dx / (zoom * pxPerCell);
+    cy = uy + dy / (zoom * pxPerCell);
+    clampCamera();
+    redraw();
+  }, { passive: false });
+  addEventListener("resize", resize);
 
-let last = null;
-view.addEventListener("pointerdown", (e) => {
-  last = [e.clientX, e.clientY];
-  view.setPointerCapture(e.pointerId);
-  view.classList.add("dragging");
+  resize();
+  show(0);
+})().catch((error) => {
+  statusEl.textContent = `The pack couldn't be shown: ${error.message}`;
 });
-view.addEventListener("pointermove", (e) => {
-  if (!last) return;
-  const cells = zoom * pxPerCell;
-  cx -= (e.clientX - last[0]) / cells;
-  cy += (e.clientY - last[1]) / cells;
-  last = [e.clientX, e.clientY];
-  clampCamera();
-  draw();
-});
-const endDrag = () => { last = null; view.classList.remove("dragging"); };
-view.addEventListener("pointerup", endDrag);
-view.addEventListener("pointercancel", endDrag);
-
-view.addEventListener("wheel", (e) => {
-  e.preventDefault();
-  // Zoom about the cursor: the map cell under it stays under it.
-  const dx = e.clientX - view.clientWidth / 2, dy = e.clientY - view.clientHeight / 2;
-  const ux = cx + dx / (zoom * pxPerCell), uy = cy - dy / (zoom * pxPerCell);
-  zoom = Math.min(2, Math.max(fit() * 0.5, zoom * Math.exp(-e.deltaY * 0.0015)));
-  cx = ux - dx / (zoom * pxPerCell);
-  cy = uy + dy / (zoom * pxPerCell);
-  clampCamera();
-  draw();
-}, { passive: false });
-
-addEventListener("resize", draw);
-show(0);
 </script>
 </body>
 </html>

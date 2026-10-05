@@ -8,8 +8,8 @@ a viewer would notice bumps the format number.
 A pack is plain static files, made to be hosted as they are (GitHub Pages for now) and read by a
 browser with no server code.
 
-**Status:** the format as agreed. heroes-capture doesn't write packs yet. Today it writes the
-images and placement files the pack is made from.
+**Status:** heroes-capture writes packs at the end of every render (`pack.py`), with a reference
+viewer in each (`index.html`; `heroes-capture map view <map>` opens it).
 
 ## Contents
 
@@ -38,11 +38,13 @@ maps/battlefield-of-eternity/
     fixed.webp                the fixed skybox: one screen-sized backdrop, not tiled
     thumbnail.webp            the map, small, for a map picker
     images/                   the game's own pictures of the map (see Images)
-  raw/                        full-resolution PNGs of the layers; not part of the pack
+    index.html                the reference viewer (heroes-capture's check that the pack works)
+  raw/                        full-resolution PNGs of the layers and composites; not part of the pack
 ```
 
-The pack is written for the map with its structures (forts, towers, cores, gates) kept. A map
-without the sky layers (no parallax sky in the game) has no `background`, `haze` or `fixed`.
+The pack is for the map with its structures (forts, towers, cores, gates) kept. A render with
+them hidden writes the same layout into `terrain/` inside the map's folder. A map without the
+sky layers (no parallax sky in the game) has no `background`, `haze` or `fixed`.
 
 ## pack.json
 
@@ -54,7 +56,7 @@ illustrative):
 {
   "format": 1,
   "tool": "heroes-capture 0.2.0",
-  "gameBuild": "2.55.17.98025",
+  "gameBuild": 98025,
   "map": {
     "id": "battlefield-of-eternity",
     "name": "Battlefield of Eternity",
@@ -101,9 +103,9 @@ illustrative):
 |---|---|
 | `format` | This document's format number. A viewer refuses a format it doesn't know. |
 | `tool` | The heroes-capture version that wrote the pack. |
-| `gameBuild` | The game build the map and images came from, when known. |
+| `gameBuild` | The game's build number the map and images came from (`null` if unknown). |
 | `map.id`, `map.name` | The folder's id and the map's name as the game shows it (English). |
-| `map.category` | `Battleground`, `Arena`, `Brawl` or `Other` (as `map list` shows them). |
+| `map.category` | `Battleground`, `Arena`, `Brawl` or `Other` (as `map list` shows them); `null` if unknown. |
 | `map.validated` | The tool's authors have checked this map's render. Information only. |
 | `map.structures` | `keep`: structures are in the map layer. |
 | `map.sizeCells` | The whole map in map cells (width, height). |
@@ -215,8 +217,9 @@ layout's text and the icons' positions on it aren't composed into it.
 ## Raw layers
 
 Next to the pack, `raw/` holds each layer at full resolution as PNG (lossless): `map.png` (or
-`map-<arena>.png`), `background.png`, `haze.png` and `fixed.png`. Its `layers.json` places them
-the same way as `pack.json` does. They're for keeping and for further work, not for a viewer: the
+`map-<arena>.png`), `background.png`, `haze.png` and `fixed.png`, and the composites
+(`composite.png`, `composite-on-black.png`, `composite-with-fixed.png`). Its `layers.json`
+places the layers the same way as `pack.json` does. They're for keeping and for further work, not for a viewer: the
 pack's tiles come from them.
 
 ## Hosting
