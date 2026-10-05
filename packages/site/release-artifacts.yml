@@ -1,0 +1,10 @@
+# Declares what this project publishes. Read by `gitflow pack`.
+# The site (dist/, built by github.actions.build: tools/build.mjs) goes onto the release as a zip,
+# and its deploy bundle publishes it to the gh-pages branch, at the Pages root: deploy it with
+# `gitflow deploy` (the deploy-production.yml workflow runs it).
+artifacts:
+  - type: static-site
+    name: heroes-capture-maps
+    packDir: dist
+    pagesRoot: true
+    deploy: [gh-pages]

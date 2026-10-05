@@ -45,12 +45,13 @@ def test_stitch_of_a_simulated_render(tmp_path):
     run = simulate(tmp_path, "matte")
     assert run["outcome"] == "finished"
     with sim_slot():
-        result = subprocess.run([sys.executable, "-m", "heroes_capture", "stitch", "test-map.json", "--tiles"], cwd=tmp_path,
+        result = subprocess.run([sys.executable, "-m", "heroes_capture", "stitch", "test-map.json"], cwd=tmp_path,
                                 capture_output=True, text=True, env={"PYTHONPATH": str(PACKAGE / "src")})
     assert result.returncode == 0, result.stderr[-3000:]
     out = tmp_path / "maps" / "test-map"  # <output-dir>/<map id>, from the map's name "Test Map"
-    for name in ("test-map.png", "test-map.geo.json", "test-map-layers.json", "test-map-composite.png",
-                 "test-map-viewer/index.html", "test-map-tiles"):
+    for name in ("pack/pack.json", "pack/map.pmtiles", "pack/background.pmtiles", "pack/haze.pmtiles", "pack/fixed.webp",
+                 "pack/thumbnail.webp", "pack/index.html", "raw/map.png", "raw/composite.png", "raw/layers.json"):
         assert (out / name).exists(), name
-    layers = json.loads((out / "test-map-layers.json").read_text())
-    assert {"map", "fixed", "background", "haze"} <= set(layers)
+    assert sorted(p.name for p in out.iterdir()) == ["pack", "raw"]
+    description = json.loads((out / "pack" / "pack.json").read_text())
+    assert [l["id"] for l in description["layers"]] == ["fixed", "background", "haze", "map"]

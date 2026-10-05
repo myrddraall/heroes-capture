@@ -15,6 +15,11 @@ CASC_LOCALE_ALL = 0xFFFFFFFF
 FIND_DATA_SIZE = 8192  # bigger than CASC_FIND_DATA on any platform (MAX_PATH is 260 on Windows, 1024 elsewhere)
 INVALID_HANDLE = (ctypes.c_void_p(-1).value, None, 0)
 PRODUCT = "hero"
+STORAGE_PRODUCT = 4  # CascStorageProduct: the product's code name and build number
+
+
+class _StorageProduct(ctypes.Structure):
+    _fields_ = [("code_name", ctypes.c_char * 0x1C), ("build", ctypes.c_uint32)]
 
 _lib = None
 
@@ -42,6 +47,7 @@ def _load():
         "CascFindFirstFile": ([handle, name, ctypes.c_void_p, path_type], handle),
         "CascFindNextFile": ([handle, ctypes.c_void_p], ctypes.c_bool),
         "CascFindClose": ([handle], ctypes.c_bool),
+        "CascGetStorageInfo": ([handle, ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)], ctypes.c_bool),
         "GetCascError": ([], dword),
     }
     for function, (args, result) in signatures.items():
@@ -96,6 +102,13 @@ class Storage:
         if self.handle:
             self.lib.CascCloseStorage(self.handle)
             self.handle = ctypes.c_void_p()
+
+    def build(self) -> int | None:
+        """The game build the storage holds (its build number), or None if CascLib doesn't say."""
+        info, needed = _StorageProduct(), ctypes.c_size_t()
+        if not self.lib.CascGetStorageInfo(self.handle, STORAGE_PRODUCT, ctypes.byref(info), ctypes.sizeof(info), ctypes.byref(needed)):
+            return None
+        return int(info.build) or None
 
     def read(self, name: str) -> bytes | None:
         """A file's bytes, or None when the storage has no such file."""
