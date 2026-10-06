@@ -1,7 +1,8 @@
-"""Diagnostic runs (capture.py --probe-light, --probe-sky, --probe-waits): instead of the tiles, chosen views and
+"""Diagnostic runs (capture.py --probe-light, --probe-sky, --probe-waits, --probe-elements): instead of the tiles, chosen views and
 command sequences, a shot after each, kept in a probe-<what>-<time> folder next to the tiles.
 """
 
+import math
 import os
 import time
 from pathlib import Path
@@ -10,6 +11,7 @@ import numpy as np
 from PIL import Image
 
 from . import sky_layers
+from .elements import ORDER_TEAM, changed, cut_out, describe, element_targets, screen_point
 from .game_control import quit_match, send_command, settle, step
 from .runlog import done, log, warn
 from .screen import changed_share
@@ -242,3 +244,114 @@ def probe_waits(session, manifest: dict, out: Path) -> None:
     quit_match()
     done(f"probe screenshots in {probe_dir}")
 
+
+
+def probe_elements(session, manifest: dict, out: Path) -> None:
+    """The cores' holes (ELEMENTS-PLAN.md, The bare terrain): filled in the map file when it was
+    prepared, opened again by the script as it started. On the Order core, through the script's
+    "el" commands, from the tile nearest it:
+
+    - the core as the script opened its hole (to compare with a map whose hole is the file's own)
+    - the hole shown (the floor through the core's centre) and opened again: back as it was?
+    - the core alone over the sky (its cut-out), then everything shown again: the hole opened
+      again after all the terrain was shown?
+    - the core killed after a hidden replacement took its place as the team's core (the match
+      carries on), its remains cleared (the hole open to the sky), and the hole shown: the ground
+      where the core stood
+
+    Every shot is kept in probe-elements-<time>/, the differences logged."""
+    left = int((manifest.get("status") or {}).get("pageLeft", 0))
+    probe_dir = out.parent / f"probe-elements-{time.strftime('%H%M%S')}"
+    probe_dir.mkdir(exist_ok=True)
+    core = element_targets(manifest)["core"]
+    shots: dict[str, np.ndarray] = {}
+    at = {}  # the tile the camera is on
+    log(f"elements probe: the core at ({core['x']:g}, {core['y']:g})")
+
+    def command(text: str, timeout: float = 3.0) -> bool:
+        if session.send(text, timeout=timeout) is None:
+            warn(f"  no answer to \"{text}\"")
+            return False
+        return True
+
+    def shot(name: str) -> np.ndarray | None:
+        frame = session.grab(dark_ok=True)
+        if frame is None:
+            log(f"  {name}: no frame")
+            return None
+        shots[name] = frame
+        _save(frame, probe_dir / f"{name}.png")
+        return frame
+
+    def compare(name: str, other: str) -> None:
+        if name in shots and other in shots:
+            log(f"  {name} vs {other}: {describe(changed(shots[name], shots[other], left))}")
+
+    def isolated(name: str, spot: dict, radius: float) -> None:
+        """What is on show alone over the sky ("el isolate on": all the terrain, every doodad, the
+        cliff doodads, and the units and model actors more than `radius` cells from `spot`
+        hidden), over white and over black, made into its cut-out (elements.cut_out); then
+        everything shown again, and the view compared with the one before."""
+        shot(f"{name}-iso-before")
+        if not command(f"el isolate on {spot['x']:g} {spot['y']:g} {radius:g}"):
+            return
+        settle(1.0)
+        white = shot(f"{name}-iso-white")
+        command("black")
+        settle(0.5)
+        black = shot(f"{name}-iso-black")
+        command("sky white 0")  # the layer given: the sequence number is appended after it
+        if white is not None and black is not None:
+            centre = screen_point(spot, at["tile"], manifest["screen"], manifest["pxPerCell"])
+            rgba = cut_out(white, black, centre, radius * manifest["pxPerCell"])
+            Image.fromarray(rgba, "RGBA").save(probe_dir / f"{name}-iso-cutout.png", compress_level=1)
+            alpha = rgba[..., 3]
+            log(f"  {name} alone over the sky: {(alpha > 0).sum()} pixels ({describe(alpha > 0)}), "
+                f"{(alpha == 255).sum()} opaque, {((alpha > 0) & (alpha < 255)).sum()} soft")
+        command("el isolate off")
+        settle(1.0)
+        shot(f"{name}-iso-restored")
+        compare(f"{name}-iso-restored", f"{name}-iso-before")
+
+    def run() -> None:
+        t = min(manifest["tiles"], key=lambda t: math.dist((t["x"], t["y"]), (core["x"], core["y"])))
+        at["tile"] = t
+        command(f"tile {t['index']} {t['x']:.2f} {t['y']:.2f}")
+        settle(1.0)
+        command("clean")
+        settle(0.5)
+        log(f"  tile {t['index'] + 1} at ({t['x']:g}, {t['y']:g})")
+        shot("core-before")
+        for way in ("show", "hide"):
+            command(f"el holes {way}")
+            settle(1.0)
+            shot(f"core-holes-{way}")
+            compare(f"core-holes-{way}", "core-before")
+        command("el hideall")
+        command(f"el show {core['x']:g} {core['y']:g}")
+        settle(0.5)
+        isolated("core", core, 5.0)
+        command("el showall")
+        settle(0.5)
+        status = session.status()
+        if not command(f"el core {ORDER_TEAM} 15", timeout=20.0):
+            return
+        settle(1.0)
+        shot("core-rubble")
+        after = session.status()
+        if after is None:
+            warn("  after the core's death the strip can't be read: the match may have ended")
+        else:
+            going = after.phase != 3 and status is not None and after.game_seconds > status.game_seconds
+            log(f"  after the core's death: phase {after.phase}: " + ("the match carries on" if going else "the match looks over"))
+        command("el clear")
+        settle(1.0)
+        shot("core-cleared")
+        command("el holes show")
+        settle(1.0)
+        shot("core-cleared-shown")
+        compare("core-cleared-shown", "core-cleared")
+
+    step(run, "elements probe, the core's holes")
+    quit_match()
+    done(f"probe screenshots in {probe_dir}")

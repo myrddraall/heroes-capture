@@ -43,7 +43,7 @@ FEATHER = 16  # pixels blended either side of each seam: enough to hide lighting
 SEAM_STEP = 2  # a seam may move this many (reduced) pixels sideways per pixel along
 ANCHOR_WEIGHT = 5.0  # an anchor's weight in the solve, against a match's (its strength, up to 1)
 ANCHOR = -1  # a virtual node in the solve: every anchored screenshot is connected to it
-MATTE_BAND = 32  # rows matted at a time (see Shots.matte)
+MATTE_BAND = 32  # rows matted at a time (see matte)
 
 
 # ------------------------------------------------------------------------------------------------
@@ -71,6 +71,49 @@ def _mean3(a: np.ndarray) -> np.ndarray:
     total = a[:, :, 0] + a[:, :, 1]
     total += a[:, :, 2]
     return np.true_divide(total, np.intp(3), out=total, casting="unsafe")
+
+
+def white_level(white: np.ndarray, black: np.ndarray) -> float | None:
+    """The level the game renders the white skybox at, from a pair of shots over white and black:
+    the median of the pixels that are sky (black in the black shot, flat and bright in the white
+    one); None when fewer than 2000 are."""
+    w, b = white.astype(np.float32), black.astype(np.float32)
+    w_min = _min3(w)
+    sky = (_max3(b) <= 4) & (w_min >= 120) & (_max3(w) - w_min <= 8)
+    return float(np.median(w[sky].mean(axis=1))) if sky.sum() >= 2000 else None
+
+
+def matte(white: np.ndarray, black: np.ndarray, level: float) -> np.ndarray:
+    """Difference matting: RGBA from the shots over white and over black. A pixel that is sky
+    in both differs by the whole white level; one that is all map is the same in both; in
+    between (soft edges, glass, glow) the difference is exactly the see-through share.
+    Colour from the black shot (the map's own light, nothing of the sky in it),
+    un-premultiplied. The white level is measured, not assumed (the game renders the white
+    skybox at about 230): see white_level."""
+    # In bands of rows small enough to stay in the processor's cache: every pixel is worked
+    # out on its own, and with whole tiles the threads spent their time waiting on memory.
+    out = np.empty((*white.shape[:2], 4), dtype=np.uint8)
+    for r0 in range(0, white.shape[0], MATTE_BAND):
+        r1 = r0 + MATTE_BAND
+        w = white[r0:r1].astype(np.float32)
+        b = black[r0:r1].astype(np.float32)
+        d = w - b
+        d_mean = _mean3(d)
+        see_through = np.clip(d_mean / level, 0, 1)
+        # Not grey: something changed between the shots (an animated glow), no matte there.
+        animated = (_max3(d) - _min3(d)) > 24
+        alpha = np.where(animated, 1.0, 1.0 - see_through)
+        alpha = np.where(d_mean < -8, 1.0, alpha)
+        # Un-premultiplied colour: the black shot over alpha. Only where it is see-through:
+        # elsewhere (most pixels) alpha is exactly 1 and the colour is the black shot as it is.
+        rgb = b
+        part = alpha < 1.0
+        a_part = alpha[part]
+        rgb[part] = np.where(a_part[:, None] > 1 / 255, np.clip(b[part] / np.maximum(a_part, 1 / 255)[:, None], 0, 255), 0)
+        out[r0:r1, :, :3] = rgb.round()
+        out[r0:r1, :, 3] = (alpha * 255).round()
+    return out
+
 
 
 class Shots:
@@ -116,46 +159,11 @@ class Shots:
             if not self.matting or not self.has_black(i):
                 continue
             if self.white_level is None:
-                w = load_frame(self.stem(i)).astype(np.float32)
-                b = load_frame(self.black_stem(i)).astype(np.float32)
-                w_min = _min3(w)
-                sky = (_max3(b) <= 4) & (w_min >= 120) & (_max3(w) - w_min <= 8)
-                if sky.sum() >= 2000:
-                    self.white_level = float(np.median(w[sky].mean(axis=1)))
+                self.white_level = white_level(load_frame(self.stem(i)), load_frame(self.black_stem(i)))
+                if self.white_level is not None:
                     log(f"  white skybox level {self.white_level:.1f}")
             levels[i] = self.white_level or 230.0
         return levels
-
-    def matte(self, white: np.ndarray, black: np.ndarray, level: float) -> np.ndarray:
-        """Difference matting: RGBA from the shots over white and over black. A pixel that is sky
-        in both differs by the whole white level; one that is all map is the same in both; in
-        between (soft edges, glass, glow) the difference is exactly the see-through share.
-        Colour from the black shot (the map's own light, nothing of the sky in it),
-        un-premultiplied. The white level is measured, not assumed (the game renders the white
-        skybox at about 230): see levels_for."""
-        # In bands of rows small enough to stay in the processor's cache: every pixel is worked
-        # out on its own, and with whole tiles the threads spent their time waiting on memory.
-        out = np.empty((*white.shape[:2], 4), dtype=np.uint8)
-        for r0 in range(0, white.shape[0], MATTE_BAND):
-            r1 = r0 + MATTE_BAND
-            w = white[r0:r1].astype(np.float32)
-            b = black[r0:r1].astype(np.float32)
-            d = w - b
-            d_mean = _mean3(d)
-            see_through = np.clip(d_mean / level, 0, 1)
-            # Not grey: something changed between the shots (an animated glow), no matte there.
-            animated = (_max3(d) - _min3(d)) > 24
-            alpha = np.where(animated, 1.0, 1.0 - see_through)
-            alpha = np.where(d_mean < -8, 1.0, alpha)
-            # Un-premultiplied colour: the black shot over alpha. Only where it is see-through:
-            # elsewhere (most pixels) alpha is exactly 1 and the colour is the black shot as it is.
-            rgb = b
-            part = alpha < 1.0
-            a_part = alpha[part]
-            rgb[part] = np.where(a_part[:, None] > 1 / 255, np.clip(b[part] / np.maximum(a_part, 1 / 255)[:, None], 0, 255), 0)
-            out[r0:r1, :, :3] = rgb.round()
-            out[r0:r1, :, 3] = (alpha * 255).round()
-        return out
 
     def load(self, i: int, level: float | None) -> np.ndarray:
         """The tile as RGBA: matted from its pair of shots with that white level, or opaque (a
@@ -164,7 +172,7 @@ class Shots:
         white = load_frame(self.stem(i))
         if not self.matting or not self.has_black(i):
             return np.dstack([white, np.full(white.shape[:2], 255, dtype=np.uint8)])
-        return self.matte(white, load_frame(self.black_stem(i)), level if level is not None else 230.0)
+        return matte(white, load_frame(self.black_stem(i)), level if level is not None else 230.0)
 
 
 def read_anchors(base: Path, by_index: dict, shots: Shots, present: list) -> tuple[dict[int, tuple[float, float]], bool]:

@@ -57,6 +57,9 @@ def capture_script(
     hide_doodads: list[str] = (),
     keep_intro: bool = False,
     arena: bool = False,
+    boss: bool = False,
+    cliff_doodads: list[str] = (),
+    hole_cells: list[tuple[int, int]] = (),
 ) -> str:
     """The script for one prepared map.
 
@@ -76,7 +79,13 @@ def capture_script(
     hide_doodads: doodad types to hide (cloud layers placed in the map as doodads). keep_intro:
     let the intro cutscene play out (diagnostic). arena: the map plays rounds (its script includes
     LibAREN: Punisher Arena), so a core killed ends only the round, and "quit" first gives the
-    other team all but its last round win.
+    other team all but its last round win. boss: the map's script includes LibMLBD (Battlefield
+    of Eternity), so the elements probe's "el boss" spawns its Immortal. cliff_doodads: the doodad
+    types the map places as part of its terrain (t3Terrain.xml's cliffDoodadList), which neither
+    the terrain switch nor the doodad message hides ("el isolate" hides them by type). hole_cells:
+    the cells of the holes the cores stand on, filled in the map file (inject.py): the script opens
+    them again with TerrainShowRegion as it starts, so the map looks as the game draws it, and
+    shows them on "el holes show" (the ground where a core stood).
     """
     map_sky = map_sky or {"fixed": None, "parallax": None}
     if lens:
@@ -117,6 +126,36 @@ def capture_script(
     )
     arena_quit_line = ("    libAREN_gv_aRM_RoundScore[libGame_gf_EnemyTeam(libGame_gf_TeamNumberOfPlayer(hrsCap_cmdPlayer))]"
                        " = libAREN_gv_victoriesCount - 1;\n") if arena else ""
+    # "el boss <team> <x> <y>" (the elements probe): the map's objective unit, on the maps whose
+    # spawn function we know; elsewhere the verb does nothing.
+    boss_line = ("        libMLBD_gf_MMBOESpawnBoss(StringToInt(StringWord(hrsCap_cmd, 3)), Point(StringToFixed(StringWord(hrsCap_cmd, 4)),"
+                 " StringToFixed(StringWord(hrsCap_cmd, 5))));\n") if boss else ""
+    # "el terrain show|hide <x> <y> <radius>" (the elements probe): the terrain in a circle shown or
+    # hidden while the match runs (a core's hole, which the map file marks, filled and opened again).
+    terrain_line = ("        TerrainShowRegion(RegionCircle(Point(StringToFixed(StringWord(hrsCap_cmd, 4)), StringToFixed(StringWord(hrsCap_cmd, 5))),"
+                    " StringToFixed(StringWord(hrsCap_cmd, 6))), (StringWord(hrsCap_cmd, 3) == \"show\"));\n")
+    # "el isolate on <x> <y> <radius>" / "el isolate off" (the elements probe): all the terrain,
+    # every doodad, the cliff doodads and every unit in sight outside the circle hidden, so what is
+    # left (a structure, a camp, the objective) stands alone over the sky, or all shown again (the
+    # cloud layers hidden again after).
+    def cliff_lines(show: str) -> str:
+        return "".join(f'\n            libNtve_gf_ShowHideDoodadsInRegion({show}, {map_region}, "{name}");' for name in cliff_doodads)
+
+    isolate_lines = f"""        if ((StringWord(hrsCap_cmd, 3) == "on")) {{
+            TerrainShowRegion({map_region}, false);
+            hrsCap_DoodadsMessage("SetVisibility 0");{cliff_lines("false")}
+            hrsCap_IsolateUnits(StringToFixed(StringWord(hrsCap_cmd, 4)), StringToFixed(StringWord(hrsCap_cmd, 5)), StringToFixed(StringWord(hrsCap_cmd, 6)));
+        }}
+        else {{
+            TerrainShowRegion({map_region}, true);
+            hrsCap_OpenHoles();
+            hrsCap_DoodadsMessage("SetVisibility 1");{cliff_lines("true")}{doodad_lines.replace(chr(10) + "    ", chr(10) + "            ")}
+            hrsCap_RestoreUnits();
+        }}
+"""
+    # The cores' holes as a region: a small circle on each cell's centre (the terrain switch goes by
+    # cells; Blizzard's code builds regions with RegionAddCircle, never RegionAddRect).
+    hole_lines = "".join(f"\n    RegionAddCircle(hrsCap_holes, true, Point({fixed(x + 0.5)}, {fixed(y + 0.5)}), 0.45);" for x, y in hole_cells)
     values = {
         "hide_structures": "true" if hide_structures else "false",
         "distance": fixed(distance),
@@ -147,5 +186,10 @@ def capture_script(
         "cut_short_lines": "\n".join(f"        hrsCap_CutShort({t});" for t in opening_timers),
         "skip_intro_line": "" if keep_intro else "    hrsCap_SkipIntro();\n",
         "arena_quit_line": arena_quit_line,
+        "boss_line": boss_line,
+        "terrain_line": terrain_line,
+        "isolate_lines": isolate_lines,
+        "hole_lines": hole_lines,
+        "has_holes": "true" if hole_cells else "false",
     }
     return Template(TEMPLATE.read_text(encoding="utf-8")).substitute(values)

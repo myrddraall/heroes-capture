@@ -30,7 +30,7 @@ from rich.table import Table
 from . import ui
 from .game_menus import ScriptBroken
 
-PROBES = ("probe_light", "probe_sky", "probe_depth", "probe_waits")
+PROBES = ("probe_light", "probe_sky", "probe_depth", "probe_waits", "probe_elements")
 DISTANCE = "214"  # camera distance: far, so tall objects lean little at the seams
 KEEP = "0.4"  # share of each screenshot used, centred
 VALIDATED = Path(__file__).with_name("validated-maps.json")
@@ -343,6 +343,7 @@ def render(
     probe_sky: Annotated[bool, typer.Option(hidden=True)] = False,
     probe_depth: Annotated[bool, typer.Option(hidden=True)] = False,
     probe_waits: Annotated[bool, typer.Option(hidden=True)] = False,
+    probe_elements: Annotated[bool, typer.Option(hidden=True)] = False,
     show_ui: Annotated[bool, typer.Option(hidden=True)] = False,  # diagnostic: launch with the HUD up and stop
 ) -> None:
     """Prepare, capture and stitch a map, or every map of a category.
@@ -360,7 +361,7 @@ def render(
     map_spec, extra = split_map(list(ctx.args))
     if (map_spec is None) == (category is None):
         raise typer.BadParameter("name one map, or pick maps with --category")
-    chosen = {"probe_light": probe_light, "probe_sky": probe_sky, "probe_depth": probe_depth, "probe_waits": probe_waits}
+    chosen = {"probe_light": probe_light, "probe_sky": probe_sky, "probe_depth": probe_depth, "probe_waits": probe_waits, "probe_elements": probe_elements}
     probe = next((f"--{name.replace('_', '-')}" for name in PROBES if chosen[name]), None)
     if category and (probe or show_ui):
         raise typer.BadParameter("the diagnostics take one map")

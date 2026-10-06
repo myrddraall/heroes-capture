@@ -149,6 +149,15 @@ def test_map_render_runs_the_three_steps_with_the_defaults(monkeypatch, tmp_path
     assert "\x1b[" not in plain
 
 
+def test_the_elements_probe_prepares_the_map_and_runs_the_capture_as_the_probe(monkeypatch, tmp_path):
+    calls = render_steps(monkeypatch, tmp_path)
+    result = runner.invoke(cli.app, ["map", "render", "dragon shire", "--probe-elements"])
+    assert result.exit_code == 0, result.output
+    assert [c[0] for c in calls] == ["prepare", "capture"]  # no stitch
+    assert calls[1][1][1:] == ["--probe-elements"]
+    assert (tmp_path / "tmp").exists()  # a diagnostic's files stay
+
+
 def test_options_before_the_map_keep_their_values(monkeypatch, tmp_path):
     calls = render_steps(monkeypatch, tmp_path)
     result = runner.invoke(cli.app, ["map", "render", "--fov", "12", "--paint-texture", "sky", "clear", "dragon shire"])

@@ -689,6 +689,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--probe-light", action="store_true", help="diagnostic: command sequences at chosen points (HRS_PROBE_POINTS, HRS_PROBE_TILE_PATH), a shot after each")
     ap.add_argument("--probe-sky", action="store_true", help="diagnostic: one edge tile over each solid-colour skybox, to check the colour shows and is uniform")
     ap.add_argument("--probe-waits", action="store_true", help="diagnostic: the fixed waits tried shorter on sample tiles and a sky swap, compared with the current ones; and the sky pass with positions further apart")
+    ap.add_argument("--probe-elements", action="store_true", help="diagnostic: a town's structures, a camp, the objective and a core shown, hidden, spawned and killed through the script's \"el\" commands, a shot after each and their differences (ELEMENTS-PLAN.md)")
     ap.add_argument("--probe-depth", action="store_true", help="diagnostic: only measure the sky layers' parallax (done during the start-up in every render)")
     ap.add_argument("--settle", type=float, default=0.1, help="least seconds from a move to the kept screenshot (default 0.1; the waits probe found differences only where the scene animates anyway, as at 0.5)")
     ap.add_argument("--start", type=int, default=0, help="first tile, to resume a run (default 0)")
@@ -733,6 +734,8 @@ def main(argv: list[str]) -> None:
         log(f"Waits probe on {manifest['map']}: sample tiles and a sky swap with shorter waits, compared with the current ones.")
     elif args.probe_depth:
         log(f"Sky depth probe on {manifest['map']}: the sky layers' parallax, measured at three camera positions.")
+    elif args.probe_elements:
+        log(f"Elements probe on {manifest['map']}: structures, a camp, the objective and a core, shot alone, spawned and killed.")
     elif args.probe_sky:
         log(f"Skybox probe on {manifest['map']}: one edge tile, a scripted sequence of skybox swaps, a shot after each.")
     else:
@@ -749,7 +752,7 @@ def main(argv: list[str]) -> None:
         if (region["width"], region["height"]) != expected:
             warn(f"that is not the {expected[0]}x{expected[1]} the grid was planned for; the stitch will still work, at a different scale")
         session = Session(screen, int(manifest["status"].get("pageLeft", 0)))
-        probe = args.probe_light or args.probe_sky or args.probe_waits or args.probe_depth
+        probe = args.probe_light or args.probe_sky or args.probe_waits or args.probe_depth or args.probe_elements
         measured = None
         sky_waits = False  # the sky work put off until the map is ready (its world was hidden)
 
@@ -789,6 +792,9 @@ def main(argv: list[str]) -> None:
             return
         if args.probe_waits:
             probes.probe_waits(session, manifest, out)
+            return
+        if args.probe_elements:
+            probes.probe_elements(session, manifest, out)
             return
         if args.probe_depth:
             with stage("sky depth measurement"):

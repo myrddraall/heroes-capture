@@ -4,6 +4,7 @@ import struct
 import sys
 import types
 
+import numpy as np
 import pytest
 
 from heroes_capture import js_json
@@ -67,6 +68,37 @@ def test_capture_script_is_filled_and_defined_before_use():
     assert "libAREN_gv_aRM_RoundScore" in text
     check_definition_order(text)
     assert "libAREN_gv_aRM_RoundScore" not in script(arena=False)
+
+
+def test_the_elements_probe_s_commands_are_in_the_script():
+    """The "el" command (--probe-elements, ELEMENTS-PLAN.md): its verbs, a tower brought down the
+    game's way (the dead-state morph, not a kill), the remains cleared as Blizzard's maps clear a
+    town, and the objective spawned only on a map whose spawn function we know (LibMLBD)."""
+    text = script()
+    assert 'else if ((lv_word == "el")) { lv_t = hrsCap_gt_Element; }' in text
+    for verb in ("hideall", "showall", "show", "hide", "kill", "core", "clear", "keep", "camp", "freeze", "boss",
+                 "colours", "smsg", "umsg", "msg", "timescale", "corestart", "terrain", "isolate"):
+        assert f'(lv_verb == "{verb}")' in text
+    assert 'AbilityCommand("TowerDeadMorph", 0)' in text and 'UnitBehaviorAdd(lp_unit, "TownCannonTowerInvulnerable"' in text
+    assert 'UnitGroup("TownCannonTowerDead"' in text and '"ScopeContains _DeathModel"' in text and "ActorWorldParticleFXDestroy();" in text
+    assert "libGame_gv_teams[lv_team].lv_core = UnitLastCreated();" in text  # the replacement core first
+    assert '"AnimBracketStart CoreStart IGNORE Stand,Work Stand,Work,End ContentNonLooping,OpeningPlayForever,Instant"' in text
+    assert "libMLBD_gf_MMBOESpawnBoss" not in text
+    assert "if (!false) {" in text  # no holes: none opened
+    full = script(cliff_doodads=["StormDoodadHeaven1JungleFTO"], hole_cells=[(46, 97), (47, 97)])
+    assert "RegionAddCircle(hrsCap_holes, true, Point(46.5000, 97.5000), 0.45);" in full and "if (!true) {" in full
+    assert full.index("hrsCap_HolesInit();") > full.index("void hrsCap_Init ()")
+    assert 'libNtve_gf_ShowHideDoodadsInRegion(false, RegionRect(-16.0, -16.0, 272.0, 272.0), "StormDoodadHeaven1JungleFTO");' in full
+    assert "hrsCap_IsolateUnits(StringToFixed(StringWord(hrsCap_cmd, 4))" in full and "hrsCap_RestoreUnits();" in full
+    assert 'hrsCap_ModelsMessage(lv_outside, "SetVisibility 0");' in full and 'hrsCap_ModelsMessage(hrsCap_isolatedArea, "SetVisibility 1");' in full
+    assert "TerrainShowRegion(RegionCircle(Point(" in full and 'hrsCap_DoodadsMessage("SetVisibility 0");' in full
+    # Every doodad shown again, then the cloud layers hidden again.
+    shown = full.index('hrsCap_DoodadsMessage("SetVisibility 1");')
+    assert full.index('"Storm_Doodad_Heaven_Clouds");', shown) > shown
+    check_definition_order(full)
+    boss = script(boss=True)
+    assert "libMLBD_gf_MMBOESpawnBoss(StringToInt(StringWord(hrsCap_cmd, 3)), Point(" in boss
+    check_definition_order(boss)
 
 
 def test_definition_order_is_enforced():
@@ -205,3 +237,63 @@ def test_a_layer_cropped_to_its_content_stays_in_place():
     assert tuple(moved + [8 - 3, 4 - 2]) == tuple(low + [8, 4])  # the same place in the centre view
     empty, same = _crop_to_content(np.zeros((4, 4, 4), np.uint8), low)
     assert empty.shape == (4, 4, 4) and tuple(same) == tuple(low)
+
+
+# ------------------------------------------------------------------------------------------------
+# Map elements: two shots' difference
+# ------------------------------------------------------------------------------------------------
+
+
+def test_an_element_s_difference_leaves_out_the_strip_and_small_changes():
+    from heroes_capture import elements
+
+    a = np.zeros((40, 60, 3), np.uint8)
+    b = a.copy()
+    b[10:20, 30:50] = 200  # the element
+    b[5, 40] = elements.ELEMENT_THRESHOLD  # not over the threshold
+    b[:, :4] = 255  # the status strip's column
+    mask = elements.changed(b, a, left=4)
+    assert mask.sum() == 200 and mask[10:20, 30:50].all()
+    assert elements.describe(mask) == " 8.333% of pixels changed, within x 30..50, y 10..20 (100% of that box)"
+    assert elements.describe(np.zeros((4, 4), bool)) == "no pixels changed"
+
+
+def test_the_holes_structures_stand_on_are_filled_and_no_others():
+    """A core stands on a small hole in the terrain (its pedestal covers it); that hole loses its
+    hole flag, so the ground is drawn once the core's remains are cleared. A hole with no structure
+    on it, or with only a marker in it, stays."""
+    from heroes_capture import elements
+
+    width, height = 12, 10
+    cells = np.zeros((height, width), np.uint8)
+    cells[4:7, 2:5] = elements.CELL_HOLE | 1  # under the core (other bits kept)
+    cells[0:2, 8:12] = elements.CELL_HOLE  # the void, with a marker in it
+    header = b"LFCT" + bytes(20) + struct.pack("<II", width, height)
+    objects = ('<ObjectUnit Id="1" Position="3.5,5,0" UnitType="KingsCore" Player="11"/>'
+               '<ObjectUnit Id="2" Position="9,0.5,0" UnitType="StormGameStartPathingBlocker"/>'
+               '<ObjectUnit Id="3" Position="7,7,0" UnitType="TownCannonTowerL2" Player="11"/>')
+    filled, holes = elements.fill_structure_holes(header + cells.tobytes() + b"tail", objects)
+    assert holes == [{"type": "KingsCore", "x": 3.5, "y": 5.0, "cells": [(x, y) for y in range(4, 7) for x in range(2, 5)]}]
+    assert filled[:32] == header and filled.endswith(b"tail")
+    after = np.frombuffer(filled, np.uint8, width * height, 32).reshape(height, width)
+    assert (after[4:7, 2:5] == 1).all() and (after[0:2, 8:12] == elements.CELL_HOLE).all()
+
+
+def test_an_element_s_cut_out_from_its_shots_over_the_sky():
+    """Matted from the shots over white and black, cropped to the circle round it, the sky's veil
+    transparent, solid parts opaque in the black shot's colour, a soft edge kept as it is."""
+    from heroes_capture import elements
+
+    white = np.full((60, 80, 3), 230, np.uint8)
+    black = np.zeros((60, 80, 3), np.uint8)
+    white[:, 70:] = 228  # the white sky a shade uneven: the veil
+    black[20:30, 20:30] = 100  # a solid part ...
+    white[20:30, 20:30] = 110  # ... the white sky brightening it by 10 levels
+    black[20:30, 30:32] = 50  # a soft edge, half see-through
+    white[20:30, 30:32] = 50 + 115
+    black[5, 75] = white[5, 75] = 90  # outside the circle (a cliff doodad)
+    rgba = elements.cut_out(white, black, centre=(30, 25), radius=20)
+    assert (rgba[20:30, 20:30, 3] == 255).all() and (rgba[20:30, 20:30, :3] == 100).all()
+    assert (abs(rgba[20:30, 30:32, 3].astype(int) - 128) <= 2).all()
+    assert rgba[5, 75, 3] == 0 and (rgba[:, 70:, 3] == 0).all() and rgba[50, 10, 3] == 0
+    assert elements.screen_point({"x": 108, "y": 60}, {"x": 98, "y": 62.6154}, {"w": 3440, "h": 1440}, 48) == pytest.approx((2200, 845.5), abs=0.1)

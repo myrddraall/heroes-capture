@@ -25,6 +25,8 @@ trigger hrsCap_gt_Unbound;
 trigger hrsCap_gt_RefitWait;
 trigger hrsCap_gt_HideMap;
 trigger hrsCap_gt_Quiet;
+trigger hrsCap_gt_Element;
+bool hrsCap_keepCreeps = false;  // command "el keep 1": the sweep leaves camps and objectives alone (the elements probe)
 fixed hrsCap_refitWait = 0.1;  // real seconds the lighting-refit look is held before each tile (command "refitwait"; 0.25 until the waits probe showed shorter changes nothing but the effects that animate anyway)
 bool hrsCap_unbound = false;  // command "unbound": the camera may go anywhere on the map (tiles past the camera bounds)
 trigger hrsCap_gt_Quit;
@@ -280,6 +282,7 @@ void hrsCap_RunCommand (string lp_text, int lp_player) {
     else if ((lv_word == "unbound")) { lv_t = hrsCap_gt_Unbound; }
     else if ((lv_word == "bgspeed")) { lv_t = hrsCap_gt_BgSpeed; }
     else if ((lv_word == "quit")) { lv_t = hrsCap_gt_Quit; }
+    else if ((lv_word == "el")) { lv_t = hrsCap_gt_Element; }
     if ((lv_t != null)) {
         TriggerExecute(lv_t, false, false);
     }
@@ -385,9 +388,11 @@ void hrsCap_ClearUnits () {
 
     hrsCap_RemoveUnits(UnitFilter((1 << c_targetFilterHeroic), 0, (1 << c_targetFilterStructure), 0));
     hrsCap_RemoveUnits(UnitFilter((1 << c_targetFilterMinion), 0, (1 << c_targetFilterStructure), 0));
-    hrsCap_RemoveUnits(UnitFilter((1 << c_targetFilterCreep), 0, (1 << c_targetFilterStructure), 0));
-    hrsCap_RemoveUnits(UnitFilter(0, (1 << (c_targetFilterMapCreature - 32)), (1 << c_targetFilterStructure), 0));
-    hrsCap_RemoveUnits(UnitFilter(0, (1 << (c_targetFilterSummoned - 32)), (1 << c_targetFilterStructure), 0));
+    if (!hrsCap_keepCreeps) {
+        hrsCap_RemoveUnits(UnitFilter((1 << c_targetFilterCreep), 0, (1 << c_targetFilterStructure), 0));
+        hrsCap_RemoveUnits(UnitFilter(0, (1 << (c_targetFilterMapCreature - 32)), (1 << c_targetFilterStructure), 0));
+        hrsCap_RemoveUnits(UnitFilter(0, (1 << (c_targetFilterSummoned - 32)), (1 << c_targetFilterStructure), 0));
+    }
 
     lv_g = UnitGroup(null, c_playerAny, RegionEntireMap(), UnitFilter(0, 0, (1 << c_targetFilterMissile), 0), 0);
     lv_u = UnitGroupCount(lv_g, c_unitCountAll);
@@ -929,6 +934,357 @@ bool hrsCap_gt_BgSpeed_Func (bool testConds, bool runActions) {
     return true;
 }
 
+// The command's words from lp_from on, without its last (the sequence number), one space apart.
+string hrsCap_CommandWords (int lp_from) {
+    string lv_text;
+    string lv_word;
+    int lv_n;
+
+    lv_text = "";
+    lv_n = lp_from;
+    for ( ; lv_n <= 16 ; lv_n += 1 ) {
+        lv_word = StringWord(hrsCap_cmd, lv_n);
+        if ((lv_word == "") || (StringWord(hrsCap_cmd, (lv_n + 1)) == "")) {
+            break;
+        }
+        if ((lv_text != "")) {
+            lv_text = (lv_text + " ");
+        }
+        lv_text = (lv_text + lv_word);
+    }
+    return lv_text;
+}
+
+// The elements probe (--probe-elements, ELEMENTS-PLAN.md): the map's structures, camps and
+// objective one at a time. The structure nearest a cell (within 3 cells), or null.
+unit hrsCap_StructureAt (fixed lp_x, fixed lp_y) {
+    unitgroup lv_g;
+
+    lv_g = UnitGroup(null, c_playerAny, RegionCircle(Point(lp_x, lp_y), 3.0), UnitFilter((1 << c_targetFilterStructure), 0, 0, 0), 0);
+    return UnitGroupClosestToPoint(lv_g, Point(lp_x, lp_y));
+}
+
+// Every structure shown or hidden (hidden: the unit's hidden state, so it can be shown again).
+void hrsCap_ShowAllStructures (bool lp_show) {
+    unitgroup lv_g;
+    int lv_u;
+    unit lv_unit;
+
+    lv_g = UnitGroup(null, c_playerAny, RegionEntireMap(), UnitFilter((1 << c_targetFilterStructure), 0, 0, 0), 0);
+    lv_u = UnitGroupCount(lv_g, c_unitCountAll);
+    for (;; lv_u -= 1) {
+        lv_unit = UnitGroupUnitFromEnd(lv_g, lv_u);
+        if (lv_unit == null) { break; }
+        libNtve_gf_ShowHideUnit(lv_unit, lp_show);
+    }
+}
+
+// An actor message to every structure's main actor (how --structures hide hides them:
+// "SetVisibility").
+void hrsCap_StructuresMessage (string lp_message) {
+    unitgroup lv_g;
+    int lv_u;
+    unit lv_unit;
+
+    lv_g = UnitGroup(null, c_playerAny, RegionEntireMap(), UnitFilter((1 << c_targetFilterStructure), 0, 0, 0), 0);
+    lv_u = UnitGroupCount(lv_g, c_unitCountAll);
+    for (;; lv_u -= 1) {
+        lv_unit = UnitGroupUnitFromEnd(lv_g, lv_u);
+        if (lv_unit == null) { break; }
+        ActorSend(libNtve_gf_MainActorofUnit(lv_unit), lp_message);
+    }
+}
+
+// A structure killed where it can be seen: shown, its animations running for its death, then,
+// after lp_wait real seconds, the map's animations paused again (its rubble with them). A tower
+// doesn't die: as the game does when one falls, it gets TownCannonTowerInvulnerable and morphs
+// into TownCannonTowerDead, its rubble (the AI library orders that morph; ordered here too).
+void hrsCap_KillShown (unit lp_unit, fixed lp_wait) {
+    libNtve_gf_ShowHideUnit(lp_unit, true);
+    libNtve_gf_SendActorMessageToUnit(lp_unit, "AnimSetPausedAll 0");
+    if (UnitTypeTestAttribute(UnitGetType(lp_unit), c_unitAttributeTower)) {
+        UnitBehaviorAdd(lp_unit, "TownCannonTowerInvulnerable", lp_unit, 1);
+        UnitIssueOrder(lp_unit, Order(AbilityCommand("TowerDeadMorph", 0)), c_orderQueueReplace);
+    }
+    else {
+        UnitKill(lp_unit);
+    }
+    Wait(lp_wait, c_timeReal);
+    libNtve_gf_SendActorMessageToGameRegion(${map_region}, "AnimSetPausedAll");
+}
+
+// The two teams' colours as GameLib sets them at the start (PlayerSetColorIndex, units
+// recoloured), or swapped: a team's structures then drawn as the other team's players see them,
+// if the game draws the colour the script sets.
+void hrsCap_TeamColours (bool lp_swap) {
+    int lv_p;
+    int lv_team;
+    int lv_order;
+    int lv_chaos;
+
+    lv_order = libCore_gv_cOLOROrderPlayerColor;
+    lv_chaos = libCore_gv_cOLORChaosPlayerColor;
+    if (lp_swap) {
+        lv_order = libCore_gv_cOLORChaosPlayerColor;
+        lv_chaos = libCore_gv_cOLOROrderPlayerColor;
+    }
+    lv_p = 1;
+    for ( ; lv_p <= 15 ; lv_p += 1 ) {
+        lv_team = libGame_gf_TeamNumberOfPlayer(lv_p);
+        if ((lv_team == libGame_gv_teamOrderIndex_C)) {
+            PlayerSetColorIndex(lv_p, lv_order, true);
+        }
+        else if ((lv_team == libGame_gv_teamChaosIndex_C)) {
+            PlayerSetColorIndex(lv_p, lv_chaos, true);
+        }
+    }
+    PlayerSetColorIndex(libCore_gv_cOMPUTER_NoVision_TeamOrder, lv_order, true);
+    PlayerSetColorIndex(libCore_gv_cOMPUTER_NoVision_TeamChaos, lv_chaos, true);
+}
+
+// An actor message to every doodad on the map, as libNtve_gf_ShowHideDoodadsInRegion sends one
+// to a doodad type ("SetVisibility 0" / "SetVisibility 1": hidden, shown again).
+void hrsCap_DoodadsMessage (string lp_message) {
+    actor lv_region;
+
+    ActorRegionCreate(null, "TriggerRegion", ${map_region});
+    lv_region = libNtve_gf_ActorLastCreated();
+    ActorRegionSend(lv_region, c_actorIntersectAgainstRadiusContact, lp_message, "Doodad", "");
+    ActorScopeKill(ActorScopeFromActor(lv_region));
+}
+
+// The holes in the terrain the cores stand on: filled in the map file (inject.py), opened here over
+// exactly their cells as the script starts, so the map looks as the game draws it (the sky through
+// a core's centre); shown on "el holes show" (the ground where a core stood, once it's gone).
+region hrsCap_holes;
+bool hrsCap_holesShown = false;
+
+void hrsCap_HolesInit () {
+    if (!${has_holes}) {
+        return;
+    }
+    hrsCap_holes = RegionEmpty();${hole_lines}
+    TerrainShowRegion(hrsCap_holes, false);
+}
+
+// The holes as they should be now, after anything that showed all the terrain: open, unless "el
+// holes show" showed them.
+void hrsCap_OpenHoles () {
+    if ((hrsCap_holes != null) && !hrsCap_holesShown) {
+        TerrainShowRegion(hrsCap_holes, false);
+    }
+}
+
+// "el isolate": every unit in sight outside a circle round what is on show hidden, and kept here
+// to be shown again (units already hidden, as the structures "el hideall" hid, aren't touched);
+// and the model actors outside it too (a loot banner stand's banner is a model of its own, which
+// hiding the stand leaves), shown again with it.
+unitgroup hrsCap_isolatedUnits;
+region hrsCap_isolatedArea;
+
+// An actor message to every model actor in a region.
+void hrsCap_ModelsMessage (region lp_area, string lp_message) {
+    actor lv_region;
+
+    ActorRegionCreate(null, "TriggerRegion", lp_area);
+    lv_region = libNtve_gf_ActorLastCreated();
+    ActorRegionSend(lv_region, c_actorIntersectAgainstRadiusContact, lp_message, "Model", "");
+    ActorScopeKill(ActorScopeFromActor(lv_region));
+}
+
+void hrsCap_IsolateUnits (fixed lp_x, fixed lp_y, fixed lp_radius) {
+    region lv_outside;
+    int lv_u;
+    unit lv_unit;
+
+    lv_outside = ${map_region};
+    RegionAddCircle(lv_outside, false, Point(lp_x, lp_y), lp_radius);
+    hrsCap_isolatedArea = lv_outside;
+    hrsCap_ModelsMessage(lv_outside, "SetVisibility 0");
+    hrsCap_isolatedUnits = UnitGroup(null, c_playerAny, lv_outside, UnitFilter(0, 0, (1 << c_targetFilterMissile), (1 << (c_targetFilterDead - 32)) | (1 << (c_targetFilterHidden - 32))), 0);
+    lv_u = UnitGroupCount(hrsCap_isolatedUnits, c_unitCountAll);
+    for (;; lv_u -= 1) {
+        lv_unit = UnitGroupUnitFromEnd(hrsCap_isolatedUnits, lv_u);
+        if (lv_unit == null) { break; }
+        libNtve_gf_ShowHideUnit(lv_unit, false);
+    }
+}
+
+void hrsCap_RestoreUnits () {
+    int lv_u;
+    unit lv_unit;
+
+    if ((hrsCap_isolatedUnits == null)) {
+        return;
+    }
+    lv_u = UnitGroupCount(hrsCap_isolatedUnits, c_unitCountAll);
+    for (;; lv_u -= 1) {
+        lv_unit = UnitGroupUnitFromEnd(hrsCap_isolatedUnits, lv_u);
+        if (lv_unit == null) { break; }
+        libNtve_gf_ShowHideUnit(lv_unit, true);
+    }
+    hrsCap_isolatedUnits = null;
+    if ((hrsCap_isolatedArea != null)) {
+        hrsCap_ModelsMessage(hrsCap_isolatedArea, "SetVisibility 1");
+        hrsCap_isolatedArea = null;
+    }
+}
+
+// Every fallen structure's remains taken away, as Blizzard's own maps clear a destroyed town (the
+// tutorial's town reset, libNtve_gf_RemoveDeathModelsinRegion): the towers' rubble units removed,
+// the death models destroyed (aliases _DeathModel; the gates' _Clearable; _DeadClearable), and
+// the debris and smoke particles still in the world. A structure's ground patch goes with it
+// (the patch stays under a structure that is only hidden).
+void hrsCap_ClearRemains () {
+    unitgroup lv_g;
+    int lv_u;
+    unit lv_unit;
+    actor lv_region;
+
+    lv_g = UnitGroup("TownCannonTowerDead", c_playerAny, RegionEntireMap(), UnitFilter(0, 0, (1 << c_targetFilterMissile), (1 << (c_targetFilterDead - 32))), 0);
+    lv_u = UnitGroupCount(lv_g, c_unitCountAll);
+    for (;; lv_u -= 1) {
+        lv_unit = UnitGroupUnitFromEnd(lv_g, lv_u);
+        if (lv_unit == null) { break; }
+        UnitRemove(lv_unit);
+    }
+    ActorRegionCreate(null, "TriggerRegion", ${map_region});
+    lv_region = libNtve_gf_ActorLastCreated();
+    ActorRegionSend(lv_region, c_actorIntersectAgainstRadiusContact, "Destroy", "Model", "ScopeContains _DeathModel");
+    ActorRegionSend(lv_region, c_actorIntersectAgainstRadiusContact, "Destroy", "Unit", "ScopeContains _DeathModel");
+    ActorRegionSend(lv_region, c_actorIntersectAgainstRadiusContact, "Destroy", "Model", "ScopeContains _Clearable");
+    ActorRegionSend(lv_region, c_actorIntersectAgainstRadiusContact, "Destroy", "Unit", "ScopeContains _Clearable");
+    ActorRegionSend(lv_region, c_actorIntersectAgainstRadiusContact, "Destroy", "Model", "ScopeContains _DeadClearable");
+    ActorRegionSend(lv_region, c_actorIntersectAgainstRadiusContact, "Destroy", "Unit", "ScopeContains _DeadClearable");
+    ActorWorldParticleFXDestroy();
+    ActorScopeKill(ActorScopeFromActor(lv_region));
+}
+
+// "el <verb> ...": "hideall", "showall"; "show <x> <y>", "hide <x> <y>" (the structure nearest
+// the cell); "kill <x> <y> <seconds>" (its rubble stays); "clear" (every fallen structure's remains
+// taken away); "core <team> <seconds>" (the team's
+// core killed after a hidden replacement takes its place as the team's core, so nothing ends
+// the match: everything that would listens for the death of whatever that variable holds);
+// "corestart <team>" (the team's core, whichever unit that is now, shown in the state it starts the
+// match in, before GameLib's "Signal CoreBuild" animates it in: the core actor's opening bracket
+// started again);
+// "keep 1|0" (the sweep leaves camps and objectives alone); "camp <n>" (0: every camp) spawned as
+// its respawn timer would; "freeze" (animations paused again and units paused: what spawned
+// since); "boss <team> <x> <y>" (the map's objective unit, where the map has one we know);
+// "terrain show|hide <x> <y> <radius>" (the terrain in a circle); "holes show|hide" (the holes
+// the cores stand on, filled in the map file: the ground where a core stood, or open as the game
+// draws them); "isolate on <x> <y> <radius>" / "isolate off" (all the terrain, every doodad, the
+// map's cliff doodads, and every unit in sight and model actor outside the circle hidden, or
+// shown again: what is left stands alone over the sky; the cliff doodads, terrain objects the
+// terrain draws itself, stay drawn); "colours swap|normal"; "msg <actor message>" to the whole map, "smsg <actor message>" to every
+// structure, "umsg <x> <y> <actor message>" to the structure nearest the cell; "timescale <x>".
+bool hrsCap_gt_Element_Func (bool testConds, bool runActions) {
+    string lv_verb;
+    unit lv_unit;
+    unit lv_core;
+    unitgroup lv_g;
+    int lv_u;
+    int lv_n;
+    int lv_team;
+
+    if (!runActions) {
+        return true;
+    }
+    lv_verb = StringWord(hrsCap_cmd, 2);
+    if ((lv_verb == "hideall")) {
+        hrsCap_ShowAllStructures(false);
+    }
+    else if ((lv_verb == "showall")) {
+        hrsCap_ShowAllStructures(true);
+    }
+    else if ((lv_verb == "show") || (lv_verb == "hide") || (lv_verb == "kill")) {
+        lv_unit = hrsCap_StructureAt(StringToFixed(StringWord(hrsCap_cmd, 3)), StringToFixed(StringWord(hrsCap_cmd, 4)));
+        if ((lv_unit != null)) {
+            if ((lv_verb == "kill")) {
+                hrsCap_KillShown(lv_unit, StringToFixed(StringWord(hrsCap_cmd, 5)));
+            }
+            else {
+                libNtve_gf_ShowHideUnit(lv_unit, (lv_verb == "show"));
+            }
+        }
+    }
+    else if ((lv_verb == "core")) {
+        lv_team = StringToInt(StringWord(hrsCap_cmd, 3));
+        lv_core = libGame_gv_teams[lv_team].lv_core;
+        UnitCreate(1, UnitGetType(lv_core), c_unitCreateIgnorePlacement, UnitGetOwner(lv_core), UnitGetPosition(lv_core), UnitGetFacing(lv_core), null);
+        libNtve_gf_ShowHideUnit(UnitLastCreated(), false);
+        libGame_gv_teams[lv_team].lv_core = UnitLastCreated();
+        hrsCap_KillShown(lv_core, StringToFixed(StringWord(hrsCap_cmd, 4)));
+    }
+    else if ((lv_verb == "clear")) {
+        hrsCap_ClearRemains();
+    }
+    else if ((lv_verb == "corestart")) {
+        lv_core = libGame_gv_teams[StringToInt(StringWord(hrsCap_cmd, 3))].lv_core;
+        libNtve_gf_ShowHideUnit(lv_core, true);
+        ActorSend(libNtve_gf_MainActorofUnit(lv_core), "AnimSetPausedAll 0");
+        ActorSend(libNtve_gf_MainActorofUnit(lv_core), "AnimBracketStart CoreStart IGNORE Stand,Work Stand,Work,End ContentNonLooping,OpeningPlayForever,Instant");
+    }
+    else if ((lv_verb == "keep")) {
+        hrsCap_keepCreeps = (StringWord(hrsCap_cmd, 3) == "1");
+    }
+    else if ((lv_verb == "camp")) {
+        lv_n = StringToInt(StringWord(hrsCap_cmd, 3));
+        if ((lv_n > 0)) {
+            libMapM_gf_JungleRespawnCreepsForCamp(lv_n);
+        }
+        else {
+            lv_n = 1;
+            for ( ; lv_n <= libMapM_gv_jungleNumberOfCreepCamps ; lv_n += 1 ) {
+                libMapM_gf_JungleRespawnCreepsForCamp(lv_n);
+            }
+        }
+    }
+    else if ((lv_verb == "freeze")) {
+        libNtve_gf_SendActorMessageToGameRegion(${map_region}, "AnimSetPausedAll");
+        lv_g = UnitGroup(null, c_playerAny, RegionEntireMap(), UnitFilter(0, 0, ((1 << c_targetFilterStructure) | (1 << c_targetFilterMissile)), 0), 0);
+        lv_u = UnitGroupCount(lv_g, c_unitCountAll);
+        for (;; lv_u -= 1) {
+            lv_unit = UnitGroupUnitFromEnd(lv_g, lv_u);
+            if (lv_unit == null) { break; }
+            libNtve_gf_PauseUnit(lv_unit, true);
+        }
+    }
+    else if ((lv_verb == "boss")) {
+${boss_line}    }
+    else if ((lv_verb == "terrain")) {
+${terrain_line}    }
+    else if ((lv_verb == "holes")) {
+        hrsCap_holesShown = (StringWord(hrsCap_cmd, 3) == "show");
+        if ((hrsCap_holes != null)) {
+            TerrainShowRegion(hrsCap_holes, hrsCap_holesShown);
+        }
+    }
+    else if ((lv_verb == "isolate")) {
+${isolate_lines}    }
+    else if ((lv_verb == "colours")) {
+        hrsCap_TeamColours((StringWord(hrsCap_cmd, 3) == "swap"));
+    }
+    else if ((lv_verb == "smsg")) {
+        hrsCap_StructuresMessage(hrsCap_CommandWords(3));
+    }
+    else if ((lv_verb == "umsg")) {
+        lv_unit = hrsCap_StructureAt(StringToFixed(StringWord(hrsCap_cmd, 3)), StringToFixed(StringWord(hrsCap_cmd, 4)));
+        if ((lv_unit != null)) {
+            ActorSend(libNtve_gf_MainActorofUnit(lv_unit), hrsCap_CommandWords(5));
+        }
+    }
+    else if ((lv_verb == "msg")) {
+        libNtve_gf_SendActorMessageToGameRegion(${map_region}, hrsCap_CommandWords(3));
+    }
+    else if ((lv_verb == "timescale")) {
+        GameSetGlobalTimeScale(StringToFixed(StringWord(hrsCap_cmd, 3)));
+    }
+    UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
+    hrsCap_Ack();
+    return true;
+}
+
 // "quit" ends the match by killing that player's own core: the game then ends it its normal way
 // (end sequence, defeat), back towards the menu, where the next run's map loads. (Ending it
 // directly with GameOver crashed Battlefield of Eternity once the match had run about 30 s.) On
@@ -948,6 +1304,7 @@ ${arena_quit_line}    UnitKill(libGame_gv_teams[libGame_gf_TeamNumberOfPlayer(hr
 }
 
 void hrsCap_Init () {
+    hrsCap_HolesInit();
     hrsCap_SaveFrames();
     hrsCap_InitTiles();
     hrsCap_StatusInit();
@@ -966,6 +1323,7 @@ void hrsCap_Init () {
     hrsCap_gt_BgSpeed = TriggerCreate("hrsCap_gt_BgSpeed_Func");
     hrsCap_gt_Look = TriggerCreate("hrsCap_gt_Look_Func");
     hrsCap_gt_Quit = TriggerCreate("hrsCap_gt_Quit_Func");
+    hrsCap_gt_Element = TriggerCreate("hrsCap_gt_Element_Func");
     hrsCap_gt_FastForward = TriggerCreate("hrsCap_gt_FastForward_Func");
     libCore_gv_bALOpenTheGatesDelay = hrsCap_gatesDelay;  // read when GameLib starts its countdown
     hrsCap_gt_Sweep = TriggerCreate("hrsCap_gt_Sweep_Func");

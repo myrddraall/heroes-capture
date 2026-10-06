@@ -39,7 +39,7 @@ import struct
 import time
 from pathlib import Path
 
-from . import game_data
+from . import elements, game_data
 from . import js_json
 from .capture_script import STATUS_CELL_H, STATUS_CELL_W, STATUS_CELLS, STATUS_ROWS, capture_script
 from .light_data import has_sky, main_light, sky_models, tileset_of
@@ -311,6 +311,16 @@ def main(argv: list[str]) -> Path:
         hide_doodads = list(dict.fromkeys(re.findall(r'<ObjectDoodad [^>]*Type="([^"]*[Cc]loud[^"]*)"', objects)))
         if hide_doodads:
             log(f"cloud doodads hidden: {', '.join(hide_doodads)}")
+        # The holes in the terrain the cores stand on (their centres show the sky through), filled in
+        # the file so the ground is there when a core is gone; the script opens them again over
+        # exactly those cells as it starts (and shows them on "el holes show").
+        holes = []
+        if archive.has("t3CellFlags"):
+            cell_flags, holes = elements.fill_structure_holes(archive.read("t3CellFlags"), objects)
+            if holes:
+                archive.write("t3CellFlags", cell_flags)
+                log("terrain holes under structures filled in the file, opened by the script: "
+                    + ", ".join(f"{h['type']} at ({h['x']:g}, {h['y']:g}), {len(h['cells'])} cells" for h in holes))
 
         map_id = preparation_id(id_)
 
@@ -335,7 +345,8 @@ def main(argv: list[str]) -> Path:
             pitch=opts["pitch"], refit_yaw=refit_yaw, lens=lens, unbound=unbound, show_ui=opts["showUi"],
             keep_intro=opts["keepIntro"], sky_colour=sky_start, map_sky=map_sky, map_width=info["width"],
             map_height=info["height"], opening_timers=opening_timers, map_id=map_id, hide_doodads=hide_doodads,
-            arena=arena,
+            arena=arena, boss="LibMLBD" in includes, hole_cells=[c for h in holes for c in h["cells"]],
+            cliff_doodads=list(dict.fromkeys(re.findall(r'<cliffDoodad name="([^"]+)"', map_data["t3Terrain"]))),
         ).replace("\n", eol)
         check_definition_order(script)
         # Galaxy is single-pass: the capture functions go before InitMap, the call at its end.

@@ -18,7 +18,7 @@ from heroes_capture.stormlib import Archive
 pytestmark = [pytest.mark.game_data, pytest.mark.xdist_group("cdn")]
 
 # Names the script uses that Blizzard's code doesn't spell out but the game has accepted.
-ACCEPTED = {"BoolToInt", "RegionRect", "GameSetBackground", "CutsceneStop", "c_syncFrameTypeTextTag",
+ACCEPTED = {"BoolToInt", "RegionRect", "GameSetBackground", "CutsceneStop", "c_syncFrameTypeTextTag", "TerrainShowRegion",
             "libMapM_gv_mMIntroCutscene", "libMapM_gv_mMIntroCutsceneFinished", "libMapM_gv_uIJungleCampPanel"}
 KEYWORDS = {"if", "for", "while", "return", "else"}
 
@@ -120,9 +120,16 @@ def test_prepared_maps(map_name, sky_mode, arenas, extra, tmp_path, blizzard_gal
     capture = script[script.index("// Map capture (injected"): script.index("void InitMap () {")]
     capture = re.sub(r"//[^\n]*", "", re.sub(r'"[^"\n]*"', '""', capture))
     names = set(re.findall(r"\b([A-Za-z_]\w*)\s*\(", capture)) | set(re.findall(r"\b(c_\w+|lib\w+_g[vf]_\w+)", capture))
+    if map_name == "Battlefield of Eternity":
+        # "el isolate" hides the cliff doodads the map's terrain places, by type; the cores' holes,
+        # filled in the file, are a region of one circle per cell the script opens as it starts.
+        assert all(f'"{name}"' in script for name in ("StormDoodadHeaven1JungleFTO", "StormDoodadHell1JungleCTO"))
+        assert capture.count("RegionAddCircle(hrsCap_holes, true, Point(") == 24 + 30
     unknown = sorted(n for n in names if not n.startswith("hrsCap_") and n not in KEYWORDS | ACCEPTED
                      and not re.search(r"\b" + re.escape(n) + r"\b", blizzard_galaxy))
     assert not unknown, f"names Blizzard's code doesn't have: {unknown}"
+    # The elements probe's objective: spawned through Battlefield of Eternity's library only.
+    assert ("libMLBD_gf_MMBOESpawnBoss" in capture) == (map_name == "Battlefield of Eternity")
     # One call with the wrong number or kind of arguments stops the script as surely as an unknown
     # name does (StringReplace(text, find, "", ...): it takes a range, not a replacement). Each
     # call of a function Blizzard defines in Galaxy is held to its parameters; each native's to
@@ -152,6 +159,30 @@ def test_prepared_maps(map_name, sky_mode, arenas, extra, tmp_path, blizzard_gal
                 if literal_kind(arg) and seen and literal_kind(arg) not in seen:
                     wrong.append(f"{name}(...): argument {k + 1} is a {literal_kind(arg)}, Blizzard passes {sorted(seen)}")
     assert not wrong, "calls unlike Blizzard's: " + "; ".join(wrong)
+
+
+def test_the_elements_probe_s_targets_on_battlefield_of_eternity(tmp_path):
+    """The elements probe (--probe-elements) finds what it shoots in the map's placed objects: the
+    Order team's forward town round its town hall, the camp nearest it, the Order core."""
+    from heroes_capture import elements
+
+    manifest = json.loads(inject.main(["Battlefield of Eternity", "--screen", "3440x1440", "--distance", "214", "--out", str(tmp_path)]).read_text())
+    targets = elements.element_targets(manifest)
+    hall, *rest = targets["town"]
+    assert (hall["type"], hall["x"], hall["y"]) == ("TownTownHallL2", 98, 65)
+    assert {u["type"] for u in rest} >= {"TownCannonTowerL2", "TownGateL215BLUR", "TownMoonwellL2", "TownWallRadial5L2"}
+    assert all(u["player"] == elements.ORDER_PLAYER for u in targets["town"]) and len(targets["town"]) <= 8
+    assert "MercCamp" in targets["camp"]["type"] and abs(targets["camp"]["x"] - 98) < 2 and abs(targets["camp"]["y"] - 95.5) < 1
+    assert (targets["core"]["type"], targets["core"]["x"], targets["core"]["y"]) == ("KingsCore", 49, 100)
+    # The holes the cores stand on (24 and 30 cells) filled in the prepared map, the rest of the
+    # map's holes (the void round the islands) as they were (the script opens the two again).
+    import numpy as np
+
+    with Archive(manifest["stormmap"]) as archive:
+        flags = archive.read("t3CellFlags")
+    holes = (np.frombuffer(flags, np.uint8, 248 * 208, 32).reshape(208, 248) & elements.CELL_HOLE) > 0
+    assert not holes[97:103, 46:52].any() and not holes[105:111, 196:202].any()
+    assert holes.sum() == 6704 - 24 - 30
 
 
 def test_a_map_s_own_pictures(storage, tmp_path):
