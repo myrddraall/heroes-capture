@@ -37,6 +37,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from . import element_capture
 from . import probes
 from . import sky_layers
 from . import ui
@@ -803,6 +804,10 @@ def main(argv: list[str]) -> None:
                 quit_match()
             log_timings("capture")
             return
+        if manifest.get("structures") == "elements":
+            # Each structure and camp on its own, then every structure brought down: the tiles
+            # are the bare terrain (a resumed run only brings them down again).
+            element_capture.capture_elements(session, manifest, out.parent, tile_command, black_settled)
         capture_tiles(session, manifest, args.start, args.settle, out, positions, positions_path, args.manifest)
 
     with stage("leaving"):

@@ -18,7 +18,11 @@ from heroes_capture.stormlib import Archive
 pytestmark = [pytest.mark.game_data, pytest.mark.xdist_group("cdn")]
 
 # Names the script uses that Blizzard's code doesn't spell out but the game has accepted.
+# EnvironmentShow and its c_environment* constants: in the game executable's table of script
+# functions and constants, next to TerrainShowRegion (which the game has accepted); so is
+# c_actorIntersectAgainstCenter, beside the c_actorIntersectAgainstRadiusContact Blizzard uses.
 ACCEPTED = {"BoolToInt", "RegionRect", "GameSetBackground", "CutsceneStop", "c_syncFrameTypeTextTag", "TerrainShowRegion",
+            "EnvironmentShow", "c_environmentTerrain", "c_environmentDoodads", "c_environmentWater", "c_actorIntersectAgainstCenter",
             "libMapM_gv_mMIntroCutscene", "libMapM_gv_mMIntroCutsceneFinished", "libMapM_gv_uIJungleCampPanel"}
 KEYWORDS = {"if", "for", "while", "return", "else"}
 
@@ -117,13 +121,20 @@ def test_prepared_maps(map_name, sky_mode, arenas, extra, tmp_path, blizzard_gal
     with Archive(manifest["stormmap"]) as archive:
         script = archive.read_text("MapScript.galaxy")
         assert archive.has("Assets\\Textures\\HrsWhite.dds")
+        models = archive.read_text("Base.StormData\\GameData\\ModelData.xml")
+    # Every model the map can use freezes its particles and ribbons while its animations are
+    # paused: those of the shared data (a gate's) and of the map's own mods.
+    frozen = set(re.findall(r'<CModel id="([^"]+)"><Flags index="FreezeParticlesAndRibbonsOnAnimPause" value="1"/>'
+                            r'<PausedParticleSystemBehavior value="FreezeAll"/></CModel>', models))
+    assert "TownGateDamaged" in frozen and len(frozen) > 1000
+    if map_name == "Battlefield of Eternity":
+        assert "TownMoonwellHeaven" in frozen
     capture = script[script.index("// Map capture (injected"): script.index("void InitMap () {")]
     capture = re.sub(r"//[^\n]*", "", re.sub(r'"[^"\n]*"', '""', capture))
     names = set(re.findall(r"\b([A-Za-z_]\w*)\s*\(", capture)) | set(re.findall(r"\b(c_\w+|lib\w+_g[vf]_\w+)", capture))
     if map_name == "Battlefield of Eternity":
-        # "el isolate" hides the cliff doodads the map's terrain places, by type; the cores' holes,
-        # filled in the file, are a region of one circle per cell the script opens as it starts.
-        assert all(f'"{name}"' in script for name in ("StormDoodadHeaven1JungleFTO", "StormDoodadHell1JungleCTO"))
+        # The cores' holes, filled in the file, are a region of one circle per cell the script
+        # opens as it starts.
         assert capture.count("RegionAddCircle(hrsCap_holes, true, Point(") == 24 + 30
     unknown = sorted(n for n in names if not n.startswith("hrsCap_") and n not in KEYWORDS | ACCEPTED
                      and not re.search(r"\b" + re.escape(n) + r"\b", blizzard_galaxy))
@@ -174,6 +185,16 @@ def test_the_elements_probe_s_targets_on_battlefield_of_eternity(tmp_path):
     assert all(u["player"] == elements.ORDER_PLAYER for u in targets["town"]) and len(targets["town"]) <= 8
     assert "MercCamp" in targets["camp"]["type"] and abs(targets["camp"]["x"] - 98) < 2 and abs(targets["camp"]["y"] - 95.5) < 1
     assert (targets["core"]["type"], targets["core"]["x"], targets["core"]["y"]) == ("KingsCore", 49, 100)
+    # The element list in the manifest: the map's 72 structures in its 8 towns (the cores and one
+    # standalone tower in none), its 4 camps as the script numbers them.
+    found = manifest["elements"]
+    assert len(found["structures"]) == 72 and sum(u["core"] for u in found["structures"]) == 2
+    assert [(t["lane"], t["owner"]) for t in found["towns"]] == [(1, "order"), (1, "order"), (2, "order"), (2, "order"),
+                                                                 (1, "chaos"), (1, "chaos"), (2, "chaos"), (2, "chaos")]
+    assert sorted((u["type"], u["x"], u["y"]) for u in found["structures"] if u["town"] is None) == [
+        ("KingsCore", 49, 100), ("KingsCore", 199, 108), ("TownCannonTowerL3Standalone", 85, 131)]
+    assert [(c["camp"], c["type"]) for c in found["camps"]] == [(1, "SiegeCamp1"), (2, "BruiserCamp1"), (3, "SiegeCamp1"), (4, "BruiserCamp1")]
+    assert abs(found["camps"][1]["x"] - 95.9) < 0.1 and abs(found["camps"][1]["y"] - 95.0) < 0.1
     # The holes the cores stand on (24 and 30 cells) filled in the prepared map, the rest of the
     # map's holes (the void round the islands) as they were (the script opens the two again).
     import numpy as np

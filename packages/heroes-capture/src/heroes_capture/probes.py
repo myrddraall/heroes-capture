@@ -2,6 +2,7 @@
 command sequences, a shot after each, kept in a probe-<what>-<time> folder next to the tiles.
 """
 
+import json
 import math
 import os
 import time
@@ -11,7 +12,7 @@ import numpy as np
 from PIL import Image
 
 from . import sky_layers
-from .elements import ORDER_TEAM, changed, cut_out, describe, element_targets, screen_point
+from .elements import changed, cut_out, describe, screen_point
 from .game_control import quit_match, send_command, settle, step
 from .runlog import done, log, warn
 from .screen import changed_share
@@ -246,27 +247,88 @@ def probe_waits(session, manifest: dict, out: Path) -> None:
 
 
 
+# The film probe: every kind of structure on both teams filmed falling, to choose the moment each
+# kind's rubble is shot (one time for all of a kind didn't suit both teams: a Hell moonwell's lay
+# under thick smoke, a Heaven tower's under its blue glow, some walls' were only a puff). Each a
+# copy on an empty spot of its own (a keep falls itself: its copy crashed the game), the camera on
+# it (a fall gives off its particles only near the camera), a frame every FILM_GAP for
+# FILM_SECONDS in a circle of FILM_RADIUS cells. A kind: a type prefix and a team, the first such
+# structure on the map ("=" before the type: that type exactly).
+FILM_KINDS = [(kind, owner) for owner in ("order", "chaos") for kind in (
+    "TownCannonTowerL2", "=TownCannonTowerL3", "TownCannonTowerL3Standalone", "TownGateL215", "TownGateL3",
+    "TownWallRadial", "TownMoonwellL2", "TownMoonwellL3", "TownTownHallL2", "TownTownHallL3")] + [
+    ("TownWallRadial5L2", "order"), ("TownWallRadial17L2", "chaos"), ("TownWallRadial18L2", "chaos")]
+FILM_SECONDS, FILM_GAP, FILM_RADIUS = 8.0, 0.25, 14.0
+# Cells an empty spot keeps from every structure and camp, and from the other spots.
+DUP_CLEAR = 20.0
+
+
+def empty_spots(manifest: dict, count: int) -> list[dict]:
+    """Spots on the map with nothing near them (DUP_CLEAR), inside the camera's bounds, on a grid
+    of 4 cells: the first `count`, nearest the map's middle first."""
+    bounds, found = manifest["cameraBounds"], manifest["elements"]
+    taken = [(u["x"], u["y"]) for u in found["structures"]] + [(c["x"], c["y"]) for c in found["camps"]]
+    mid = ((bounds["left"] + bounds["right"]) / 2, (bounds["bottom"] + bounds["top"]) / 2)
+    grid = sorted(((x, y) for x in range(int(bounds["left"]) + 8, int(bounds["right"]) - 7, 4)
+                   for y in range(int(bounds["bottom"]) + 8, int(bounds["top"]) - 7, 4)), key=lambda p: math.dist(p, mid))
+    spots: list[dict] = []
+    for p in grid:
+        if all(math.dist(p, t) >= DUP_CLEAR for t in taken):
+            spots.append({"x": float(p[0]), "y": float(p[1])})
+            taken.append(p)
+            if len(spots) == count:
+                break
+    return spots
+
+
+def write_film_page(folder: Path, films: list[dict]) -> None:
+    """index.html in the film probe's folder: each kind's frames, stepped through with a slider (or
+    the arrow keys), the time since its fall under it."""
+    page = """<!doctype html><meta charset="utf-8"><title>Falls filmed</title>
+<style>body{font:14px system-ui;margin:16px;background:#ddd}section{margin:0 0 28px}h2{font-size:15px;margin:4px 0}
+img{max-width:100%;background:#e6e6e6;display:block}input{width:100%}</style>
+<p>Each kind's fall, a frame every quarter second: drag the slider (or click it and use the arrow keys); the time since the fall is under it.</p>
+<div id="films"></div>
+<script>
+const films = FILMS;
+const root = document.getElementById("films");
+for (const film of films) {
+  const s = document.createElement("section");
+  s.innerHTML = `<h2>${film.name}</h2><img><input type="range" min="0" max="${film.frames.length - 1}" value="0"><div></div>`;
+  const [img, range, label] = [s.querySelector("img"), s.querySelector("input"), s.querySelector("div")];
+  const show = () => { const f = film.frames[range.value]; img.src = f; label.textContent = f.split("/")[1].replace(".jpg", ""); };
+  range.addEventListener("input", show);
+  show();
+  root.appendChild(s);
+}
+</script>"""
+    (folder / "index.html").write_text(page.replace("FILMS", json.dumps(films)), encoding="utf-8")
+
+
 def probe_elements(session, manifest: dict, out: Path) -> None:
-    """The cores' holes (ELEMENTS-PLAN.md, The bare terrain): filled in the map file when it was
-    prepared, opened again by the script as it started. On the Order core, through the script's
-    "el" commands, from the tile nearest it:
+    """Each kind of structure on each team filmed falling (FILM_KINDS), to choose when its rubble is
+    shot. On Battlefield of Eternity, every structure faded out ("el fadeall 0") and the scene hidden
+    ("el env off"), each kind in turn: its copy made on an empty spot ("el copy make"; a keep: the
+    structure itself, where it stands), the camera straight above it ("el at"), brought down
+    ("el copykill"; "el kill") and filmed over white, a frame every FILM_GAP seconds for
+    FILM_SECONDS in a circle of FILM_RADIUS cells; then paused, its remains cleared. Every frame
+    full size, probe-elements-<time>/<n>-<owner>-<type>/<seconds>s.jpg, and index.html there to
+    step through each kind's (write_film_page)."""
 
-    - the core as the script opened its hole (to compare with a map whose hole is the file's own)
-    - the hole shown (the floor through the core's centre) and opened again: back as it was?
-    - the core alone over the sky (its cut-out), then everything shown again: the hole opened
-      again after all the terrain was shown?
-    - the core killed after a hidden replacement took its place as the team's core (the match
-      carries on), its remains cleared (the hole open to the sky), and the hole shown: the ground
-      where the core stood
-
-    Every shot is kept in probe-elements-<time>/, the differences logged."""
     left = int((manifest.get("status") or {}).get("pageLeft", 0))
     probe_dir = out.parent / f"probe-elements-{time.strftime('%H%M%S')}"
     probe_dir.mkdir(exist_ok=True)
-    core = element_targets(manifest)["core"]
-    shots: dict[str, np.ndarray] = {}
-    at = {}  # the tile the camera is on
-    log(f"elements probe: the core at ({core['x']:g}, {core['y']:g})")
+    found = manifest["elements"]["structures"]
+    ppc = manifest["pxPerCell"]
+    screen = manifest["screen"]
+    tests = []
+    for kind, owner in FILM_KINDS:
+        exact = kind.startswith("=")
+        u = next((u for u in found if u["owner"] == owner and (u["type"] == kind[1:] if exact else u["type"].startswith(kind))), None)
+        if u is not None:
+            tests.append(u)
+    spots = iter(empty_spots(manifest, len(tests)))
+    log(f"elements probe: {len(tests)} kinds of structure filmed falling: {', '.join(u['owner'] + ' ' + u['type'] for u in tests)}")
 
     def command(text: str, timeout: float = 3.0) -> bool:
         if session.send(text, timeout=timeout) is None:
@@ -274,84 +336,55 @@ def probe_elements(session, manifest: dict, out: Path) -> None:
             return False
         return True
 
-    def shot(name: str) -> np.ndarray | None:
-        frame = session.grab(dark_ok=True)
-        if frame is None:
-            log(f"  {name}: no frame")
-            return None
-        shots[name] = frame
-        _save(frame, probe_dir / f"{name}.png")
-        return frame
-
-    def compare(name: str, other: str) -> None:
-        if name in shots and other in shots:
-            log(f"  {name} vs {other}: {describe(changed(shots[name], shots[other], left))}")
-
-    def isolated(name: str, spot: dict, radius: float) -> None:
-        """What is on show alone over the sky ("el isolate on": all the terrain, every doodad, the
-        cliff doodads, and the units and model actors more than `radius` cells from `spot`
-        hidden), over white and over black, made into its cut-out (elements.cut_out); then
-        everything shown again, and the view compared with the one before."""
-        shot(f"{name}-iso-before")
-        if not command(f"el isolate on {spot['x']:g} {spot['y']:g} {radius:g}"):
-            return
-        settle(1.0)
-        white = shot(f"{name}-iso-white")
-        command("black")
-        settle(0.5)
-        black = shot(f"{name}-iso-black")
-        command("sky white 0")  # the layer given: the sequence number is appended after it
-        if white is not None and black is not None:
-            centre = screen_point(spot, at["tile"], manifest["screen"], manifest["pxPerCell"])
-            rgba = cut_out(white, black, centre, radius * manifest["pxPerCell"])
-            Image.fromarray(rgba, "RGBA").save(probe_dir / f"{name}-iso-cutout.png", compress_level=1)
-            alpha = rgba[..., 3]
-            log(f"  {name} alone over the sky: {(alpha > 0).sum()} pixels ({describe(alpha > 0)}), "
-                f"{(alpha == 255).sum()} opaque, {((alpha > 0) & (alpha < 255)).sum()} soft")
-        command("el isolate off")
-        settle(1.0)
-        shot(f"{name}-iso-restored")
-        compare(f"{name}-iso-restored", f"{name}-iso-before")
+    films: list[dict] = []
 
     def run() -> None:
-        t = min(manifest["tiles"], key=lambda t: math.dist((t["x"], t["y"]), (core["x"], core["y"])))
-        at["tile"] = t
-        command(f"tile {t['index']} {t['x']:.2f} {t['y']:.2f}")
-        settle(1.0)
-        command("clean")
-        settle(0.5)
-        log(f"  tile {t['index'] + 1} at ({t['x']:g}, {t['y']:g})")
-        shot("core-before")
-        for way in ("show", "hide"):
-            command(f"el holes {way}")
-            settle(1.0)
-            shot(f"core-holes-{way}")
-            compare(f"core-holes-{way}", "core-before")
-        command("el hideall")
-        command(f"el show {core['x']:g} {core['y']:g}")
-        settle(0.5)
-        isolated("core", core, 5.0)
-        command("el showall")
-        settle(0.5)
-        status = session.status()
-        if not command(f"el core {ORDER_TEAM} 15", timeout=20.0):
-            return
-        settle(1.0)
-        shot("core-rubble")
-        after = session.status()
-        if after is None:
-            warn("  after the core's death the strip can't be read: the match may have ended")
-        else:
-            going = after.phase != 3 and status is not None and after.game_seconds > status.game_seconds
-            log(f"  after the core's death: phase {after.phase}: " + ("the match carries on" if going else "the match looks over"))
-        command("el clear")
-        settle(1.0)
-        shot("core-cleared")
-        command("el holes show")
-        settle(1.0)
-        shot("core-cleared-shown")
-        compare("core-cleared-shown", "core-cleared")
+        command("el fadeall 0")
+        command("el env off", timeout=10.0)
+        for n, u in enumerate(tests):
+            keep = u["type"].startswith("TownTownHallL3")
+            at = u if keep else {**u, **{k: v + u[k] % 1 for k, v in next(spots).items()}}
+            if not keep:
+                command(f"el copy {n} make {u['x']:g} {u['y']:g} {at['x']:g} {at['y']:g}")
+            command(f"el at {at['x']:.2f} {at['y']:.2f}")
+            status = session.status()
+            camera = {"x": status.camera_x, "y": status.camera_y} if status else at
+            cx, cy = screen_point(at, camera, screen, ppc)
+            r = int(FILM_RADIUS * ppc)
+            box = (slice(max(0, int(cy) - r), int(cy) + r), slice(max(left, int(cx) - r), int(cx) + r))
+            if keep:
+                command(f"el scopemsg {u['x']:g} {u['y']:g} SetOpacity 1 0")
+                command(f"el kill {u['x']:g} {u['y']:g} -1")
+            else:
+                command(f"el copykill {n} {n}")
+            started = time.time()
+            frames: list[tuple[float, np.ndarray]] = []
+            while time.time() - started < FILM_SECONDS:
+                frame = session.grab(dark_ok=True)
+                if frame is not None:
+                    frames.append((time.time() - started, frame[box].copy()))
+                settle(FILM_GAP)
+            command("el freeze")
+            command("el clear")
+            name = f"{n:02d}-{u['owner']}-{u['type']}"
+            (probe_dir / name).mkdir(exist_ok=True)
+            names = []
+            for t, crop in frames:
+                names.append(f"{name}/{t:05.2f}s.jpg")
+                Image.fromarray(np.ascontiguousarray(crop[..., :3])).save(probe_dir / names[-1], quality=92)
+            films.append({"name": name, "frames": names})
+            log(f"  {u['owner']} {u['type']} ({'itself' if keep else 'a copy'}): {len(frames)} frames")
+        command("el env on", timeout=10.0)
+        write_film_page(probe_dir, films)
 
-    step(run, "elements probe, the core's holes")
+    step(run, "elements probe, every kind filmed falling")
     quit_match()
     done(f"probe screenshots in {probe_dir}")
+
+
+def elements_town(manifest: dict) -> dict:
+    """The Order team's forward town's hall (the busiest view: its gate, towers, orbs and walls)."""
+    found = manifest["elements"]["structures"]
+    halls = [u for u in found if u["type"].startswith("TownTownHall") and u["owner"] == "order"]
+    core = next(u for u in found if u["core"] and u["owner"] == "order")
+    return max(halls, key=lambda u: math.dist((u["x"], u["y"]), (core["x"], core["y"])))

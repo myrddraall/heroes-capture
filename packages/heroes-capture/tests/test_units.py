@@ -1,5 +1,7 @@
 """The pieces with exact rules, without the game."""
 
+import json
+import os
 import struct
 import sys
 import types
@@ -8,6 +10,7 @@ import numpy as np
 import pytest
 
 from heroes_capture import js_json
+from heroes_capture.frames import frame_exists
 from heroes_capture.capture_script import capture_script, fixed
 from heroes_capture.inject import check_definition_order, plan_grid, read_map_info
 from heroes_capture.light_data import main_light, parse_lights, parse_terrains, tileset_of
@@ -77,24 +80,42 @@ def test_the_elements_probe_s_commands_are_in_the_script():
     text = script()
     assert 'else if ((lv_word == "el")) { lv_t = hrsCap_gt_Element; }' in text
     for verb in ("hideall", "showall", "show", "hide", "kill", "core", "clear", "keep", "camp", "freeze", "boss",
-                 "colours", "smsg", "umsg", "msg", "timescale", "corestart", "terrain", "isolate"):
+                 "smsg", "umsg", "msg", "terrain", "isolate", "holes", "killall", "env", "killhow", "quiet", "at", "scene", "scopemsg", "pauseable", "behave", "play", "copy", "copykill", "fadeall", "wide", "dmsg", "deadunit"):
         assert f'(lv_verb == "{verb}")' in text
     assert 'AbilityCommand("TowerDeadMorph", 0)' in text and 'UnitBehaviorAdd(lp_unit, "TownCannonTowerInvulnerable"' in text
+    # A tower by its morph, not the Tower attribute (town halls have it too, and never fell).
+    assert 'if (UnitAbilityExists(lp_unit, "TowerDeadMorph")) {' in text and "c_unitAttributeTower" not in text
     assert 'UnitGroup("TownCannonTowerDead"' in text and '"ScopeContains _DeathModel"' in text and "ActorWorldParticleFXDestroy();" in text
     assert "libGame_gv_teams[lv_team].lv_core = UnitLastCreated();" in text  # the replacement core first
-    assert '"AnimBracketStart CoreStart IGNORE Stand,Work Stand,Work,End ContentNonLooping,OpeningPlayForever,Instant"' in text
+    assert "lv_unit != libGame_gv_teams[libGame_gv_teamOrderIndex_C].lv_core" in text  # killall spares the cores
+    # "el at": the lighting refitted (without it structures came out duller), then the capture
+    # camera applied (a sky shot leaves the near clip past the ground); none of the rest of the scene.
+    at = text[text.index('(lv_verb == "at")'):text.index('(lv_verb == "scene")')]
+    assert at.index("hrsCap_NormalCamera(hrsCap_cmdPlayer);") < at.index("hrsCap_ApplyCamera(hrsCap_cmdPlayer);")
+    assert "hrsCap_Scene();" not in at
+    # Hiding a structure hides every actor of its own (a core's shield crystals), and showing it shows them.
+    assert 'ActorScopeSend(ActorScopeFromUnit(lp_unit), "SetVisibility 0");' in text and "hrsCap_ShowStructure(lv_unit, lp_show);" in text
+    # A fall sets off nothing for the players: no loot banner in a town hall's rubble, no XP.
+    kill = text[text.index("void hrsCap_Kill ("):text.index("void hrsCap_KillShown (")]
+    assert "hrsCap_QuietFalls();" in kill and 'UnitBehaviorAdd(lp_unit, "UnitGivesNoXP", lp_unit, 1);' in kill
+    assert "libGame_gv_loot_DropBannerInTownHallRubble = false;" in text
+    assert "libCore_gv_sYSXPOn = false;" in text
     assert "libMLBD_gf_MMBOESpawnBoss" not in text
     assert "if (!false) {" in text  # no holes: none opened
-    full = script(cliff_doodads=["StormDoodadHeaven1JungleFTO"], hole_cells=[(46, 97), (47, 97)])
+    full = script(hole_cells=[(46, 97), (47, 97)])
     assert "RegionAddCircle(hrsCap_holes, true, Point(46.5000, 97.5000), 0.45);" in full and "if (!true) {" in full
     assert full.index("hrsCap_HolesInit();") > full.index("void hrsCap_Init ()")
-    assert 'libNtve_gf_ShowHideDoodadsInRegion(false, RegionRect(-16.0, -16.0, 272.0, 272.0), "StormDoodadHeaven1JungleFTO");' in full
-    assert "hrsCap_IsolateUnits(StringToFixed(StringWord(hrsCap_cmd, 4))" in full and "hrsCap_RestoreUnits();" in full
-    assert 'hrsCap_ModelsMessage(lv_outside, "SetVisibility 0");' in full and 'hrsCap_ModelsMessage(hrsCap_isolatedArea, "SetVisibility 1");' in full
-    assert "TerrainShowRegion(RegionCircle(Point(" in full and 'hrsCap_DoodadsMessage("SetVisibility 0");' in full
-    # Every doodad shown again, then the cloud layers hidden again.
-    shown = full.index('hrsCap_DoodadsMessage("SetVisibility 1");')
-    assert full.index('"Storm_Doodad_Heaven_Clouds");', shown) > shown
+    # Isolating: the terrain, every doodad and the units outside the circle hidden, and the loot
+    # banners there (only those: rubble's wide bounds reach past the circle); then all shown again,
+    # the holes opened again and the cloud layers hidden again.
+    isolate = full[full.index("void hrsCap_Isolate ("):full.index("// \"el <verb> ...\"")]
+    assert 'hrsCap_DoodadsMessage("SetVisibility 0");' in isolate and "hrsCap_IsolateUnits(lp_x, lp_y, lp_radius);" in isolate
+    assert isolate.index("hrsCap_OpenHoles();") > isolate.index("TerrainShowRegion(RegionRect(-16.0, -16.0, 272.0, 272.0), true);")
+    assert isolate.index('"Storm_Doodad_Heaven_Clouds");') > isolate.index('hrsCap_DoodadsMessage("SetVisibility 1");')
+    assert '"ScopeContains LootBanner"' in full
+    # "el env off": everything hidden, and the terrain, doodads and water switched off.
+    assert "hrsCap_Isolate(true, 0.0, 0.0, 0.0);" in full and "EnvironmentShow(c_environmentTerrain, false);" in full
+    assert "EnvironmentShow(c_environmentTerrain, true);" in full and "hrsCap_Isolate(false, 0.0, 0.0, 0.0);" in full
     check_definition_order(full)
     boss = script(boss=True)
     assert "libMLBD_gf_MMBOESpawnBoss(StringToInt(StringWord(hrsCap_cmd, 3)), Point(" in boss
@@ -297,3 +318,378 @@ def test_an_element_s_cut_out_from_its_shots_over_the_sky():
     assert (abs(rgba[20:30, 30:32, 3].astype(int) - 128) <= 2).all()
     assert rgba[5, 75, 3] == 0 and (rgba[:, 70:, 3] == 0).all() and rgba[50, 10, 3] == 0
     assert elements.screen_point({"x": 108, "y": 60}, {"x": 98, "y": 62.6154}, {"w": 3440, "h": 1440}, 48) == pytest.approx((2200, 845.5), abs=0.1)
+
+
+def test_an_element_s_cut_out_leaves_out_what_can_t_be_hidden_and_its_neighbours_rubble():
+    """What is the same as in its tile's shot with everything hidden (a cliff doodad) is left out,
+    but not the element drawn over it; rubble keeps only what is nearer its own structure."""
+    from heroes_capture import elements
+
+    white = np.full((60, 80, 3), 230, np.uint8)
+    black = np.zeros((60, 80, 3), np.uint8)
+    white[10:50, 10:20] = black[10:50, 10:20] = 70  # a cliff doodad: can't be hidden
+    empty = white.copy()
+    white[20:30, 12:18] = black[20:30, 12:18] = 150  # the element, over the doodad
+    white[20:30, 40:46] = black[20:30, 40:46] = 150  # a neighbour's rubble, nearer it than us
+    rgba = elements.cut_out(white, black, centre=(15, 25), radius=40, empty=empty, others=[(43, 25)])
+    assert (rgba[20:30, 12:18, 3] == 255).all()  # the element, kept over the doodad
+    assert (rgba[10:20, 10:20, 3] == 0).all() and (rgba[30:50, 10:20, 3] == 0).all()  # the doodad, left out
+    assert (rgba[20:30, 40:46, 3] == 0).all()  # the neighbour's rubble, left out
+
+
+def test_a_map_s_element_list_from_its_script_objects_and_regions():
+    """Towns as the script hooks them up (the lane set before a town counts for it), each structure
+    in the town whose region holds it (a shape marked negative cuts out of it), camps numbered in
+    the script's order with their middle and spread from their spawn points."""
+    from heroes_capture import elements
+
+    script = """bool gt_HookupTownData_Func (bool testConds, bool runActions) {
+    lv_lane = 1;
+    lv_town += 1;
+    libGame_gv_townTownData[lv_town].lv_lane = lv_lane;
+    libGame_gv_townTownData[lv_town].lv_owner = libCore_gv_cOMPUTER_TeamOrder;
+    libGame_gv_townTownData[lv_town].lv_townRegion = RegionFromId(2);
+    lv_lane = 2;
+    lv_town += 1;
+    libGame_gv_townTownData[lv_town].lv_owner = libCore_gv_cOMPUTER_TeamChaos;
+    libGame_gv_townTownData[lv_town].lv_townRegion = RegionFromId(3);
+    return true;
+}
+bool gt_HookupJungleCreepData_Func (bool testConds, bool runActions) {
+    lv_junglecamp += 1;
+    libMapM_gv_jungleCreepCamps[lv_junglecamp].lv_mapDataCampDefenderType = libMapM_ge_JungleCampDefenderTypes_SiegeCamp1;
+    libMapM_gv_jungleCreepCamps[lv_junglecamp].lv_mapDataCampCaptainSpawnPoint = PointFromId(7);
+    libMapM_gv_jungleCreepCamps[lv_junglecamp].lv_mapDataDefenderSpawnPoints[1] = PointFromId(8);
+    libMapM_gv_jungleCreepCamps[lv_junglecamp].lv_mapDataDefenderSpawnPoints[2] = PointFromId(9);
+    return true;
+}
+"""
+    regions = ('<region id="2"><name value="Order town"/><shape type="rect"><quad value="0,0,20,20"/></shape>'
+               '<shape type="rect"><negative/><quad value="15,15,20,20"/></shape></region>'
+               '<region id="3"><name value="Chaos town"/><shape type="diamond"><center value="50,50"/>'
+               '<width value="10"/><height value="10"/></shape></region>')
+    objects = ('<ObjectPoint Id="7" Position="30,30,0" Type="Normal"/><ObjectPoint Id="8" Position="32,30,0" Type="Normal"/>'
+               '<ObjectPoint Id="9" Position="31,33,0" Type="Normal"/>'
+               '<ObjectUnit Id="20" Position="5,5,0" UnitType="TownCannonTowerL2" Player="11"/>'
+               '<ObjectUnit Id="21" Position="17,17,0" UnitType="TownMoonwellL2" Player="11"/>'
+               '<ObjectUnit Id="22" Position="52,51,0" UnitType="TownTownHallL2" Player="12"/>'
+               '<ObjectUnit Id="23" Position="80,80,0" UnitType="KingsCore" Player="12"/>'
+               '<ObjectUnit Id="24" Position="6,6,0" UnitType="LootBannerSconce"/>')
+    found = elements.element_list(script, objects, regions)
+    assert found["towns"] == [{"town": 1, "lane": 1, "owner": "order", "region": 2, "name": "Order town"},
+                              {"town": 2, "lane": 2, "owner": "chaos", "region": 3, "name": "Chaos town"}]
+    assert [(u["id"], u["owner"], u["town"], u["core"]) for u in found["structures"]] == [
+        (20, "order", 1, False), (21, "order", None, False), (22, "chaos", 2, False), (23, "chaos", None, True)]
+    (camp,) = found["camps"]
+    assert (camp["camp"], camp["type"], camp["x"], camp["y"]) == (1, "SiegeCamp1", 31.0, 31.0)
+    assert camp["spread"] == 2.0 and camp["radius"] == 2.0 + elements.CAMP_MARGIN
+    tiles = [{"index": 0, "x": 0, "y": 0}, {"index": 1, "x": 30, "y": 30}]
+    assert elements.source_tile(camp, tiles)["index"] == 1
+
+
+class _Recoverable(Exception):
+    def __init__(self, why, resume_at=None):
+        super().__init__(why)
+        self.why, self.resume_at = why, resume_at
+
+
+@pytest.fixture
+def element_capture(monkeypatch):
+    """The elements capture with the game's controls stood in for (they need Windows)."""
+    monkeypatch.setitem(sys.modules, "heroes_capture.game_control",
+                        types.SimpleNamespace(settle=lambda seconds: None, step=lambda action, what: action(), Recoverable=_Recoverable))
+    monkeypatch.delitem(sys.modules, "heroes_capture.element_capture", raising=False)
+    from heroes_capture import element_capture
+
+    monkeypatch.setattr(element_capture, "log", lambda message: None)
+    monkeypatch.setattr(element_capture, "warn", lambda message: None)
+    return element_capture
+
+
+class _FakeSession:
+    """Answers every command, and shows a frame; records what was typed."""
+
+    def __init__(self, unanswered=()):
+        self.sent, self.unanswered = [], set(unanswered)
+
+    def send(self, command, timeout=2.0):
+        self.sent.append(command)
+        return None if command in self.unanswered else (types.SimpleNamespace(camera_x=1.0, camera_y=2.0), self.grab())
+
+    def blank(self, frame):
+        return frame
+
+    def grab(self, dark_ok=False):
+        return np.zeros((4, 6, 3), np.uint8)
+
+    def status(self):
+        return types.SimpleNamespace(camera_x=10.0, camera_y=20.0)
+
+
+def _tile_command(tile):
+    return f"tile {tile['index']} {tile['x']:.2f} {tile['y']:.2f}"
+
+
+def _black_settled(session, first, white):
+    return first
+
+
+ELEMENTS_MANIFEST = {
+    "tiles": [{"index": 0, "x": 0, "y": 0}, {"index": 1, "x": 50, "y": 50}],
+    "screen": {"w": 3440, "h": 1440}, "pxPerCell": 48, "distance": 85.0,
+    "elements": {
+        "structures": [{"id": 5, "type": "TownCannonTowerL2", "x": 1, "y": 2, "owner": "order", "town": 1, "core": False, "radius": 6.0},
+                       {"id": 6, "type": "KingsCore", "x": 3, "y": 1, "owner": "chaos", "town": None, "core": True, "radius": 6.0}],
+        "towns": [],
+        "camps": [{"camp": 1, "type": "SiegeCamp1", "x": 49, "y": 51, "spread": 2.0, "radius": 5.0}],
+    },
+}
+
+
+def test_the_elements_capture_shoots_each_element_then_brings_the_structures_down(element_capture, tmp_path):
+    session = _FakeSession()
+    element_capture.capture_elements(session, ELEMENTS_MANIFEST, tmp_path, _tile_command, _black_settled)
+    sent = session.sent
+    # Every structure faded out (not hidden: it keeps its look and effects as the map paused it),
+    # the rest of the scene hidden, the camp (clear of every structure's circle) spawned straight
+    # away, born, and frozen; then each structure faded in, the camera straight above it (the move
+    # sets the white sky), shot over white and black, faded out; no sky put back after (the next
+    # move does it). (No camera bounds in this manifest: no room for copies, so every structure
+    # falls in waves.)
+    # The two are neighbours (within NEIGHBOUR_REACH): after each one's pair of shots, the other is
+    # faded in beside it for a shot over black (which of them is in front where they overlap).
+    assert sent[:19] == ["tile 0 0.00 0.00", "el fadeall 0", "el env off", "el keep 1", "el camp 1", "el freeze",
+                         "el scopemsg 1 2 SetOpacity 1 0", "el at 1.00 2.00", "black",
+                         "el scopemsg 3 1 SetOpacity 1 0", "el scopemsg 3 1 SetOpacity 0 0", "el scopemsg 1 2 SetOpacity 0 0",
+                         "el scopemsg 3 1 SetOpacity 1 0", "el at 3.00 1.00", "black",
+                         "el scopemsg 1 2 SetOpacity 1 0", "el scopemsg 1 2 SetOpacity 0 0", "el scopemsg 3 1 SetOpacity 0 0",
+                         "el at 49.00 51.00"]
+    # The camp shot after the structures, its defenders removed; no isolating anywhere.
+    assert sent[18:22] == ["el at 49.00 51.00", "black", "el keep 0", "clean"] and sent.count("el camp 1") == 1
+    assert not any(c.startswith("el isolate") or c.startswith("sky ") for c in sent)
+    # Rubble in waves: the tower, then the core in a wave of its own, last (after its hidden
+    # replacement takes its place); each brought down, left for its time, shot centred, cleared
+    # away.
+    core, kill = sent.index("el core 2 -1"), sent.index("el kill 1 2 -1")
+    # Each brought down with the camera far back over it (a fall gives off its smoke and dust only
+    # near the camera).
+    assert kill < core and sent[core - 2:core] == ["el wide 3.00 1.00 212.5", "el scopemsg 3 1 SetOpacity 1 0"]
+    assert sent[kill - 2:kill] == ["el wide 1.00 2.00 212.5", "el scopemsg 1 2 SetOpacity 1 0"]
+    assert sent[core + 1:core + 4] == ["el freeze", "el at 3.00 1.00", "black"]
+    assert sent[kill + 1:kill + 5] == ["el freeze", "el at 1.00 2.00", "black", "el clear"]
+    # Clearing: Order's core (not yet replaced) and anything left brought down, the scene shown
+    # again, the remains and the fallen structures' own actors cleared, the holes shown, everything
+    # let play a moment and paused again (the doodads shown again give off their particles).
+    assert sent[-9:] == ["el core 1 0", "el killall 5", "el env on", "el clear all", "el holes show", "el hideall", "el play",
+                         "el freeze", "clean"]
+    records = json.loads((tmp_path / "elements" / "elements.json").read_text())
+    assert sorted(records) == ["camp-1-spawned", "structure-5-rubble", "structure-5-standing", "structure-6-rubble", "structure-6-standing"]
+    assert records["structure-5-rubble"]["shot"] == "structure-5-rubble" and records["camp-1-spawned"]["tile"] == 1
+    assert records["structure-6-standing"]["camera"] == {"x": 10.0, "y": 20.0} and records["structure-6-standing"]["neighbours"] == [5]
+    assert frame_exists(tmp_path / "elements" / "structure-6-standing-with-5")
+    assert frame_exists(tmp_path / "elements" / "structure-5-rubble") and frame_exists(tmp_path / "elements" / "structure-5-rubble-black")
+
+
+def _copies_manifest():
+    manifest = json.loads(json.dumps(ELEMENTS_MANIFEST))
+    manifest["elements"]["structures"][0]["copy"] = {"x": 100.0, "y": 100.0}
+    manifest["elements"]["structures"].append({"id": 7, "type": "TownWallRadial2L3", "x": 30.5, "y": 30.5, "owner": "order", "town": 1,
+                                               "core": False, "radius": 8.0, "copy": {"x": 140.5, "y": 60.5}})
+    return manifest
+
+
+def test_the_elements_capture_prepares_the_rubble_with_copies(element_capture, tmp_path, monkeypatch):
+    """Each structure with a spare spot has its copy made there, then brought down a group at a time
+    with the camera over the group, and everything paused once each has settled; then each copy's
+    rubble shot on its spot with no waiting, recorded as if from its structure's cell (the camera
+    moved by the difference), and only the rest (the core) falls in a wave."""
+    monkeypatch.delenv(element_capture.COPY_TRYING, raising=False)
+    monkeypatch.delenv(element_capture.COPY_CRASHED, raising=False)
+    session = _FakeSession()
+    element_capture.capture_elements(session, _copies_manifest(), tmp_path, _tile_command, _black_settled)
+    sent = session.sent
+    # Made first; their spots too far apart for one camera, each brought down in a group of its own
+    # with the camera far back over it (numbered by group: the tower's spot leftmost), paused
+    # before the next.
+    assert [c for c in sent if c.startswith("el copy ")] == ["el copy 0 make 1 2 100 100", "el copy 1 make 30.5 30.5 140.5 60.5"]
+    first = sent.index("el copy 1 make 30.5 30.5 140.5 60.5") + 1
+    assert sent[first:first + 6] == ["el wide 100.00 100.00 212.5", "el copykill 0 0", "el freeze",
+                                     "el wide 140.50 60.50 212.5", "el copykill 1 1", "el freeze"]
+    assert sent.index("el fadeall 0") < first < sent.index("el at 1.00 2.00")
+    tower = sent.index("el at 100.00 100.00")
+    assert sent[tower + 1] == "black" and sent[sent.index("el at 140.50 60.50") + 1] == "black"
+    assert not any(c.startswith("el kill ") for c in sent) and "el core 2 -1" in sent
+    records = json.loads((tmp_path / "elements" / "elements.json").read_text())
+    # The fake camera is at (10, 20) for every shot: as if from the tower's cell, (10 + 1 - 100, 20 + 2 - 100).
+    assert records["structure-5-rubble"]["camera"] == {"x": -89.0, "y": -78.0}
+    assert records["structure-5-rubble"]["x"] == 1 and records["structure-7-rubble"]["tile"] == 1  # its structure's tile
+    assert "structure-6-rubble" in records
+
+
+def test_a_type_whose_copy_crashed_the_game_falls_in_waves_after_the_relaunch(element_capture, tmp_path, monkeypatch):
+    """The type being copied when the game went (left in the environment the recovery's process
+    inherits) isn't copied again: it falls in waves."""
+    monkeypatch.setenv(element_capture.COPY_TRYING, "TownWallRadial2L3")
+    monkeypatch.delenv(element_capture.COPY_CRASHED, raising=False)
+    session = _FakeSession()
+    element_capture.capture_elements(session, _copies_manifest(), tmp_path, _tile_command, _black_settled)
+    assert [c for c in session.sent if c.startswith("el copy ")] == ["el copy 0 make 1 2 100 100"]
+    assert "el kill 30.5 30.5 -1" in session.sent
+    assert element_capture.COPY_TRYING not in os.environ and os.environ[element_capture.COPY_CRASHED] == "TownWallRadial2L3"
+
+
+def test_copy_spots_keep_clear_on_the_structure_s_lighting():
+    """Each copy's spot: its circle clear of every structure's, camp's and other spot's, under the
+    lighting its structure has (the lighting map: a left half red, a right half green), on the
+    same part of a cell; none for cores and keeps."""
+    import math
+
+    import numpy as np
+
+    from heroes_capture import elements
+
+    light = np.zeros((200, 400, 4), np.float32)  # 2 pixels a cell, 200 x 100 cells
+    light[:, :200, 0] = 255
+    light[:, 200:, 1] = 255
+    structures = [{"id": 1, "type": "TownCannonTowerL2", "x": 30, "y": 50, "core": False, "radius": 8.0},
+                  {"id": 2, "type": "TownWallRadial2L3", "x": 170.5, "y": 50.5, "core": False, "radius": 8.0},
+                  {"id": 3, "type": "KingsCore", "x": 100, "y": 50, "core": True, "radius": 8.0},
+                  {"id": 4, "type": "TownTownHallL3", "x": 60, "y": 20, "core": False, "radius": 8.0}]
+    spots = elements.copy_spots(structures, [], {"left": 0, "bottom": 0, "right": 200, "top": 100}, 200, light)
+    assert set(spots) == {1, 2}
+    assert spots[1]["x"] < 96 and spots[2]["x"] > 104  # each on its own half
+    assert spots[2]["x"] % 1 == 0.5 and spots[2]["y"] % 1 == 0.5
+    # Each spot's rubble circle (a tower's 4 cells, a wall's 6) clear of every structure's (8) and
+    # of the other's.
+    for i, s in spots.items():
+        assert all(math.dist((s["x"], s["y"]), (u["x"], u["y"])) >= 8 + elements.rubble_radius(structures[i - 1]) for u in structures)
+    assert math.dist(*[(s["x"], s["y"]) for s in spots.values()]) >= 4 + 6
+
+
+def test_a_camp_near_a_structure_is_spawned_after_the_structures_are_shot(element_capture, tmp_path):
+    """A camp whose circle reaches a structure's would be in that structure's cut-out: it isn't
+    spawned with the scene hidden but after every structure's standing shot."""
+    manifest = json.loads(json.dumps(ELEMENTS_MANIFEST))
+    manifest["elements"]["camps"][0].update(x=8, y=2)
+    session = _FakeSession()
+    element_capture.capture_elements(session, manifest, tmp_path, _tile_command, _black_settled)
+    sent = session.sent
+    assert sent.index("el camp 1") > sent.index("el scopemsg 3 1 SetOpacity 0 0") and sent[1:4] == ["el fadeall 0", "el env off", "el scopemsg 1 2 SetOpacity 1 0"]
+
+
+def test_a_resumed_elements_capture_only_brings_the_structures_down(element_capture, tmp_path):
+    element_capture.capture_elements(_FakeSession(), ELEMENTS_MANIFEST, tmp_path, _tile_command, _black_settled)
+    again = _FakeSession()
+    element_capture.capture_elements(again, ELEMENTS_MANIFEST, tmp_path, _tile_command, _black_settled)
+    assert again.sent == ["tile 0 0.00 0.00", "el fadeall 0", "el env off", "el core 1 0", "el core 2 0", "el killall 5",
+                          "el env on", "el clear all", "el holes show", "el hideall", "el play", "el freeze", "clean"]
+
+
+def test_rubble_waves_keep_each_one_s_rubble_out_of_the_others_shots():
+    """No two structures in a wave nearer each other than their circles reach together; each core
+    in a wave of its own, last."""
+    from heroes_capture import elements
+
+    def u(i, x, y, core=False):
+        return {"id": i, "x": x, "y": y, "radius": 8.0, "core": core}
+
+    town = [u(1, 0, 0), u(2, 5, 0), u(3, 10, 0), u(4, 40, 0), u(5, 45, 0)]
+    waves = elements.rubble_waves(town + [u(9, 100, 100, core=True), u(10, 200, 100, core=True)])
+    assert [[s["id"] for s in w] for w in waves] == [[1, 4], [2, 5], [3], [9], [10]]
+    for w in waves[:-2]:
+        assert all(abs(a["x"] - b["x"]) >= 16 for a in w for b in w if a is not b)
+
+
+def test_the_elements_capture_gives_up_on_a_map_that_stops_answering(element_capture, tmp_path):
+    session = _FakeSession(unanswered={"tile 0 0.00 0.00", "el fadeall 0", "el env off"})
+    with pytest.raises(_Recoverable) as lost:
+        element_capture.capture_elements(session, ELEMENTS_MANIFEST, tmp_path, _tile_command, _black_settled)
+    assert lost.value.resume_at == 0
+
+
+def test_the_elements_render_has_its_own_files_and_pack_folder(tmp_path):
+    """--structures elements is a render of its own (ELEMENTS-PLAN.md): its preparation's files and
+    its pack (maps/<map>/elements/) never overwrite the render with the structures kept."""
+    from heroes_capture import inject, pack
+
+    assert inject.render_id("Battlefield of Eternity", "elements") == "battlefield-of-eternity-elements"
+    assert inject.render_id("Battlefield of Eternity", "keep") == "battlefield-of-eternity-structures"
+    assert pack.variant_folder(tmp_path, "elements") == tmp_path / "elements" and pack.variant_folder(tmp_path, "keep") == tmp_path
+    assert inject.parse_args(["Dragon Shire", "--structures", "elements"])["structures"] == "elements"
+    with pytest.raises(SystemExit, match="keep, hide or elements"):
+        inject.parse_args(["Dragon Shire", "--structures", "some"])
+
+
+def test_the_script_reads_the_number_of_its_longest_commands():
+    """A command's sequence number is its last word: the script must reach it in the longest command
+    sent ("el copy <n> make <x> <y> <to x> <to y> <number>": 9 words), or it answers with another
+    word and the capture, hearing no answer, sends it again (four copies made)."""
+    import re
+
+    from heroes_capture import capture_script as cs
+
+    template = cs.TEMPLATE.read_text(encoding="utf-8")
+    seq = template[template.index("int hrsCap_CommandSeq ()"):template.index("void hrsCap_Ack ()")]
+    words = template[template.index("string hrsCap_CommandWords (int lp_from)"):]
+    reach = int(re.search(r"lv_n <= (\d+)", seq).group(1))
+    assert reach >= 9 and reach >= int(re.search(r"lv_n <= (\d+)", words).group(1)) + 1
+
+
+
+def test_a_cut_out_keeps_a_tinted_glow_see_through():
+    """A core's shield: over white a little bluer than the sky, over black dim blue (a difference
+    that isn't grey). In a tile that is taken for something that moved between the shots and left
+    opaque; in an element's cut-out (nothing moves) it stays the faint glow it is, not an opaque
+    dark blotch."""
+    import numpy as np
+
+    from heroes_capture import elements, stitch
+
+    white = np.full((40, 40, 3), 230, np.uint8)
+    black = np.zeros((40, 40, 3), np.uint8)
+    white[20, 20], black[20, 20] = (223, 242, 243), (13, 35, 58)
+    assert stitch.matte(white, black, 230.0)[20, 20, 3] == 255
+    cut = elements.cut_out(white, black, (20, 20), 10)
+    assert 0 < cut[20, 20, 3] < 60 and cut[20, 20, :3].max() > 200
+
+
+def test_a_seam_takes_a_floating_piece_from_one_screenshot_not_a_ghost_of_both():
+    """At a seam's feather: where the two screenshots agree, blended by opacity (a see-through
+    pixel's black doesn't darken the other); where one has a piece above the ground and the other
+    the sky there (the piece seen shifted), the one weighing more taken whole, not a dark
+    see-through copy (the "shadows" at the map's edges)."""
+    import numpy as np
+
+    from heroes_capture import stitch
+
+    under = np.array([[[200, 160, 40, 255], [200, 160, 40, 255], [100, 100, 100, 128]]], np.uint8)
+    over = np.array([[[0, 0, 0, 0], [0, 0, 0, 0], [100, 100, 100, 160]]], np.uint8)
+    weight = np.array([[0.3, 0.7, 0.5]], np.float32)
+    out = stitch.seam_blend(under, over, weight)
+    assert tuple(out[0, 0]) == (200, 160, 40, 255)  # the piece, whole (it weighs more)
+    assert out[0, 1, 3] == 0  # the sky, whole
+    assert tuple(out[0, 2, :3]) == (100, 100, 100) and out[0, 2, 3] == 144  # agreeing: blended, no darkening
+
+def test_view_groups_fit_one_camera_each():
+    """Items in groups that each fit the box round its middle, every item in one group."""
+    from heroes_capture import elements
+
+    items = [{"x": x, "y": y} for x, y in ((0, 0), (10, 5), (25, 0), (100, 0), (5, 40), (110, 8))]
+    groups = elements.view_groups(items, 15, 10)
+    assert sorted(len(g) for g in groups) == [1, 2, 3] and sum(len(g) for g in groups) == len(items)
+    for g in groups:
+        cx, cy = elements.view_middle(g)
+        assert all(abs(i["x"] - cx) <= 15 and abs(i["y"] - cy) <= 10 for i in g)
+
+
+def test_each_kind_on_each_team_is_shot_at_its_own_time(element_capture):
+    """fall_wait by kind and team (the film probe's choices): a Heaven and a Hell moonwell of the
+    same level differ; a level 3 town tower isn't taken for a standalone one; walls by level."""
+    w = element_capture.fall_wait
+    assert w({"type": "TownMoonwellL3", "owner": "order", "core": False}) == 3.30
+    assert w({"type": "TownMoonwellL3", "owner": "chaos", "core": False}) == 1.92
+    assert w({"type": "TownCannonTowerL3", "owner": "chaos", "core": False}) == 2.25
+    assert w({"type": "TownCannonTowerL3Standalone", "owner": "chaos", "core": False}) == 3.00
+    assert w({"type": "TownWallRadial17L2", "owner": "chaos", "core": False}) == 1.33
+    assert w({"type": "TownWallRadial14L3", "owner": "chaos", "core": False}) == 2.24
+    assert w({"type": "KingsCore", "owner": "chaos", "core": True}) == element_capture.CORE_WAIT

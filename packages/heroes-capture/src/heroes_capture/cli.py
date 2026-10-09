@@ -192,6 +192,7 @@ def working_files(folder: Path) -> list[Path]:
 class Structures(str, Enum):
     keep = "keep"
     hide = "hide"
+    elements = "elements"
 
 
 class Category(str, Enum):
@@ -319,7 +320,8 @@ def render_one(map_spec: str, name: str, options: list[str], output_dir: Path, k
     manifest = str(manifest_path)
     if start < len(planned["tiles"]):
         if not start:
-            shutil.rmtree(manifest_path.with_suffix("") / "tiles", ignore_errors=True)  # old screenshots would mix in
+            for folder in ("tiles", "elements"):  # old screenshots would mix in (the elements' record skips what it lists)
+                shutil.rmtree(manifest_path.with_suffix("") / folder, ignore_errors=True)
         with ui.step(f"Capturing {name} in the game"):
             run_capture([manifest, *(["--start", str(start)] if start else []), *capture_options])
     with ui.step(f"Stitching {name}"):
@@ -334,7 +336,7 @@ def render_one(map_spec: str, name: str, options: list[str], output_dir: Path, k
 def render(
     ctx: typer.Context,
     category: Annotated[Optional[Category], typer.Option("--category", "-c", help="Render every map of a category instead of one map; all: every map. Unsupported maps are always left out.", show_default=False)] = None,
-    structures: Annotated[Structures, typer.Option(help="Keep or hide forts, towers, cores and gates.")] = Structures.keep,
+    structures: Annotated[Structures, typer.Option(help="Keep or hide forts, towers, cores and gates; or elements: each structure and camp on its own, over the bare terrain (in development, ELEMENTS-PLAN.md).")] = Structures.keep,
     output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Where the maps' folders go: <output-dir>/<map id>, e.g. maps/dragon-shire.")] = MAPS,
     force: Annotated[bool, typer.Option("--force", help="Render maps already rendered in the output folder again, from the start.")] = False,
     keep_tmp: Annotated[bool, typer.Option("--keep-tmp", help="Leave the working files (screenshots, the prepared map, diagnostic logs) in tmp\\ for diagnosis.")] = False,
@@ -457,7 +459,7 @@ STATUS_STYLE = {"validated": "[green]✓ validated[/]", "not yet": "[yellow]not 
 def view(
     map: Annotated[str, typer.Argument(help="The map as the game names it (case and punctuation don't matter), or its folder's name.", show_default=False)],  # noqa: A002
     output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Where the maps' folders are.")] = MAPS,
-    structures: Annotated[Structures, typer.Option(help="Which render: with the structures kept or hidden.")] = Structures.keep,
+    structures: Annotated[Structures, typer.Option(help="Which render: with the structures kept or hidden, or the elements render.")] = Structures.keep,
 ) -> None:
     """Open a rendered map's pack in its reference viewer, in the browser.
 

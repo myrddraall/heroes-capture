@@ -43,7 +43,9 @@ maps/battlefield-of-eternity/
 ```
 
 The pack is for the map with its structures (forts, towers, cores, gates) kept. A render with
-them hidden writes the same layout into `terrain/` inside the map's folder. A map without the
+them hidden writes the same layout into `terrain/` inside the map's folder, and the elements render
+(`--structures elements`, in development: the bare terrain with each structure and camp cut out
+on its own, see [Elements](#elements)) into `elements/`. A map without the
 sky layers (no parallax sky in the game) has no `background`, `haze` or `fixed`.
 
 ## pack.json
@@ -107,14 +109,14 @@ illustrative):
 | `map.id`, `map.name` | The folder's id and the map's name as the game shows it (English). |
 | `map.category` | `Battleground`, `Arena`, `Brawl` or `Other` (as `map list` shows them); `null` if unknown. |
 | `map.validated` | The tool's authors have checked this map's render. Information only. |
-| `map.structures` | `keep`: structures are in the map layer. |
+| `map.structures` | `keep`: structures are in the map layer; `hide`: they aren't; `elements`: the map layer is the bare terrain, and each structure and camp is in `data.elements`. |
 | `map.sizeCells` | The whole map in map cells (width, height). |
 | `map.cameraBounds` | Where the game lets the camera go, in map cells. A viewer can keep its camera inside. |
 | `capture` | How the render was taken: map pixels per cell planned, the game's screen size, field of view in degrees. |
 | `arenas` | `null`, or the arenas of a map of several (see [Several arenas](#several-arenas)). |
 | `layers` | The layers, back to front: draw them in this order (see [Layers and drawing](#layers-and-drawing)). |
 | `images` | The map's other pictures, each with its file and size in pixels (see [Images](#images)). Any may be missing. |
-| `data` | Information about the map, to grow: objectives, camps, lanes and so on. Empty for now. |
+| `data` | Information about the map, to grow. `elements` in the elements render (see [Elements](#elements)); otherwise empty. |
 | `files` | Every file in the pack (`pack.json` aside), its size and SHA-256. A viewer can cache by hash (GitHub Pages caches for only ten minutes). |
 
 ## Coordinates
@@ -253,13 +255,51 @@ the whole picture, strokes and all.
 Maps whose custom minimap isn't in their archive have neither image (Alterac Pass, Hanamura
 Temple and Pull Party name one in `MapInfo` that the game's data doesn't have).
 
+## Elements
+
+The elements render's map layer is the bare terrain: every structure was destroyed and its remains
+cleared before the tiles were shot. Each structure and mercenary camp was shot on its own over the
+sky instead, and `data.elements` lists them with their cut-outs, so a viewer can show or hide each
+one, or show the map as it stood at a moment of a replay.
+
+```json
+"elements": {
+  "layer": "map",
+  "structures": [
+    {"id": 1013, "type": "TownCannonTowerL2", "cell": [108, 60], "owner": "order", "town": 3, "core": false,
+     "states": {"standing": {"file": "elements/structure-1013-standing.webp", "rect": [5120, 3410, 140, 132]},
+                "rubble": {"file": "elements/structure-1013-rubble.webp", "rect": [5126, 3418, 128, 118]}}}
+  ],
+  "towns": [{"town": 3, "lane": 2, "owner": "order", "region": 12, "name": "Lane 2 - Order - Town 1"}],
+  "camps": [
+    {"camp": 2, "type": "BruiserCamp1", "cell": [95.86, 94.95],
+     "states": {"spawned": {"file": "elements/camp-2-spawned.webp", "rect": [4200, 4980, 180, 330]}}}
+  ]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `layer` | The map layer the cut-outs belong to (their rectangles are in its pixels). |
+| `structures` | Every structure the map places: its placed unit's `id`, its unit `type`, its `cell`, its `owner` (`order`, `chaos`), the `town` it belongs to (`null`: the cores and anything outside the towns) and whether it's a `core`. |
+| `towns` | The map's towns as its script numbers them: lane, owner, and the map's region for it. |
+| `camps` | The mercenary camps as the script numbers them (the game's own camp numbers), their defender `type` and the `cell` they gather round. |
+| `states` | Each state the element was shot in: `standing` and `rubble` for a structure (a tower's rubble as the game shows a fallen one), `spawned` for a camp's defenders. `null`: nothing is left of it in that state (a fallen moonwell). A state that couldn't be shot is missing. |
+| `file`, `rect` | The state's cut-out (WebP with transparency) and where it goes on the map layer: left, top, width, height in its pixels. |
+| `hiddenBy` | A standing structure's only: where a neighbouring structure stands in front of it (a wall over a tower's base, but under its orb), a mask per neighbour (`id`, and `file`: a WebP the size of the cut-out, opaque where hidden). While that neighbour is standing too, erase the masked pixels from this cut-out before drawing it. |
+
+Draw the cut-outs over the map layer, further north first (by `cell` y, larger first), so nearer
+ones overlap further ones as in the game; where two standing structures overlap, their `hiddenBy`
+masks settle which is in front, whichever is drawn first. They carry no shadows: each was shot with nothing round
+it. The colours are an observer's (the left team blue).
+
 ## Raw layers
 
 Next to the pack, `raw/` holds each layer at full resolution as PNG (lossless): `map.png` (or
 `map-<arena>.png`), `background.png`, `haze.png` and `fixed.png`, and the composites
 (`composite.png`, `composite-on-black.png`, `composite-with-fixed.png`). Its `layers.json`
 places the layers the same way as `pack.json` does. They're for keeping and for further work, not for a viewer: the
-pack's tiles come from them.
+pack's tiles come from them. The elements render's cut-outs are in `raw/elements/` as PNG.
 
 ## Hosting
 
@@ -275,5 +315,4 @@ pack's tiles come from them.
 
 ## Later
 
-- Map data in `data`: objectives, camps, structures and lanes, from the map's placed units.
-- The map without its structures, as a second map layer a viewer can switch to.
+- More map data in `data`: objectives and lanes.

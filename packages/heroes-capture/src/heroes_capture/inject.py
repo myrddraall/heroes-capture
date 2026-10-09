@@ -8,7 +8,9 @@ A bare name is a map as the game names it, read from the installed game (or, wit
 from Blizzard's CDN); the tileset and light-set definitions and the sky models come from there too.
 Options:
 
-  --structures keep|hide   keep or hide forts, towers, cores and gates      (default keep)
+  --structures keep|hide|elements   keep or hide forts, towers, cores and gates, or
+                           elements: each structure and camp shot on its own first, then the
+                           tiles of the bare terrain (ELEMENTS-PLAN.md)     (default keep)
   --px-per-cell <n>        output resolution, pixels per map cell         (default 48)
   --screen <w>x<h>         the game's resolution while capturing           (default 3840x2160)
   --fov <deg>              vertical field of view; narrower is flatter      (default 20)
@@ -43,7 +45,7 @@ from . import elements, game_data
 from . import js_json
 from .capture_script import STATUS_CELL_H, STATUS_CELL_W, STATUS_CELLS, STATUS_ROWS, capture_script
 from .light_data import has_sky, main_light, sky_models, tileset_of
-from .sky import PARALLAX_KEYS, SKIES, painted_texture_files, parallax_keys, sky_files, solid_dds
+from .sky import PARALLAX_KEYS, SKIES, frozen_particle_models, painted_texture_files, parallax_keys, sky_files, solid_dds
 from .runlog import log, warn
 from .stormlib import Archive
 
@@ -59,9 +61,9 @@ OPTION_VALUES = {"--structures": 1, "--px-per-cell": 1, "--screen": 1, "--fov": 
 
 
 def render_id(map_name: str, structures: str) -> str:
-    """The id a preparation's files are named by: <map slug>-structures, or -terrain with the
-    structures hidden."""
-    return f"{slug(map_name)}-{'terrain' if structures == 'hide' else 'structures'}"
+    """The id a preparation's files are named by: <map slug>-structures, -terrain with the
+    structures hidden, or -elements."""
+    return f"{slug(map_name)}-{ {'hide': 'terrain', 'elements': 'elements'}.get(structures, 'structures') }"
 
 
 def parse_args(argv: list[str]) -> dict:
@@ -102,8 +104,8 @@ def parse_args(argv: list[str]) -> dict:
             raise SystemExit(f"unknown option {a}")
     if not opts["map"]:
         raise SystemExit('usage: heroes-capture prepare "<map name or .stormmap path>" [options]')
-    if opts["structures"] not in ("keep", "hide"):
-        raise SystemExit("--structures is keep or hide")
+    if opts["structures"] not in ("keep", "hide", "elements"):
+        raise SystemExit("--structures is keep, hide or elements")
     if not 0 < opts["keep"] <= 1:
         raise SystemExit("--keep is between 0 and 1")
     return opts
@@ -272,10 +274,16 @@ def main(argv: list[str]) -> Path:
         map_name, map_bytes = resolve_map(opts["map"], storage)
         light_sets = game_data.light_sets(storage)
         models = {spec["file"]: game_data.sky_model_file(storage, spec["file"]) for spec in PARALLAX_KEYS.values()}
-    source = {"name": map_name}
-    id_ = render_id(source["name"], opts["structures"])
-    target = (out / f"{id_}.stormmap").resolve()
-    target.write_bytes(map_bytes)
+        source = {"name": map_name}
+        id_ = render_id(source["name"], opts["structures"])
+        target = (out / f"{id_}.stormmap").resolve()
+        target.write_bytes(map_bytes)
+        # Every model the map can use, from the mods it names (its DocumentInfo) and theirs: each
+        # made to freeze its particles and ribbons while its animations are paused (sky.py).
+        with Archive(target) as archive:
+            map_mods = re.findall(r"([A-Za-z0-9_]+\.stormmod)", archive.read_text("DocumentInfo") or "")
+            own_models = archive.read_text("Base.StormData\\GameData\\ModelData.xml") or ""
+        model_ids = sorted(set(game_data.map_model_ids(storage, map_mods)) | set(re.findall(r'<CModel\b[^>]*\bid="([^"]+)"', own_models)))
 
     with Archive(target) as archive:
         # (Widening the playable bounds in MapInfo, to move the game's boundary fade off the outer
@@ -346,9 +354,20 @@ def main(argv: list[str]) -> Path:
             keep_intro=opts["keepIntro"], sky_colour=sky_start, map_sky=map_sky, map_width=info["width"],
             map_height=info["height"], opening_timers=opening_timers, map_id=map_id, hide_doodads=hide_doodads,
             arena=arena, boss="LibMLBD" in includes, hole_cells=[c for h in holes for c in h["cells"]],
-            cliff_doodads=list(dict.fromkeys(re.findall(r'<cliffDoodad name="([^"]+)"', map_data["t3Terrain"]))),
         ).replace("\n", eol)
         check_definition_order(script)
+        element_data = elements.element_list(original, objects, regions or "")
+        log(f"elements: {len(element_data['structures'])} structures in {len(element_data['towns'])} towns, {len(element_data['camps'])} camps")
+        if opts["structures"] == "elements":
+            # Each structure's copy's spare spot (element_capture.py), under its own lighting.
+            light = elements.lighting_map(archive.read("LightingMap.tga") if archive.has("LightingMap.tga") else None)
+            spots = elements.copy_spots(element_data["structures"], element_data["camps"], info["bounds"], info["width"], light)
+            for structure in element_data["structures"]:
+                if structure["id"] in spots:
+                    structure["copy"] = spots[structure["id"]]
+            log(f"copies: {len(spots)} structures' rubble prepared on spare spots"
+                f"{' under the same lighting (the lighting map)' if light is not None else ''}; "
+                f"{len(element_data['structures']) - len(spots)} fall themselves")
         # Galaxy is single-pass: the capture functions go before InitMap, the call at its end.
         patched = original[:init] + script + original[init:close] + f"{eol}    hrsCap_Init();" + original[close:]
         archive.write("MapScript.galaxy", patched.encode("utf-8"))
@@ -367,7 +386,10 @@ def main(argv: list[str]) -> Path:
         if key_spec and models.get(key_spec["file"]):
             keys = parallax_keys(map_sky["parallax"], models[key_spec["file"]])
             log(f'keyed copies of {map_sky["parallax"]}: command "sky parallaxwhite", "parallaxblack", "parallaxbare", "parallaxwhitebare"')
-        for name, data in sky_files(tileset, sky_start, read, keys):
+        # The models' particles and ribbons frozen while paused, in the same catalog as the skies.
+        frozen = frozen_particle_models(model_ids)
+        log(f"particles and ribbons frozen with their animations: {len(frozen)} models (mods {', '.join(map_mods) or 'none'} and the shared data)")
+        for name, data in sky_files(tileset, sky_start, read, {"models": keys["models"] + frozen, "files": keys["files"]}):
             archive.write(name, data)
         for name, data in painted_texture_files(opts["paintTextures"]):
             archive.write(name, data)
@@ -400,6 +422,8 @@ def main(argv: list[str]) -> Path:
         "keepIntro": opts["keepIntro"],
         "sky": {"mode": sky_mode, "start": sky_start, "colours": list(SKIES), "mapSky": map_sky, "keys": bool(keys["models"])},
         "hideDoodads": hide_doodads,
+        # What the render cuts out of the map (ELEMENTS-PLAN.md): structures, towns, camps.
+        "elements": element_data,
         # The status strip (two columns) sits in the top-left corner; this many pixels of each
         # screenshot's left edge are blanked by the capture and left out by the stitch.
         "status": {"cells": STATUS_CELLS, "rows": STATUS_ROWS, "cellUnits": [STATUS_CELL_W, STATUS_CELL_H], "pageLeft": 64, "mapId": map_id},

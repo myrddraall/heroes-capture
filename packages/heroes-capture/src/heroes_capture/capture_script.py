@@ -58,7 +58,6 @@ def capture_script(
     keep_intro: bool = False,
     arena: bool = False,
     boss: bool = False,
-    cliff_doodads: list[str] = (),
     hole_cells: list[tuple[int, int]] = (),
 ) -> str:
     """The script for one prepared map.
@@ -80,9 +79,7 @@ def capture_script(
     let the intro cutscene play out (diagnostic). arena: the map plays rounds (its script includes
     LibAREN: Punisher Arena), so a core killed ends only the round, and "quit" first gives the
     other team all but its last round win. boss: the map's script includes LibMLBD (Battlefield
-    of Eternity), so the elements probe's "el boss" spawns its Immortal. cliff_doodads: the doodad
-    types the map places as part of its terrain (t3Terrain.xml's cliffDoodadList), which neither
-    the terrain switch nor the doodad message hides ("el isolate" hides them by type). hole_cells:
+    of Eternity), so the elements probe's "el boss" spawns its Immortal. hole_cells:
     the cells of the holes the cores stand on, filled in the map file (inject.py): the script opens
     them again with TerrainShowRegion as it starts, so the map looks as the game draws it, and
     shows them on "el holes show" (the ground where a core stood).
@@ -134,24 +131,23 @@ def capture_script(
     # hidden while the match runs (a core's hole, which the map file marks, filled and opened again).
     terrain_line = ("        TerrainShowRegion(RegionCircle(Point(StringToFixed(StringWord(hrsCap_cmd, 4)), StringToFixed(StringWord(hrsCap_cmd, 5))),"
                     " StringToFixed(StringWord(hrsCap_cmd, 6))), (StringWord(hrsCap_cmd, 3) == \"show\"));\n")
-    # "el isolate on <x> <y> <radius>" / "el isolate off" (the elements probe): all the terrain,
-    # every doodad, the cliff doodads and every unit in sight outside the circle hidden, so what is
+    # "el isolate on <x> <y> <radius>" / "el isolate off", and "el env off|on" (the elements capture):
+    # all the terrain, every doodad and every unit in sight outside the circle hidden, so what is
     # left (a structure, a camp, the objective) stands alone over the sky, or all shown again (the
-    # cloud layers hidden again after).
-    def cliff_lines(show: str) -> str:
-        return "".join(f'\n            libNtve_gf_ShowHideDoodadsInRegion({show}, {map_region}, "{name}");' for name in cliff_doodads)
-
-    isolate_lines = f"""        if ((StringWord(hrsCap_cmd, 3) == "on")) {{
-            TerrainShowRegion({map_region}, false);
-            hrsCap_DoodadsMessage("SetVisibility 0");{cliff_lines("false")}
-            hrsCap_IsolateUnits(StringToFixed(StringWord(hrsCap_cmd, 4)), StringToFixed(StringWord(hrsCap_cmd, 5)), StringToFixed(StringWord(hrsCap_cmd, 6)));
-        }}
-        else {{
-            TerrainShowRegion({map_region}, true);
-            hrsCap_OpenHoles();
-            hrsCap_DoodadsMessage("SetVisibility 1");{cliff_lines("true")}{doodad_lines.replace(chr(10) + "    ", chr(10) + "            ")}
-            hrsCap_RestoreUnits();
-        }}
+    # cores' holes opened again, the cloud layers hidden again).
+    isolate_function = f"""void hrsCap_Isolate (bool lp_on, fixed lp_x, fixed lp_y, fixed lp_radius) {{
+    if (lp_on) {{
+        TerrainShowRegion({map_region}, false);
+        hrsCap_DoodadsMessage("SetVisibility 0");
+        hrsCap_IsolateUnits(lp_x, lp_y, lp_radius);
+    }}
+    else {{
+        TerrainShowRegion({map_region}, true);
+        hrsCap_OpenHoles();
+        hrsCap_DoodadsMessage("SetVisibility 1");{doodad_lines.replace(chr(10) + "    ", chr(10) + "        ")}
+        hrsCap_RestoreUnits();
+    }}
+}}
 """
     # The cores' holes as a region: a small circle on each cell's centre (the terrain switch goes by
     # cells; Blizzard's code builds regions with RegionAddCircle, never RegionAddRect).
@@ -188,7 +184,7 @@ def capture_script(
         "arena_quit_line": arena_quit_line,
         "boss_line": boss_line,
         "terrain_line": terrain_line,
-        "isolate_lines": isolate_lines,
+        "isolate_function": isolate_function,
         "hole_lines": hole_lines,
         "has_holes": "true" if hole_cells else "false",
     }

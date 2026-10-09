@@ -2,19 +2,17 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: the elements probe on Battlefield of Eternity, now only the cores' holes
-rem (ELEMENTS-PLAN.md, The bare terrain): filled in the map file when it is prepared, opened by
-rem the script as it starts. On the Order core: the hole shown and opened again ("el holes"),
-rem the core alone over the sky and everything shown again, then the core killed, its remains
-rem cleared and the hole shown (the ground where it stood). Its shots go to
-rem tmp\probe-elements-<time>\, the differences to the log.
+rem Current step: a full elements render of Battlefield of Eternity. Each standing structure also
+rem shot with each neighbour faded in beside it, so the stitch can tell which is in front where
+rem they overlap (a wall over a tower's base but under its orb); the viewer applies those masks.
+rem Each kind's rubble at its chosen time; no unit outlined under the mouse.
 rem A failed run leaves its working files in tmp\ (pip, when it runs, writes tmp\setup.log).
 setlocal
 pushd "%~dp0"
 set "PYTHONPATH=%~dp0src"
 rem The tool's dependencies, installed quietly when missing (pip's output in tmp\setup.log).
 py -c "import heroes_capture.cli, numpy, PIL, pyvips, scipy, mss, pydirectinput, dxcam, typer, rich, pmtiles" 2>nul || call :install || goto :copy
-py -m heroes_capture map render "Battlefield of Eternity" --probe-elements
+py -m heroes_capture map render "Battlefield of Eternity" --structures elements --force
 popd
 
 :copy

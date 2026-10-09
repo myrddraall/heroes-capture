@@ -240,6 +240,28 @@ def light_sets(storage: Storage) -> dict:
     return {"terrains": terrains, "lights": lights}
 
 
+def map_model_ids(storage: Storage, map_mods: list[str]) -> list[str]:
+    """Every model (CModel) a map's data can use: those of the core mod and the shared Heroes data
+    (every map has them), and of the mods the map names in its DocumentInfo, with the mods each of
+    those names in turn. Abstract ones (default="1") left out."""
+    wanted, queue = set(), [m.lower() for m in map_mods]
+    while queue:
+        mod = queue.pop()
+        if mod in wanted:
+            continue
+        wanted.add(mod)
+        for info in storage.find(f"*\\{mod}\\documentinfo"):
+            queue += [m.decode().lower() for m in re.findall(rb"([A-Za-z0-9_]+\.stormmod)", storage.read(info) or b"")]
+    ids = []
+    for name in storage.find("*modeldata.xml"):
+        low = name.lower()
+        if not (low.startswith(("mods\\core.stormmod\\", "mods\\heroesdata.stormmod\\")) or any(f"\\{mod}\\" in low for mod in wanted)):
+            continue
+        text = (storage.read(name) or b"").decode("utf-8", errors="replace")
+        ids += [m.group(2) for m in re.finditer(r'<CModel\b([^>]*)\bid="([^"]+)"', text) if 'default="1"' not in m.group(1)]
+    return sorted(set(ids))
+
+
 def sky_model_file(storage: Storage, file_name: str) -> bytes | None:
     """A skybox model's .m3 (as named in sky.py's PARALLAX_KEYS), or None."""
     stem = file_name.rsplit(".", 1)[0].lower()

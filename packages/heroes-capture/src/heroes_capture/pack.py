@@ -48,9 +48,9 @@ ARCHIVE_IMAGES = (
 
 
 def variant_folder(out: Path, structures: str) -> Path:
-    """Where a render's pack and raw layers go in its map's folder: the map itself, or terrain/
-    for the structures hidden."""
-    return out if structures != "hide" else out / "terrain"
+    """Where a render's pack and raw layers go in its map's folder: the map itself, terrain/ for
+    the structures hidden, or elements/ for the elements render (ELEMENTS-PLAN.md)."""
+    return {"hide": out / "terrain", "elements": out / "elements"}.get(structures, out)
 
 
 def is_written(out: Path, structures: str) -> bool:
@@ -263,11 +263,55 @@ def collect_raw(out: Path, raw: Path, out_id: str, images: list[str]) -> tuple[l
         made = out / f"{out_id}-composite{suffix}.png"
         if made.exists():
             shutil.move(made, raw / f"composite{suffix}.png")
-    # The rest of the stitch's files (geo files, previews, an earlier render's tiles and viewer).
+    # The rest of the stitch's files (geo files, previews, an earlier render's tiles and viewer),
+    # but its elements' cut-outs and their index: collect_elements takes those.
     for leftover in out.glob(f"{out_id}*"):
+        if leftover.name.startswith(f"{out_id}-elements"):
+            continue
         shutil.rmtree(leftover) if leftover.is_dir() else leftover.unlink()
     (out / "vips-properties.xml").unlink(missing_ok=True)
     return layers + maps, arenas or None
+
+
+def collect_elements(out: Path, raw: Path, pack: Path, manifest: dict, layer_id: str) -> dict | None:
+    """The elements render's cut-outs (stitch.write_elements: <id>-elements/ and its index) moved
+    into raw/elements/, each saved in the pack as elements/<key>.webp (lossless: small images,
+    their soft edges kept exact), and the pack's data.elements (PACK.md, Elements): every
+    structure and camp the map has, each with its states' files and rectangles in the map layer's
+    pixels. None when the render has no elements."""
+    index_path = out / f"{manifest['id']}-elements.json"
+    if not index_path.exists():
+        return None
+    index = json.loads(index_path.read_text())
+    source = out / f"{manifest['id']}-elements"
+    (raw / "elements").mkdir(parents=True, exist_ok=True)
+    (pack / "elements").mkdir(parents=True, exist_ok=True)
+    states: dict[tuple[str, int], dict] = {}
+    for cut in index["cutouts"]:
+        if cut["file"] is None:  # the element leaves nothing in this state (a fallen moonwell)
+            states.setdefault((cut["kind"], cut["element"]), {})[cut["state"]] = None
+            continue
+        shutil.move(source / cut["file"], raw / "elements" / cut["file"])
+        pyvips.Image.new_from_file(str(raw / "elements" / cut["file"])).webpsave(str(pack / "elements" / f"{cut['key']}.webp"), lossless=True)
+        state = {"file": f"elements/{cut['key']}.webp", "rect": cut["rect"]}
+        # Where a standing neighbour is in front of it: a mask (white: hidden) over the same rect.
+        hidden = []
+        for mask in cut.get("hiddenBy") or []:
+            shutil.move(source / mask["file"], raw / "elements" / mask["file"])
+            name = mask["file"].removesuffix(".png") + ".webp"
+            pyvips.Image.new_from_file(str(raw / "elements" / mask["file"])).webpsave(str(pack / "elements" / name), lossless=True)
+            hidden.append({"id": mask["id"], "file": f"elements/{name}"})
+        if hidden:
+            state["hiddenBy"] = hidden
+        states.setdefault((cut["kind"], cut["element"]), {})[cut["state"]] = state
+    shutil.rmtree(source, ignore_errors=True)
+    index_path.unlink()
+    found = manifest.get("elements") or {}
+    structures = [{"id": u["id"], "type": u["type"], "cell": [u["x"], u["y"]], "owner": u["owner"], "town": u["town"], "core": u["core"],
+                   "states": states.get(("structure", u["id"]), {})} for u in found.get("structures", [])]
+    camps = [{"camp": c["camp"], "type": c["type"], "cell": [c["x"], c["y"]], "states": states.get(("camp", c["camp"]), {})}
+             for c in found.get("camps", [])]
+    return {"layer": layer_id, "structures": structures, "towns": found.get("towns", []), "camps": camps}
 
 
 def write(out: Path, manifest: dict, images: list[str]) -> Path:
@@ -290,7 +334,7 @@ def write(out: Path, manifest: dict, images: list[str]) -> Path:
                     arena["boundsCells"] = bounds
                     arena["middleCell"] = [(bounds["left"] + bounds["right"]) / 2, (bounds["bottom"] + bounds["top"]) / 2]
         (raw / "layers.json").write_text(json.dumps({"format": FORMAT, "arenas": arenas, "layers": layers}, indent=2))
-        pack.mkdir(parents=True)
+        pack.mkdir(parents=True, exist_ok=True)
         packed = []
         for layer in layers:
             entry = dict(layer)
@@ -305,6 +349,7 @@ def write(out: Path, manifest: dict, images: list[str]) -> Path:
                 entry.update(meta, file=f"{layer['id']}.pmtiles")
             packed.append(entry)
         first_map = next(l for l in layers if l["kind"] == "map")
+        element_data = collect_elements(out, raw, pack, manifest, first_map["id"])
         thumbnail = pyvips.Image.thumbnail(str(raw / first_map["file"]), THUMBNAIL_WIDTH)
         thumbnail.flatten(background=BACKDROP).webpsave(str(pack / "thumbnail.webp"), Q=85)
         found_images = {"thumbnail": {"file": "thumbnail.webp", "size": [thumbnail.width, thumbnail.height]}}
@@ -342,7 +387,7 @@ def write(out: Path, manifest: dict, images: list[str]) -> Path:
             "arenas": arenas,
             "layers": packed,
             "images": found_images,
-            "data": {},
+            "data": {"elements": element_data} if element_data else {},
         }
         viewer.write(pack)
         description["files"] = {

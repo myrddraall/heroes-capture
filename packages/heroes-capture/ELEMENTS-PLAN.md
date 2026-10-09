@@ -30,11 +30,15 @@ usual noise):
 | Model actors outside the circle | `SetVisibility 0` | a loot banner stand's banner is a model of its own |
 | Other structures | hidden all at once (`libNtve_gf_ShowHideUnit`), the element shown alone | |
 
-What can't be hidden: the map's **cliff doodads** (`CCliffDoodad`, listed in `t3Terrain.xml`'s
-`cliffDoodadList`): terrain objects the terrain draws itself, with no actor; neither the terrain
-switch nor actor messages reach them, and no Blizzard script touches them. So the cut-out is
-cropped to the circle (`elements.cut_out`); an element whose circle reaches a cliff doodad would
-carry a piece of it (none of the prototype's did).
+What can't be hidden that way: the map's **cliff doodads** (`CCliffDoodad`, listed in
+`t3Terrain.xml`'s `cliffDoodadList`): terrain objects the terrain draws itself, with no actor;
+neither the terrain switch (`TerrainShowRegion`) nor actor messages reach them, and no Blizzard
+script touches them. But the game's executable lists every function and constant a map script
+can use, and next to `TerrainShowRegion` it has `EnvironmentShow` with `c_environmentTerrain`,
+`c_environmentDoodads` and `c_environmentWater`: the terrain switched off as a whole, which should
+take its terrain objects with it (`el env off`; *to see in the next render*). Each source tile is
+also shot once with nothing shown: whatever is still there is left out of its elements' cut-outs
+(what is the same in both), and the stitch logs how much there was.
 
 Then the cut-out is cleaned (`elements.cut_out`, measured on the prototype's three elements):
 
@@ -115,59 +119,68 @@ every standing shot of its tile (a kill can't be undone):
   The `quit` command still ends the match by killing whatever `lv_core` holds.
 - **Side effects:** a town's structures falling runs the map's scripts (announcements, the core
   turning vulnerable, lanes changing); the sweep clears messages and units.
-
-## The bare terrain
-
-The terrain layer is the tile grid shot with **every structure gone**: destroyed (as for the
-rubble) and their remains cleared, so the ground under each is drawn as it is
-(`el clear`, as Blizzard's maps clear a destroyed town: the towers' rubble units removed, the
-death models destroyed by alias, `_DeathModel`, `_Clearable`, `_DeadClearable`, and the debris
-particles). *Probed:* clean ground, no patches, nothing else touched.
-
-**The cores' holes:** each core stands on a small hole in the terrain (bit 4 of the cell's byte
-in `t3CellFlags`: not drawn, the sky shows through; Battlefield of Eternity: 24 and 30 cells),
-which the core's centre shows the sky through. With the core gone the hole is open to the sky.
-
-- Filled in the map file when it is prepared (`elements.fill_structure_holes`: the hole flag
-  cleared on any hole a structure stands on), the ground is drawn there: the floor the map's
-  author painted runs straight through, no seam. *Probed.*
-- But the standing core then shows the floor through its centre instead of the sky, which isn't
-  how the game looks, and the file can't change while the match runs. `TerrainShowRegion` can't
-  fill a hole the file marks, but it can open one (*probed*: hidden and shown again on plain
-  ground). So every prepared map has the holes filled in the file (inject.py), and the script
-  opens them again as it starts, over exactly their cells (a region of one small circle per
-  cell's centre: the switch goes by cells), so the map looks as the game draws it; `el holes
-  show` shows the ground for the bare pass. Anything that shows all the terrain (`el isolate
-  off`) opens them again after. *Probed:* the holes the script opens look the same as the
-  file's own (the core's area differs between the two by no more than between two runs with the
-  file's holes), and the standing core's cut-out is opaque over its whole hole, so in the viewer
-  it hides the ground under it. The core's rubble is shot with the hole open: where the sky shows
-  through it, its cut-out is see-through and the viewer shows the floor there instead.
-- Not used: the replacement core shown in the state it starts the match in (the empty pedestal);
-  restarting the original's opening animation doesn't take it back (*probed*).
-
-## Where each element is shot from
-
-From one of the tiles the map is already shot from, so its geometry is already known and the
-cut-out drops into the map's pixels without a new projection: the tile that has the element
-nearest its centre (the least perspective lean). Its place on that shot is
-`elements.screen_point` (the camera straight down at the tile's centre).
+- **Shot at its best moment:** each kind on each team filmed falling (a frame every quarter
+  second) and the moment its rubble looked best chosen: towers 2 to 3 seconds after the fall,
+  gates 1.2 to 1.3, walls 1.3 to 2.5, moonwells 1.8 to 3.3, forts and keeps 2.6 to 3, cores 4.8
+  (`element_capture.FALL_WAITS`); in a circle as far as it reaches then
+  (`elements.RUBBLE_RADII`: a wall's or moonwell's 6 cells to a core's 22, measured each brought down
+  alone and widened where renders still reached the edge).
+  The Hell team's gates leave no rubble. Scorch marks are drawn on the terrain, which is switched
+  off for these shots.
+- **Brought down in view:** a fall gives off its particles (smoke, dust, sparks, a core's lava)
+  only near the camera. *Probed:* with the camera far away, or far back over the whole map, a
+  copy's rubble had only its chunks; at the edge of the capture camera's view a wall's had none;
+  with the camera 2.5 times further back and the fall in the middle of its view, every kind had
+  all of them. So whatever falls together falls a group at a time (`elements.view_groups`: the
+  middle half of that view either way), the camera over each group (`el wide`).
+- **Prepared by copies:** a copy of a structure (`el copyfall`: same type, owner and facing) falls
+  on a spare spot while the structures stand, and its rubble is shot there, recorded as if from
+  its structure's cell (the camera moved by the difference: the view straight down is the same
+  anywhere). *Probed:* a copy's rubble matches its structure's under the same lighting; on
+  Battlefield of Eternity the Hell side lights a copy orange, so each spot is chosen under its
+  structure's lighting (the map's `LightingMap.tga`, where it has one), clear of every other
+  circle, on the same part of a cell (`elements.copy_spots`, when the map is prepared). A core's
+  copy lacks the statue and shield crystals the map's script gives the real core, and a keep's
+  copy (`TownTownHallL3`) crashed the game in every launch (the forts' were fine), so cores and
+  keeps fall themselves; so does any type whose copy crashes the game (remembered across the
+  run's relaunches) and any structure the map has no spot for. *Tried and dropped:* copies on
+  their structures' own cells with their rubble hidden: a hall's and most gates' and walls'
+  remains hide and come back exactly (`el dmsg c`: the actors whose scope contains `_DeathModel`,
+  by centre), but some gates' and walls' didn't show again, and a fallen tower's remains neither
+  hide nor move.
 
 ## The run
 
-1. **Element pass:** for each tile that's an element's source: the camera on it; each of its
-   structures shown alone and shot alone over the sky; its camps and objectives spawned, frozen,
-   shot alone over the sky, removed.
-2. **Rubble pass:** for each source tile, its structures brought down one at a time, each left to
-   settle and its rubble shot alone over the sky; the cores with their holes opened.
-3. **Clearing:** every structure on the map destroyed (the cores after their replacements take
-   over) and the remains cleared; the cores' holes shown.
+1. **Element pass:** the whole scene hidden once (every structure and unit; the terrain, doodads and
+   water switched off: *probed*, nothing is left, the cliff doodads included) over the white sky.
+   The structures aren't hidden but faded out by opacity (`el fadeall 0`; "el env off" leaves
+   them): each keeps its look as the map paused it once ready, its effects built up while the
+   map ran. *Probed:* faded out a structure leaves nothing (a gate a trace), faded back in it is
+   exactly as it stood, effects and a core's shield crystals included; hidden and shown again it
+   restarts its animations (a level 3 tower's into its birth: a Heaven tower's golden glow, then
+   white wings; a Hell tower's red flare, then a closed claw) and gives off no particles until
+   it plays. Then the camera straight above
+   each structure in turn, in the middle of the screen (`el at`: the lighting refitted there as
+   the tiles do, without the rest of their scene; *probed:* without a refit at the element,
+   structures away from the last one came out duller, the keeps' glows half gone), the structure
+   faded in, shot over white and over black (the black sky detected as the tiles do, not waited
+   for), faded out. The camps spawned with the scene hidden (those clear of every structure's
+   circle), born during the play, shot after the structures.
+2. **Rubble pass:** prepared during the first standing wave: every copy brought down on its spot
+   (the slowest to settle first, so each has settled when everything is paused); each wave after
+   plays only its own structures, so the copies' rubble stays paused. Then each copy's rubble shot
+   on its spot, with no waiting. The rest then fall in waves (`elements.rubble_waves`: none in a
+   wave near enough another for their rubble to share a shot; the cores in the last, after hidden
+   replacements with no model take their places), each wave left to settle, each one's rubble
+   shot alone, then cleared away.
+3. **Clearing:** the scene shown again, the remains cleared, and the fallen town structures' own
+   actors (a town hall's outlives it and goes on drawing its patch: `Signal
+   ClearTownStructureDeathModel`); the cores' holes shown.
 4. **Bare pass:** the tile grid as now: the terrain layer.
 
-Battlefield of Eternity: about 72 structures standing and as rubble, 4 camps and the Immortals,
-each a pair of shots plus the isolate and restore around it (a few seconds each in the probe),
-from a few dozen source tiles. An estimate until stage 2 times it: some minutes more than a
-render now.
+Battlefield of Eternity: 72 structures, 4 camps. The element phase took 14 minutes with each
+element isolated and restored on its own and each structure brought down on its own, 3.4 with the
+scene hidden once and the rubble shot all at once.
 
 ## The pack
 
@@ -201,7 +214,14 @@ and each map's stat-event names.
    isolating an element over the sky and its cut-out, camps and the objective on demand, rubble,
    the core replacement, clearing, the cores' holes (filled in the file, opened by the script).
 2. **All structures and camps** of Battlefield of Eternity through the run above: the element,
-   rubble, clearing and bare passes; the pack format; the viewer's toggles.
+   rubble, clearing and bare passes; the pack format; the viewer's toggles. *Built, not yet run in
+   the game:* the element list read when a map is prepared (`elements.element_list`: structures
+   with their towns from the script's town data and the map's regions, camps from the script's
+   jungle data and the map's points), the passes (`element_capture.py`, `--structures elements`,
+   its own pack in `elements/`), the cut-outs placed by the stitch (`stitch.write_elements`), the
+   pack's `data.elements` (PACK.md, Elements) and the reference viewer's elements layer. Still to
+   do: the seams routed so each element's area of the map comes from the tile it was shot from;
+   maps of several arenas.
 3. **Battlefield of Eternity's objective** (the Immortals' duel), with its event states.
 4. **Replay link:** element states from a replay's tracker events at a chosen time.
 5. **Other maps:** structures and camps are generic (read from each map); objectives per map.

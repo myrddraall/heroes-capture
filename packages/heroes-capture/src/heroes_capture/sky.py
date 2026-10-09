@@ -8,6 +8,7 @@ the script sets the camera-fixed skybox with GameSetBackground: white at each ti
 second clean shot, command "sky <colour>" for probes.
 """
 
+import html
 import struct
 
 TEXTURES = "Assets\\Textures\\"
@@ -212,6 +213,15 @@ def append_to_catalog(existing: str | None, entries: list[str]) -> str:
     if existing and "</Catalog>" in existing:
         return existing.replace("</Catalog>", f"{eol.join(entries)}{eol}</Catalog>", 1)
     return f'<?xml version="1.0" encoding="us-ascii"?>{eol}<Catalog>{eol}{eol.join(entries)}{eol}</Catalog>{eol}'
+
+
+def frozen_particle_models(model_ids: list[str]) -> list[str]:
+    """Model entries that make each model's particles and ribbons hold still while its animations are
+    paused (the capture pauses every animation on the map): without them a model's particles and
+    ribbons run on whatever its animations do, which is what kept the structures' and doodads'
+    effects moving. The two settings models have for it (Blizzard's data sets them on a few)."""
+    return [f'    <CModel id="{html.escape(i, quote=True)}"><Flags index="FreezeParticlesAndRibbonsOnAnimPause" value="1"/>'
+            f'<PausedParticleSystemBehavior value="FreezeAll"/></CModel>' for i in model_ids]
 
 
 def sky_files(tileset: str, start: str, read, extra: dict | None = None) -> list[tuple[str, bytes]]:
