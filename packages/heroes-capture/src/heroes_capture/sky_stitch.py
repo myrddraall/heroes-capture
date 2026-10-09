@@ -15,8 +15,8 @@ Layers, written next to the map image:
 On a map of several arenas (Punisher Arena) the layers and <id>-layers.json, listing each
 arena's image, but no composites.
 
-Each sky shot is matted on its own (the haze from its shots over white and black, with the white
-level the game's lighting gives the key taken from the white-without-haze shot; the background
+Each sky shot is matted on its own (the haze from its shots over the light grey and black, with the
+level the game's lighting gives the key taken from the light-grey-without-haze shot; the background
 art from its shots over black and over the fixed skybox), then the shots are blended into one
 image per layer: the view of the layer from the middle camera position, as if the screen were
 large enough to show all of it.
@@ -46,12 +46,16 @@ from scipy.optimize import least_squares
 from .frames import PNG_COMPRESSION, frame_exists, load_frame
 from .matching import phase_correlate
 from .runlog import log, warn, stage
+from .sky import LIGHT_LEVEL
 from .workers import ordered_map
 
 MATCH_PATCH = 128  # the side of a matched patch, in half-size pixels (256 screen pixels)
 MATCH_STRENGTH = 0.12  # a patch match weaker than this is left out (soft haze matches falsely below it)
 MIN_TILT_MATCHES = 12  # fewer matches in all: the shells taken as level (each shot only shifted)
-KEY_FULL = 200  # the white key's level (230 in full) from which the haze matte trusts it; below it the haze is cut off
+# The light key's level, as a share of its full level, from which the haze matte trusts it; below it
+# the haze is cut off (200 of the white key's 230 when the key was white; the light grey's is about
+# LIGHT_LEVEL).
+KEY_FULL = 200 / 230 * LIGHT_LEVEL
 MIN_DEPTH_MATCHES = 40  # fewer for a layer: its depth at the middle from its measured rate (a few tenths of a percent off)
 
 
@@ -65,9 +69,9 @@ def _mean3(a: np.ndarray) -> np.ndarray:
 
 def _haze(white: np.ndarray, black: np.ndarray, level: np.ndarray, left: int) -> np.ndarray:
     """RGBA (float, 0..1 alpha) of the haze: alpha from how much the background shows through,
-    the difference between the shots over white and over black against the white level.
+    the difference between the shots over the light grey and over black against the key's level.
 
-    Only where the white key is behind the haze: past the end of the sky shells (the far south
+    Only where the light key is behind the haze: past the end of the sky shells (the far south
     of Punisher Arena, whose haze reaches further than its background art: a misalignment in the
     map) that difference says nothing, and the haze is cut off there, transparent, so the layer
     shows it over the art only."""
@@ -267,7 +271,7 @@ def build(manifest: dict, base: Path, out: Path, images: list[str]) -> None:
     def grey(n: str) -> dict:
         """Shot n at half size, for matching: the background art's brightness; the haze's matte."""
         bare = _mean3(load_frame(folder / f"{n}-bare")[::2, ::2].astype(np.float32))
-        white, black, level = (_mean3(load_frame(folder / f"{n}-{v}")[::2, ::2].astype(np.float32)) for v in ("white", "black", "whitebare"))
+        white, black, level = (_mean3(load_frame(folder / f"{n}-{v}")[::2, ::2].astype(np.float32)) for v in ("light", "black", "lightbare"))
         return {"background": bare, "haze": np.clip(1.0 - (white - black) / np.maximum(level, 1.0), 0.0, 1.0) * 255}
 
     # The shot's weights: falling off towards its edges, none over the status strip's column (the
@@ -286,7 +290,7 @@ def build(manifest: dict, base: Path, out: Path, images: list[str]) -> None:
         del greys
         planes = _fit_planes(matches, cameras, centre, focal, depths)
         for layer, make in (("background", lambda n: _background(_load(folder / f"{n}-bare"), _load(folder / f"{n}-bareoverfixed"), fixed)),
-                            ("haze", lambda n: _haze(_load(folder / f"{n}-white"), _load(folder / f"{n}-black"), _load(folder / f"{n}-whitebare"), left))):
+                            ("haze", lambda n: _haze(_load(folder / f"{n}-light"), _load(folder / f"{n}-black"), _load(folder / f"{n}-lightbare"), left))):
             plane = planes[layer]
             # Each shot onto the view from the centre camera position: where its corners land
             # sets the canvas and the shot's box on it.

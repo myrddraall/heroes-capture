@@ -38,6 +38,7 @@ from .frames import PNG_COMPRESSION, frame_exists, load_frame
 from .matching import phase_correlate
 from .workers import ordered_map
 from .runlog import log, warn, log_timings, set_log_file, stage
+from .sky import LIGHT_LEVEL
 
 MATCH_SCALE = 2  # screenshots are matched at half size: fast, and still ~0.2 px precise
 FEATHER = 16  # pixels blended either side of each seam: enough to hide lighting steps, narrow enough not to double leaning objects
@@ -81,30 +82,56 @@ def _mean3(a: np.ndarray) -> np.ndarray:
     return np.true_divide(total, np.intp(3), out=total, casting="unsafe")
 
 
-def white_level(white: np.ndarray, black: np.ndarray) -> float | None:
-    """The level the game renders the white skybox at, from a pair of shots over white and black:
-    the median of the pixels that are sky (black in the black shot, flat and bright in the white
-    one); None when fewer than 2000 are."""
+def light_level(white: np.ndarray, black: np.ndarray) -> float | None:
+    """The level the game renders the matte's light sky at (sky.LIGHT_SKY, about LIGHT_LEVEL), from
+    a pair of shots over it and over black (`white`: the light one): the median of the pixels that
+    are sky (black in the black shot, flat and bright in the light one); None when fewer than 2000
+    are."""
     w, b = white.astype(np.float32), black.astype(np.float32)
     w_min = _min3(w)
     sky = (_max3(b) <= 4) & (w_min >= 120) & (_max3(w) - w_min <= 8)
     return float(np.median(w[sky].mean(axis=1))) if sky.sum() >= 2000 else None
 
 
+# Pixels whose difference between the two shots isn't grey by more than this (the largest channel
+# less the smallest) differ by something other than the sky showing through.
+MOVED_SPREAD = 24
+
+
+def moved_pixels(white: np.ndarray, black: np.ndarray) -> np.ndarray:
+    """The pixels taken for something that moved between a tile's two shots: whose difference isn't
+    grey (MOVED_SPREAD), in patches at least 3 pixels across (an opening). Anything that really
+    moves (a unit walking in, a pulsing effect) is a patch; once the map's effects were frozen and
+    the light sky a grey, what was left was one- and two-pixel specks along the floating pieces'
+    edges, which differ by a hair between the shots: left to the matte, they keep their soft edge
+    instead of turning opaque in the black shot's colour (dark dots along the rim)."""
+    spread = np.empty(white.shape[:2], bool)
+    for r0 in range(0, white.shape[0], MATTE_BAND):
+        d = white[r0:r0 + MATTE_BAND].astype(np.int16) - black[r0:r0 + MATTE_BAND].astype(np.int16)
+        spread[r0:r0 + MATTE_BAND] = (_max3(d) - _min3(d)) > MOVED_SPREAD
+    if not spread.any():
+        return spread
+    from scipy import ndimage
+
+    return ndimage.binary_opening(spread, structure=np.ones((3, 3), bool))
+
+
 def matte(white: np.ndarray, black: np.ndarray, level: float, animated: bool = True, moved: list | None = None) -> np.ndarray:
-    """Difference matting: RGBA from the shots over white and over black. A pixel that is sky
-    in both differs by the whole white level; one that is all map is the same in both; in
-    between (soft edges, glass, glow) the difference is exactly the see-through share.
-    Colour from the black shot (the map's own light, nothing of the sky in it),
-    un-premultiplied. The white level is measured, not assumed (the game renders the white
-    skybox at about 230): see white_level. `animated`: a pixel whose difference isn't grey taken
-    for something that moved between the shots and left opaque (off for the elements' cut-outs:
-    nothing moves in them, and a tinted see-through glow, a core's shield, has a difference that
-    isn't grey). `moved`: given, the number of pixels taken for moving is added to it, a count a
-    band of rows."""
+    """Difference matting: RGBA from the shots over the light sky and over black (`white`: the light
+    one). A pixel that is sky in both differs by the whole light level; one that is all map is the
+    same in both; in between (soft edges, glass, glow) the difference is exactly the see-through
+    share. Colour from the black shot (the map's own light, nothing of the sky in it),
+    un-premultiplied. The light level is measured, not assumed (the game renders the light grey of
+    sky.LIGHT_SKY at about 198): see light_level. `animated`: a pixel taken for something that moved
+    between the shots (moved_pixels) left opaque (off for the elements' cut-outs: nothing moves in
+    them, and a tinted see-through glow, a core's shield, has a difference that isn't grey).
+    `moved`: given, the number of pixels taken for moving is appended to it."""
     # In bands of rows small enough to stay in the processor's cache: every pixel is worked
     # out on its own, and with whole tiles the threads spent their time waiting on memory.
     out = np.empty((*white.shape[:2], 4), dtype=np.uint8)
+    changed_all = moved_pixels(white, black) if animated else None
+    if moved is not None:
+        moved.append(int(changed_all.sum()) if changed_all is not None else 0)
     for r0 in range(0, white.shape[0], MATTE_BAND):
         r1 = r0 + MATTE_BAND
         w = white[r0:r1].astype(np.float32)
@@ -112,10 +139,8 @@ def matte(white: np.ndarray, black: np.ndarray, level: float, animated: bool = T
         d = w - b
         d_mean = _mean3(d)
         see_through = np.clip(d_mean / level, 0, 1)
-        # Not grey: something changed between the shots (an animated glow), no matte there.
-        changed = (_max3(d) - _min3(d)) > 24 if animated else np.zeros(d.shape[:2], bool)
-        if moved is not None:
-            moved.append(int(changed.sum()))
+        # Something that moved between the shots (moved_pixels): no matte there.
+        changed = changed_all[r0:r1] if changed_all is not None else np.zeros(d.shape[:2], bool)
         alpha = np.where(changed, 1.0, 1.0 - see_through)
         alpha = np.where(d_mean < -8, 1.0, alpha)
         # Un-premultiplied colour: the black shot over alpha. Only where it is see-through:
@@ -140,7 +165,7 @@ class Shots:
         # Only when this map is shot over white and black (manifest sky mode): a results folder
         # can hold -black shots left from an earlier run of a map since shot once per tile.
         self.matting = (manifest.get("sky") or {}).get("mode") == "matte"
-        self.white_level: float | None = None
+        self.light_level: float | None = None
         self._small: dict[int, np.ndarray | None] = {}
         # Each matted tile's pixels taken for something moving between its two shots (matte):
         # logged, to tell whether anything still moves now that the map's effects are frozen.
@@ -167,19 +192,20 @@ class Shots:
         return None if grey is None else grey.astype(np.float32)
 
     def levels_for(self, order: list[int]) -> dict[int, float]:
-        """The white level each matted tile is matted with, in this order: measured on the first
-        tile that shows enough sky (pixels black in the black shot), 230 for any before it. Done
+        """The light sky's level each matted tile is matted with, in this order: measured on the
+        first tile that shows enough sky (pixels black in the black shot), LIGHT_LEVEL for any
+        before it. Done
         in order before the tiles are loaded in parallel, so the result doesn't depend on which
         thread finishes first."""
         levels = {}
         for i in order:
             if not self.matting or not self.has_black(i):
                 continue
-            if self.white_level is None:
-                self.white_level = white_level(load_frame(self.stem(i)), load_frame(self.black_stem(i)))
-                if self.white_level is not None:
-                    log(f"  white skybox level {self.white_level:.1f}")
-            levels[i] = self.white_level or 230.0
+            if self.light_level is None:
+                self.light_level = light_level(load_frame(self.stem(i)), load_frame(self.black_stem(i)))
+                if self.light_level is not None:
+                    log(f"  light sky level {self.light_level:.1f}")
+            levels[i] = self.light_level or LIGHT_LEVEL
         return levels
 
     def load(self, i: int, level: float | None) -> np.ndarray:
@@ -190,7 +216,7 @@ class Shots:
         if not self.matting or not self.has_black(i):
             return np.dstack([white, np.full(white.shape[:2], 255, dtype=np.uint8)])
         counts: list[int] = []
-        rgba = matte(white, load_frame(self.black_stem(i)), level if level is not None else 230.0, moved=counts)
+        rgba = matte(white, load_frame(self.black_stem(i)), level if level is not None else LIGHT_LEVEL, moved=counts)
         self.moved[i] = (sum(counts), white.shape[0] * white.shape[1])
         return rgba
 
@@ -611,9 +637,8 @@ MOVING_SHOWN = 3
 
 
 def moving_mask(white: np.ndarray, black: np.ndarray) -> np.ndarray:
-    """The pixels matte takes for something that moved between a tile's two shots."""
-    d = white.astype(np.float32) - black.astype(np.float32)
-    return (_max3(d) - _min3(d)) > 24
+    """The pixels matte takes for something that moved between a tile's two shots (moved_pixels)."""
+    return moved_pixels(white, black)
 
 
 def show_moving(shots: Shots, tiles: list[int]) -> None:
@@ -852,7 +877,7 @@ def write_elements(manifest: dict, base: Path, out: Path, layout: Layout, scale:
     image's crop. Writes <id>-elements/<key>.png and <id>-elements.json (each one's element, state
     and rectangle in the map image; no file where nothing is left of it in that state). Returns how
     many states were placed."""
-    from .elements import cut_out, screen_point
+    from .elements import circle_box, cut_out, screen_point
 
     folder = base / "elements"
     record_path = folder / "elements.json"
@@ -879,16 +904,29 @@ def write_elements(manifest: dict, base: Path, out: Path, layout: Layout, scale:
 
     by_id = {u["id"]: u for u in (manifest.get("elements") or {}).get("structures", [])}
 
-    def place(key: str, record: dict) -> dict | None:
-        """One element's state cut out and saved; its entry (no file: nothing there), or None."""
+    def place(key: str, record: dict) -> tuple[dict | None, dict | None, list[tuple[str, str]]]:
+        """One element's state cut out and saved (a worker's part): its entry (no file: nothing
+        there) or None, what masks() needs of it, and what to log (in order, by the caller). Only
+        the part of the shots round its circle is matted (circle_box), the white level measured on
+        the whole shot."""
+        notes: list[tuple[str, str]] = []
         tile, shot = record["tile"], record.get("shot", key)
         if tile not in layout.placed or not frame_exists(folder / shot) or not frame_exists(folder / f"{shot}-black"):
-            warn(f"  element {key}: its tile ({tile + 1}) isn't in the map, or its shots are missing; left out")
-            return None
+            notes.append(("warn", f"  element {key}: its tile ({tile + 1}) isn't in the map, or its shots are missing; left out"))
+            return None, None, notes
         planned = layout.by_index[tile]
         tile_camera = positions.get(str(tile)) or {"x": planned["x"], "y": planned["y"]}
         camera = record.get("camera") or tile_camera
         centre = screen_point(record, camera, screen, scale)
+        radius = record["radius"] * scale
+        white, black = load_frame(folder / shot), load_frame(folder / f"{shot}-black")
+        level = light_level(white, black) or LIGHT_LEVEL
+        cv0, cv1, cu0, cu1 = circle_box(centre, radius, white.shape)
+        part = (slice(cv0, cv1), slice(cu0, cu1))
+
+        def local(p: tuple[float, float]) -> tuple[float, float]:
+            return p[0] - cu0, p[1] - cv0
+
         # What can't be hidden, as its tile's shot with everything hidden shows it (taken from the
         # same camera position, or it wouldn't line up).
         empty_record = records.get(f"empty-{tile}")
@@ -896,7 +934,7 @@ def write_elements(manifest: dict, base: Path, out: Path, layout: Layout, scale:
         if empty_record and frame_exists(folder / f"empty-{tile}"):
             empty_camera = empty_record.get("camera") or tile_camera
             if np.hypot(empty_camera["x"] - camera["x"], empty_camera["y"] - camera["y"]) * scale < 1:
-                empty = load_frame(folder / f"empty-{tile}")
+                empty = load_frame(folder / f"empty-{tile}")[part]
         # A town structure's rubble: its town's moonwells' and hall's remains kept out (a hall's
         # fall brings its town's moonwells down too, and both their remains outlive the clearing
         # between waves: a moonwell's ring lay in its keep's shot), only what is nearer this one
@@ -904,26 +942,28 @@ def write_elements(manifest: dict, base: Path, out: Path, layout: Layout, scale:
         others = []
         this = by_id.get(record.get("element")) if record["kind"] == "structure" and record["state"] == "rubble" else None
         if this is not None and this.get("town") is not None:
-            others = [screen_point(m, camera, screen, scale) for m in by_id.values()
+            others = [local(screen_point(m, camera, screen, scale)) for m in by_id.values()
                       if m is not this and m.get("town") == this["town"] and m["type"].startswith(LINGERING_REMAINS)]
-        rgba = cut_out(load_frame(folder / shot), load_frame(folder / f"{shot}-black"), centre, record["radius"] * scale, empty, others)
+        rgba = cut_out(white[part], black[part], local(centre), radius, empty, others, level=level)
         alpha = rgba[..., 3]
         rows, cols = np.nonzero(alpha.any(axis=1))[0], np.nonzero(alpha.any(axis=0))[0]
         entry = {"key": key, "kind": record["kind"], "element": record["element"], "state": record["state"]}
         if not len(rows):
             # Nothing left of it (a moonwell leaves no rubble): the state is "nothing".
-            log(f"  element {key}: nothing there")
-            return {**entry, "file": None, "rect": None}
-        v0, v1, u0, u1 = int(rows[0]), int(rows[-1]) + 1, int(cols[0]), int(cols[-1]) + 1
+            notes.append(("log", f"  element {key}: nothing there"))
+            return {**entry, "file": None, "rect": None}, None, notes
+        # In the whole shot's pixels.
+        v0, v1, u0, u1 = cv0 + int(rows[0]), cv0 + int(rows[-1]) + 1, cu0 + int(cols[0]), cu0 + int(cols[-1]) + 1
         # Reaching the circle's edge: the circle may have cut it short (a radius to widen).
         yy, xx = np.nonzero(alpha)
-        if np.hypot(xx - centre[0], yy - centre[1]).max() > record["radius"] * scale - 2:
-            warn(f"  element {key}: its cut-out reaches the edge of its circle ({record['radius']:g} cells); it may be cut short")
+        if np.hypot(xx + cu0 - centre[0], yy + cv0 - centre[1]).max() > radius - 2:
+            notes.append(("warn", f"  element {key}: its cut-out reaches the edge of its circle ({record['radius']:g} cells); it may be cut short"))
         x = layout.placed[tile][0] + u0 + (camera["x"] - tile_camera["x"]) * scale - crop_x0
         y = layout.placed[tile][1] + v0 - (camera["y"] - tile_camera["y"]) * scale - crop_y0
-        Image.fromarray(np.ascontiguousarray(rgba[v0:v1, u0:u1]), "RGBA").save(target / f"{key}.png", compress_level=PNG_COMPRESSION)
-        cropped[key] = {"box": (v0, v1, u0, u1), "alpha": rgba[v0:v1, u0:u1, 3].copy(), "shot": shot}
-        return {**entry, "file": f"{key}.png", "rect": [int(round(x)), int(round(y)), u1 - u0, v1 - v0]}
+        mine = rgba[v0 - cv0:v1 - cv0, u0 - cu0:u1 - cu0]
+        Image.fromarray(np.ascontiguousarray(mine), "RGBA").save(target / f"{key}.png", compress_level=PNG_COMPRESSION)
+        kept = {"box": (v0, v1, u0, u1), "alpha": mine[..., 3].copy(), "shot": shot}
+        return {**entry, "file": f"{key}.png", "rect": [int(round(x)), int(round(y)), u1 - u0, v1 - v0]}, kept, notes
 
     def masks(entry: dict, record: dict) -> list[dict]:
         """A standing structure's masks, one for each neighbour that stands in front of it
@@ -962,20 +1002,23 @@ def write_elements(manifest: dict, base: Path, out: Path, layout: Layout, scale:
     shots = [(key, record) for key, record in sorted(records.items()) if record["kind"] != "empty"]
     placed = []
     cropped: dict[str, dict] = {}
+    # On every core (workers.ordered_map: in order, so the log reads as it did one at a time).
     with ui.bar(len(shots), "elements cut out") as advance:
-        for key, record in shots:
-            entry = place(key, record)
+        for (key, _), (entry, kept, notes) in zip(shots, ordered_map(lambda item: place(*item), shots)):
+            for level, text in notes:
+                (warn if level == "warn" else log)(text)
             if entry is not None:
                 placed.append(entry)
+            if kept is not None:
+                cropped[key] = kept
             advance()
     # Where standing neighbours overlap: which is in front of which, pixel by pixel.
     by_key = {entry["key"]: entry for entry in placed}
     masked = 0
-    for entry in placed:
-        record = records[entry["key"]]
-        if entry.get("file") and record.get("neighbours"):
-            entry["hiddenBy"] = masks(entry, record)
-            masked += len(entry["hiddenBy"])
+    to_mask = [entry for entry in placed if entry.get("file") and records[entry["key"]].get("neighbours")]
+    for entry, found in zip(to_mask, ordered_map(lambda entry: masks(entry, records[entry["key"]]), to_mask)):
+        entry["hiddenBy"] = found
+        masked += len(found)
     if masked:
         log(f"elements: {masked} masks of where a standing neighbour is in front")
     (out / f"{manifest['id']}-elements.json").write_text(json.dumps({"image": image_id, "cutouts": placed}, indent=1))

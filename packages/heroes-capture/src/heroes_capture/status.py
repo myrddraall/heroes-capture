@@ -12,7 +12,7 @@ Cells, top to bottom: 0 white and 1 black (the locator), then bits, least signif
   20..34  camera target x, in 1/64 cells (15 bits)
   35..49  camera target y, in 1/64 cells (15 bits)
   50      unused (always 0)
-  51      sky white     52  sky black
+  51      sky light (the matte's light sky)     52  sky black
   53      tick (flips every sweep, a quarter second)
   54      ready (the gates have opened and the map's opening events are in place)
   55..70  the map's identity (16 bits; the manifest's status.mapId)
@@ -43,7 +43,7 @@ class Status:
     game_seconds: int
     camera_x: float
     camera_y: float
-    sky_white: bool
+    sky_light: bool
     sky_black: bool
     tick: int
     ready: bool
@@ -169,7 +169,7 @@ class StatusStrip:
             game_seconds=value(10, 10),
             camera_x=value(20, 15) / 64.0,
             camera_y=value(35, 15) / 64.0,
-            sky_white=bool(bits[51]),
+            sky_light=bool(bits[51]),
             sky_black=bool(bits[52]),
             tick=bits[53],
             ready=bool(bits[54]),

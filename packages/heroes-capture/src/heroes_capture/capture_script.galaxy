@@ -20,6 +20,7 @@ trigger hrsCap_gt_Pause;
 trigger hrsCap_gt_Move;
 trigger hrsCap_gt_Look;
 trigger hrsCap_gt_Clip;
+trigger hrsCap_gt_Note;
 trigger hrsCap_gt_BgSpeed;
 trigger hrsCap_gt_Unbound;
 trigger hrsCap_gt_RefitWait;
@@ -34,11 +35,12 @@ trigger hrsCap_gt_Sweep;
 trigger hrsCap_gt_FastForward;
 
 // The map's state.
-int hrsCap_skyState = 0;  // 1 white, 2 black, 0 other
+int hrsCap_skyState = 0;  // 1 the matte's light sky (sky.py LIGHT_SKY), 2 black, 0 other
 fixed hrsCap_bgSpeed = 100.0;  // animation speed (percent) "sky" gives a background; command "bgspeed"
 const string hrsCap_mapSky = "${map_sky}";  // the map's own sky models (probes)
 const string hrsCap_mapParallax = "${map_parallax}";
 bool hrsCap_paused = false;  // the map's animations have been paused (once the game started)
+bool hrsCap_eventOff = false;  // the map's event switched off (MapMechanicsLib), before the gates open
 bool[64] hrsCap_frameShown;  // which interface frame types the match showed at its start (hrsCap_SaveFrames), by type less c_syncFrameTypeFirst
 bool hrsCap_forwardStarted = false;  // the fast-forward after the gates opened has begun
 bool hrsCap_ready = false;  // fast-forward done: the map's opening events have happened
@@ -242,6 +244,41 @@ void hrsCap_StatusInit () {
 }
 
 //--------------------------------------------------------------------------------------------------
+// The note: a line of text at the top middle of the screen saying what the capture is waiting on
+// while nothing is being shot (the rubble prepared, a wave falling), so the plain sky the screen
+// shows meanwhile isn't a mystery. "note <text>" shows it, "note" alone hides it; "tile" and
+// "el at", which every shot starts with, hide it first (hrsCap_RunCommand), so no shot has it.
+//--------------------------------------------------------------------------------------------------
+int hrsCap_noteDialog = c_invalidDialogId;
+int hrsCap_noteLabel = c_invalidDialogControlId;
+
+void hrsCap_NoteInit () {
+    int lv_backdrop;
+
+    hrsCap_noteDialog = DialogCreate(1000, 50, c_anchorTop, 0, 30, false);
+    DialogSetImageVisible(hrsCap_noteDialog, false);
+    lv_backdrop = DialogControlCreate(hrsCap_noteDialog, c_triggerControlTypeImage);
+    DialogControlSetPropertyAsString(lv_backdrop, c_triggerControlPropertyImage, PlayerGroupAll(), "Assets/Textures/HrsWhite.dds");
+    DialogControlSetPropertyAsInt(lv_backdrop, c_triggerControlPropertyImageType, PlayerGroupAll(), c_triggerImageTypeNormal);
+    DialogControlSetPropertyAsColor(lv_backdrop, c_triggerControlPropertyColor, PlayerGroupAll(), Color(0.0, 0.0, 0.0));
+    DialogControlSetSize(lv_backdrop, PlayerGroupAll(), 1000, 50);
+    DialogControlSetPosition(lv_backdrop, PlayerGroupAll(), c_anchorTopLeft, 0, 0);
+    hrsCap_noteLabel = DialogControlCreate(hrsCap_noteDialog, c_triggerControlTypeLabel);
+    DialogControlSetFullDialog(hrsCap_noteLabel, PlayerGroupAll(), true);
+    DialogControlSetPosition(hrsCap_noteLabel, PlayerGroupAll(), c_anchorCenter, 0, 0);
+    DialogControlSetPropertyAsString(hrsCap_noteLabel, c_triggerControlPropertyStyle, PlayerGroupAll(), "ScreenButtonText");
+}
+
+void hrsCap_NoteShow (string lp_text) {
+    DialogControlSetPropertyAsText(hrsCap_noteLabel, c_triggerControlPropertyText, PlayerGroupAll(), StringToText(lp_text));
+    DialogSetVisible(hrsCap_noteDialog, PlayerGroupAll(), true);
+}
+
+void hrsCap_NoteHide () {
+    DialogSetVisible(hrsCap_noteDialog, PlayerGroupAll(), false);
+}
+
+//--------------------------------------------------------------------------------------------------
 // The command box: the capture types each command into an edit box of the map's own, in the
 // strip's column (blanked from every shot), as Unicode text ending in ";": "tile 3 12.5 30.25 17;".
 // Text input never acts as a hotkey wherever it lands, and unlike the chat box, which opens and
@@ -272,6 +309,10 @@ void hrsCap_RunCommand (string lp_text, int lp_player) {
     hrsCap_cmdPlayer = lp_player;
     lv_word = StringWord(lp_text, 1);
     lv_t = null;
+    // A shot starts with "tile" or "el at": the note comes down first, so no shot has it.
+    if ((lv_word == "tile") || ((lv_word == "el") && (StringWord(lp_text, 2) == "at"))) {
+        hrsCap_NoteHide();
+    }
     if ((lv_word == "tile")) { lv_t = hrsCap_gt_Tile; }
     else if ((lv_word == "clean")) { lv_t = hrsCap_gt_Clean; }
     else if ((lv_word == "black")) { lv_t = hrsCap_gt_Black; }
@@ -286,6 +327,7 @@ void hrsCap_RunCommand (string lp_text, int lp_player) {
     else if ((lv_word == "bgspeed")) { lv_t = hrsCap_gt_BgSpeed; }
     else if ((lv_word == "quit")) { lv_t = hrsCap_gt_Quit; }
     else if ((lv_word == "el")) { lv_t = hrsCap_gt_Element; }
+    else if ((lv_word == "note")) { lv_t = hrsCap_gt_Note; }
     if ((lv_t != null)) {
         TriggerExecute(lv_t, false, false);
     }
@@ -467,7 +509,7 @@ ${hero_ui_lines}            hrsCap_ApplyCamera(lv_p);
     }
 ${ui_lines}${bounds_line}
     hrsCap_LiftBounds();
-    GameSetBackground(0, "HrsSky${sky_model}", 100.0);  // the camera-fixed skybox (sky.py)
+    GameSetBackground(0, "${sky_model}", 100.0);  // the camera-fixed skybox (sky.py)
     hrsCap_skyState = ${sky_state};${doodad_lines}
     UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
     // Every animation on the map paused (glows, fires, smoke, swaying trees, flags), the way
@@ -547,7 +589,7 @@ void hrsCap_Restore () {
 
     TriggerEnable(hrsCap_gt_Sweep, false);
     hrsCap_bgSpeed = 100.0;
-    GameSetBackground(0, "HrsSky${sky_model}", 100.0);
+    GameSetBackground(0, "${sky_model}", 100.0);
     hrsCap_skyState = ${sky_state};
     if ((hrsCap_mapParallax != "")) {
         GameSetBackground(1, hrsCap_mapParallax, 100.0);
@@ -660,7 +702,7 @@ ${skip_intro_line}    hrsCap_HideLabels();
     // No camera scrolling from the mouse at a screen edge or the keys, from the start and even
     // after something (the intro's exit) has unlocked it.
     CameraLockInput(hrsCap_LocalPlayer(), true);
-    // The gates sooner (GameLib's countdown, before it gets far), then the fast-forward.
+${event_off_lines}    // The gates sooner (GameLib's countdown, before it gets far), then the fast-forward.
     if (!libGame_gv_gameStarted && (TimerGetRemaining(libGame_gv_openTheGatesTimer) > hrsCap_gatesDelay)) {
         TimerSetElapsed(libGame_gv_openTheGatesTimer, (TimerGetDuration(libGame_gv_openTheGatesTimer) - hrsCap_gatesDelay));
     }
@@ -671,6 +713,9 @@ ${skip_intro_line}    hrsCap_HideLabels();
     if (hrsCap_ready && !hrsCap_paused) {
         hrsCap_paused = true;
         libNtve_gf_SendActorMessageToGameRegion(${map_region}, "AnimSetPausedAll");
+        // No more minion waves (they walked into tiles between the shots over the light sky and black):
+        // GameLib's own stop for every lane's spawning.
+        libGame_gf_MinionStartStopMinionSpawnCycle(false);
     }
     hrsCap_introOn = hrsCap_IntroPlaying();
     hrsCap_ReadBox();  // a backstop for a missed text-changed event
@@ -757,7 +802,7 @@ bool hrsCap_gt_Clean_Func (bool testConds, bool runActions) {
 }
 
 // "black": the black skybox, for the second clean shot (difference matting: the same view
-// over white and over black gives each pixel's transparency). "tile" puts white back (Scene).
+// over the light sky and over black gives each pixel's transparency). "tile" puts the light sky back (Scene).
 bool hrsCap_gt_Black_Func (bool testConds, bool runActions) {
     if (!runActions) {
         return true;
@@ -814,7 +859,7 @@ bool hrsCap_gt_Sky_Func (bool testConds, bool runActions) {
         lv_model = ("HrsSky" + StringCase(StringSub(lv_colour, 1, 1), true) + StringSub(lv_colour, 2, StringLength(lv_colour)));
     }
     GameSetBackground(lv_layer, lv_model, hrsCap_bgSpeed);
-    if ((lv_layer == 0) && (lv_colour == "white")) { hrsCap_skyState = 1; }
+    if ((lv_layer == 0) && (lv_colour == "${light_sky}")) { hrsCap_skyState = 1; }
     else if ((lv_layer == 0) && (lv_colour == "black")) { hrsCap_skyState = 2; }
     else { hrsCap_skyState = 0; }
     UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
@@ -960,6 +1005,24 @@ string hrsCap_CommandWords (int lp_from) {
     return lv_text;
 }
 
+// "note <text>" (at most 15 words): the note shown with that text; "note" alone: hidden.
+bool hrsCap_gt_Note_Func (bool testConds, bool runActions) {
+    string lv_text;
+
+    if (!runActions) {
+        return true;
+    }
+    lv_text = hrsCap_CommandWords(2);
+    if ((lv_text == "")) {
+        hrsCap_NoteHide();
+    }
+    else {
+        hrsCap_NoteShow(lv_text);
+    }
+    hrsCap_Ack();
+    return true;
+}
+
 // The elements probe (--probe-elements, ELEMENTS-PLAN.md): the map's structures, camps and
 // objective one at a time. The structure nearest a cell (within 3 cells), never a copy ("el copy":
 // one may stand on its structure's own cell), or null.
@@ -975,6 +1038,24 @@ unit hrsCap_StructureAt (fixed lp_x, fixed lp_y) {
         }
     }
     return UnitGroupClosestToPoint(lv_g, Point(lp_x, lp_y));
+}
+
+// Fades from word lp_from of the command on, three words each, "<x> <y> <opacity>" (the sequence
+// number after them never part of one): the structure nearest each cell faded to that opacity at
+// once, every actor of its own (as "scopemsg <x> <y> SetOpacity <opacity> 0"). Several in one
+// command: the elements capture's round trips.
+void hrsCap_FadeTriples (int lp_from) {
+    int lv_w;
+    unit lv_unit;
+
+    lv_w = lp_from;
+    while ((StringWord(hrsCap_cmd, (lv_w + 3)) != "")) {
+        lv_unit = hrsCap_StructureAt(StringToFixed(StringWord(hrsCap_cmd, lv_w)), StringToFixed(StringWord(hrsCap_cmd, (lv_w + 1))));
+        if ((lv_unit != null)) {
+            ActorScopeSend(ActorScopeFromUnit(lv_unit), ("SetOpacity " + StringWord(hrsCap_cmd, (lv_w + 2)) + " 0"));
+        }
+        lv_w += 3;
+    }
 }
 
 // A structure shown or hidden (hidden: the unit's hidden state, so it can be shown again), and
@@ -1350,7 +1431,9 @@ ${isolate_function}
 // "hideall", "showall"; "show <x> <y>", "hide <x> <y>" (the structure nearest the cell);
 // "kill <x> <y> <seconds>" (brought down, its rubble left; seconds below 0: not paused after);
 // "killhow <0-3> <x> <y> <seconds>" (the probe's ways of bringing a town hall down); "scopemsg <x>
-// <y> <actor message>" (to every actor of the structure nearest the cell); "behave <x> <y>
+// <y> <actor message>" (to every actor of the structure nearest the cell); "fades <x> <y> <opacity> ..."
+// (each structure nearest a cell faded, up to four in one command; "at" takes them too, after its
+// cell, faded before the camera moves); "behave <x> <y>
 // <behaviour> 1|0" (added to or removed from it); "pauseable 1|0"; "scene
 // <actor message>" (to the scene actor, ::Scene: SceneParticlesDestroy and the like); "at <x> <y>"
 // (the camera straight above the cell, its lighting refitted, without the rest of "tile"'s scene); "quiet
@@ -1427,8 +1510,10 @@ bool hrsCap_gt_Element_Func (bool testConds, bool runActions) {
         // reveal and the hidden interface hold from the last tile): the lighting refitted there
         // first (without it, structures away from the last refit came out duller: the keeps' glows
         // half gone), then the capture camera (pitch, distance, lens and clip planes: a sky shot's
-        // "hidemap" pushes the near clip past the ground), the white sky put back. For the
-        // elements, shot with the scene hidden.
+        // "hidemap" pushes the near clip past the ground), the light sky put back. For the
+        // elements, shot with the scene hidden. Any "<x> <y> <opacity>" after the cell: those
+        // structures faded first (hrsCap_FadeTriples).
+        hrsCap_FadeTriples(5);
         CameraPan(hrsCap_cmdPlayer, Point(StringToFixed(StringWord(hrsCap_cmd, 3)), StringToFixed(StringWord(hrsCap_cmd, 4))), 0.0, -1, 10.0, false);
         hrsCap_NormalCamera(hrsCap_cmdPlayer);
         Wait(hrsCap_refitWait, c_timeReal);
@@ -1436,7 +1521,7 @@ bool hrsCap_gt_Element_Func (bool testConds, bool runActions) {
         CameraPan(hrsCap_cmdPlayer, Point(StringToFixed(StringWord(hrsCap_cmd, 3)), StringToFixed(StringWord(hrsCap_cmd, 4))), 0.0, -1, 10.0, false);
         hrsCap_statusPlayer = hrsCap_cmdPlayer;
         hrsCap_WaitCameraStill();
-        GameSetBackground(0, "HrsSkyWhite", 100.0);
+        GameSetBackground(0, "${light_sky_model}", 100.0);
         hrsCap_skyState = 1;
         TransmissionClearGroup(PlayerGroupAll());
     }
@@ -1446,6 +1531,10 @@ bool hrsCap_gt_Element_Func (bool testConds, bool runActions) {
         if ((lv_unit != null)) {
             ActorScopeSend(ActorScopeFromUnit(lv_unit), hrsCap_CommandWords(5));
         }
+    }
+    else if ((lv_verb == "fades")) {
+        // Several structures faded at once, "<x> <y> <opacity>" each (hrsCap_FadeTriples).
+        hrsCap_FadeTriples(3);
     }
     else if ((lv_verb == "behave")) {
         // A behaviour added to (1) or removed from (0) the structure nearest the cell (the probes:
@@ -1640,6 +1729,7 @@ void hrsCap_Init () {
     hrsCap_SaveFrames();
     hrsCap_InitTiles();
     hrsCap_StatusInit();
+    hrsCap_NoteInit();
     // The commands' triggers, run by hrsCap_RunCommand (the first word of what was typed into the
     // command box picks one).
     hrsCap_gt_Clean = TriggerCreate("hrsCap_gt_Clean_Func");
@@ -1656,6 +1746,7 @@ void hrsCap_Init () {
     hrsCap_gt_Look = TriggerCreate("hrsCap_gt_Look_Func");
     hrsCap_gt_Quit = TriggerCreate("hrsCap_gt_Quit_Func");
     hrsCap_gt_Element = TriggerCreate("hrsCap_gt_Element_Func");
+    hrsCap_gt_Note = TriggerCreate("hrsCap_gt_Note_Func");
     hrsCap_gt_FastForward = TriggerCreate("hrsCap_gt_FastForward_Func");
     libCore_gv_bALOpenTheGatesDelay = hrsCap_gatesDelay;  // read when GameLib starts its countdown
     hrsCap_gt_Sweep = TriggerCreate("hrsCap_gt_Sweep_Func");

@@ -61,8 +61,10 @@ from .game_menus import ScriptBroken, game_menu_open, interface_all_shown
 from .game_state import IN_MAP, LOADING, MAP_FAILED, MENU, NOT_RUNNING, PHASES, game_state
 from .game_window import game_region, hold_key
 from .runlog import detail, done, log, log_timings, set_log_file, stage, warn
+from .sky import LIGHT_LEVEL
 from .screen import ScreenGrabber, disagree, looks_black, same_view, view_shift
 from .status import Status, StatusStrip
+from .watch import start_watch
 
 
 
@@ -500,7 +502,7 @@ EDGE_RINGS = 3  # at most this many tiles past the grid on any side
 def edge_content(frame: np.ndarray, black: np.ndarray | None, matting: bool, left: int, side: str) -> bool:
     """Whether map content reaches the frame's edge on that side (top, bottom, left, right): mostly
     opaque pixels in the outermost band (matte maps: what differs little between the shots over
-    white and black; maps whose void is black terrain: anything not near-black). The status
+    the light sky and black; maps whose void is black terrain: anything not near-black). The status
     strip's column is left out."""
     band = {
         "top": np.s_[:EDGE_BAND, left:],
@@ -508,13 +510,13 @@ def edge_content(frame: np.ndarray, black: np.ndarray | None, matting: bool, lef
         "left": np.s_[:, left : left + EDGE_BAND],
         "right": np.s_[:, -EDGE_BAND:],
     }[side]
-    white = frame[band].astype(np.int16)
+    light = frame[band].astype(np.int16)
     if matting and black is not None:
-        content = (white - black[band].astype(np.int16)).mean(axis=2) < 115  # more than half opaque
+        content = (light - black[band].astype(np.int16)).mean(axis=2) < LIGHT_LEVEL / 2  # more than half opaque
     elif matting:
-        content = (white.min(axis=2) < 200) | (white.max(axis=2) - white.min(axis=2) > 20)  # not the white sky
+        content = (np.abs(light - LIGHT_LEVEL).max(axis=2) > 16) | (light.max(axis=2) - light.min(axis=2) > 20)  # not the light sky
     else:
-        content = white.max(axis=2) > 20
+        content = light.max(axis=2) > 20
     return int(content.sum()) >= EDGE_CONTENT
 
 
@@ -690,7 +692,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--probe-light", action="store_true", help="diagnostic: command sequences at chosen points (HRS_PROBE_POINTS, HRS_PROBE_TILE_PATH), a shot after each")
     ap.add_argument("--probe-sky", action="store_true", help="diagnostic: one edge tile over each solid-colour skybox, to check the colour shows and is uniform")
     ap.add_argument("--probe-waits", action="store_true", help="diagnostic: the fixed waits tried shorter on sample tiles and a sky swap, compared with the current ones; and the sky pass with positions further apart")
-    ap.add_argument("--probe-elements", action="store_true", help="diagnostic: a town's structures, a camp, the objective and a core shown, hidden, spawned and killed through the script's \"el\" commands, a shot after each and their differences (ELEMENTS-PLAN.md)")
+    ap.add_argument("--probe-elements", action="store_true", help="diagnostic: the same views over white, black and two greys at spots with added light (shields, orbs, lava, embers), to compare mattes")
     ap.add_argument("--probe-depth", action="store_true", help="diagnostic: only measure the sky layers' parallax (done during the start-up in every render)")
     ap.add_argument("--settle", type=float, default=0.1, help="least seconds from a move to the kept screenshot (default 0.1; the waits probe found differences only where the scene animates anyway, as at 0.5)")
     ap.add_argument("--start", type=int, default=0, help="first tile, to resume a run (default 0)")
@@ -736,11 +738,11 @@ def main(argv: list[str]) -> None:
     elif args.probe_depth:
         log(f"Sky depth probe on {manifest['map']}: the sky layers' parallax, measured at three camera positions.")
     elif args.probe_elements:
-        log(f"Elements probe on {manifest['map']}: structures, a camp, the objective and a core, shot alone, spawned and killed.")
+        log(f"Elements probe on {manifest['map']}: the same views over white, black and two greys, for the matte.")
     elif args.probe_sky:
         log(f"Skybox probe on {manifest['map']}: one edge tile, a scripted sequence of skybox swaps, a shot after each.")
     else:
-        shots = "two shots each (over white, over black)" if (manifest.get("sky") or {}).get("mode") == "matte" else "one shot each (over black; the void is black terrain)"
+        shots = "two shots each (over the light grey, over black)" if (manifest.get("sky") or {}).get("mode") == "matte" else "one shot each (over black; the void is black terrain)"
         resumed = f", carrying on at tile {args.start + 1}" if args.start else ""
         log(f"Capturing {manifest['map']}: {len(tiles)} tiles{resumed}, {shots}. Leave the keyboard and mouse alone.")
     with stage("launch and load"):
@@ -750,6 +752,11 @@ def main(argv: list[str]) -> None:
     region = ScreenGrabber.monitor(args.monitor) if args.monitor else game_region()
     with ScreenGrabber(region, duplication=os.environ.get("HRS_CAPTURE", "duplication") != "mss") as screen:
         log(f"capturing {region['width']}x{region['height']} at ({region['left']}, {region['top']}) by {screen.method}")
+        if os.environ.get("HRS_WATCH"):
+            # Beside the run's folder, which a finished render removes.
+            watch_folder = out.parent.parent / f"watch-{time.strftime('%H%M%S')}"
+            start_watch(region, watch_folder)
+            log(f"watching the screen into {watch_folder} (HRS_WATCH)")
         if (region["width"], region["height"]) != expected:
             warn(f"that is not the {expected[0]}x{expected[1]} the grid was planned for; the stitch will still work, at a different scale")
         session = Session(screen, int(manifest["status"].get("pageLeft", 0)))

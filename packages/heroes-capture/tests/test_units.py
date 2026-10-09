@@ -73,6 +73,17 @@ def test_capture_script_is_filled_and_defined_before_use():
     assert "libAREN_gv_aRM_RoundScore" not in script(arena=False)
 
 
+def test_the_map_s_event_is_switched_off_unless_its_objective_is_brought_in():
+    """A map whose objective isn't brought in for the tiles has its event switched off before the
+    gates open (Battlefield of Eternity's Immortals fought in the middle of the tiles); a map whose
+    opening timers are cut short (Hanamura: its objective in place for the tiles) keeps it. Minion
+    waves are stopped on every map once it is ready."""
+    assert "libMapM_gf_EnableDisableMapEvent(false);" in script(opening_timers=[])
+    assert "libMapM_gf_EnableDisableMapEvent" not in script()
+    assert "libGame_gf_MinionStartStopMinionSpawnCycle(false);" in script() and "libGame_gf_MinionStartStopMinionSpawnCycle(false);" in script(opening_timers=[])
+    check_definition_order(script(opening_timers=[]))
+
+
 def test_the_elements_probe_s_commands_are_in_the_script():
     """The "el" command (--probe-elements, ELEMENTS-PLAN.md): its verbs, a tower brought down the
     game's way (the dead-state morph, not a kill), the remains cleared as Blizzard's maps clear a
@@ -190,10 +201,10 @@ def test_keyed_copies_keep_the_model_file_length():
     keys = parallax_keys("HeavenSkyboxParallax", m3)
     models = dict(keys["files"])
     assert len(keys["models"]) == 4
-    for variant in ("white", "black", "bare", "whitebare"):
+    for variant in ("light", "black", "bare", "lightbare"):
         copy = models[f"Assets\\Skyboxes\\HrsParallaxKeys\\HeavenSkyboxParallax_{variant}.m3"]
         assert len(copy) == len(m3)
-    assert b"HrsKeyWhite" in models["Assets\\Skyboxes\\HrsParallaxKeys\\HeavenSkyboxParallax_white.m3"]
+    assert b"HrsKeyLight" in models["Assets\\Skyboxes\\HrsParallaxKeys\\HeavenSkyboxParallax_light.m3"]
     assert b"Base_Diffuse" in models["Assets\\Skyboxes\\HrsParallaxKeys\\HeavenSkyboxParallax_bare.m3"]
 
 
@@ -337,6 +348,37 @@ def test_an_element_s_cut_out_leaves_out_what_can_t_be_hidden_and_its_neighbours
     assert (rgba[20:30, 40:46, 3] == 0).all()  # the neighbour's rubble, left out
 
 
+def test_an_element_s_cut_out_from_only_the_part_of_its_shots_round_its_circle_is_the_same():
+    """The stitch mattes only the part of an element's shots round its circle (circle_box), the
+    white level measured on the whole shot: the same cut-out, pixel for pixel, as from the whole
+    shots, and the same with what can't be hidden and a neighbour's rubble left out."""
+    from heroes_capture import elements
+    from heroes_capture.stitch import light_level
+
+    rng = np.random.default_rng(7)
+    white = np.full((300, 400, 3), 231, np.uint8)
+    black = np.zeros((300, 400, 3), np.uint8)
+    body = rng.integers(0, 200, (120, 150, 3), dtype=np.uint8)
+    see = rng.random((120, 150, 1))  # every share of see-through, soft edges and glows
+    black[90:210, 100:250] = (body * (1 - see)).astype(np.uint8)
+    white[90:210, 100:250] = np.clip(body * (1 - see) + 231 * see, 0, 255).astype(np.uint8)
+    empty = white.copy()
+    empty[150:170, 120:140] = white[150:170, 120:140]  # the same as the empty shot there: left out
+    empty[:150] = 0
+    centre, radius, others = (170.4, 148.7), 63.2, [(230.0, 150.0)]
+    whole = elements.cut_out(white, black, centre, radius, empty, others)
+    v0, v1, u0, u1 = elements.circle_box(centre, radius, white.shape)
+    part = (slice(v0, v1), slice(u0, u1))
+    local = lambda p: (p[0] - u0, p[1] - v0)  # noqa: E731
+    cut = elements.cut_out(white[part], black[part], local(centre), radius, empty[part], [local(o) for o in others],
+                           level=light_level(white, black))
+    assert (cut == whole[part]).all()
+    outside = whole.copy()
+    outside[part] = 0
+    assert not outside[..., 3].any()  # nothing of the cut-out outside the part
+    assert elements.circle_box((5.0, 5.0), 20.0, (300, 400, 3)) == (0, 27, 0, 27)  # clipped to the frame
+
+
 def test_a_map_s_element_list_from_its_script_objects_and_regions():
     """Towns as the script hooks them up (the lane set before a town counts for it), each structure
     in the town whose region holds it (a shape marked negative cuts out of it), camps numbered in
@@ -452,20 +494,20 @@ def test_the_elements_capture_shoots_each_element_then_brings_the_structures_dow
     sent = session.sent
     # Every structure faded out (not hidden: it keeps its look and effects as the map paused it),
     # the rest of the scene hidden, the camp (clear of every structure's circle) spawned straight
-    # away, born, and frozen; then each structure faded in, the camera straight above it (the move
-    # sets the white sky), shot over white and black, faded out; no sky put back after (the next
-    # move does it). (No camera bounds in this manifest: no room for copies, so every structure
-    # falls in waves.)
+    # away, born, and frozen; then each structure faded in in the command that moves the camera
+    # straight above it (the move sets the white sky), what the one before left faded in faded out
+    # in it too, shot over white and black; no sky put back after (the next move does it). (No
+    # camera bounds in this manifest: no room for copies, so every structure falls in waves.)
     # The two are neighbours (within NEIGHBOUR_REACH): after each one's pair of shots, the other is
-    # faded in beside it for a shot over black (which of them is in front where they overlap).
-    assert sent[:19] == ["tile 0 0.00 0.00", "el fadeall 0", "el env off", "el keep 1", "el camp 1", "el freeze",
-                         "el scopemsg 1 2 SetOpacity 1 0", "el at 1.00 2.00", "black",
-                         "el scopemsg 3 1 SetOpacity 1 0", "el scopemsg 3 1 SetOpacity 0 0", "el scopemsg 1 2 SetOpacity 0 0",
-                         "el scopemsg 3 1 SetOpacity 1 0", "el at 3.00 1.00", "black",
-                         "el scopemsg 1 2 SetOpacity 1 0", "el scopemsg 1 2 SetOpacity 0 0", "el scopemsg 3 1 SetOpacity 0 0",
-                         "el at 49.00 51.00"]
+    # faded in beside it for a shot over black (which of them is in front where they overlap). The
+    # last ones left faded in, faded out in one command before the camp's shot. While the camp is
+    # born, the note at the top of the screen says so.
+    assert sent[:13] == ["tile 0 0.00 0.00", "el fadeall 0", "el env off", "el keep 1", "el camp 1",
+                         "note Waiting for the camps to spawn", "el freeze",
+                         "el at 1.00 2.00 1 2 1", "black", "el fades 3 1 1",
+                         "el at 3.00 1.00 1 2 0 3 1 0 3 1 1", "black", "el fades 1 2 1"]
     # The camp shot after the structures, its defenders removed; no isolating anywhere.
-    assert sent[18:22] == ["el at 49.00 51.00", "black", "el keep 0", "clean"] and sent.count("el camp 1") == 1
+    assert sent[13:18] == ["el fades 3 1 0 1 2 0", "el at 49.00 51.00", "black", "el keep 0", "clean"] and sent.count("el camp 1") == 1
     assert not any(c.startswith("el isolate") or c.startswith("sky ") for c in sent)
     # Rubble in waves: the tower, then the core in a wave of its own, last (after its hidden
     # replacement takes its place); each brought down, left for its time, shot centred, cleared
@@ -473,14 +515,15 @@ def test_the_elements_capture_shoots_each_element_then_brings_the_structures_dow
     core, kill = sent.index("el core 2 -1"), sent.index("el kill 1 2 -1")
     # Each brought down with the camera far back over it (a fall gives off its smoke and dust only
     # near the camera).
-    assert kill < core and sent[core - 2:core] == ["el wide 3.00 1.00 212.5", "el scopemsg 3 1 SetOpacity 1 0"]
-    assert sent[kill - 2:kill] == ["el wide 1.00 2.00 212.5", "el scopemsg 1 2 SetOpacity 1 0"]
+    assert kill < core and sent[core - 2:core] == ["el wide 3.00 1.00 212.5", "el fades 3 1 1"]
+    assert sent[kill - 3:kill] == ["note Rubble wave 1 of 2: waiting for the structures to fall", "el wide 1.00 2.00 212.5", "el fades 1 2 1"]
+    assert sent[core - 3] == "note Rubble wave 2 of 2: waiting for the structures to fall"
     assert sent[core + 1:core + 4] == ["el freeze", "el at 3.00 1.00", "black"]
     assert sent[kill + 1:kill + 5] == ["el freeze", "el at 1.00 2.00", "black", "el clear"]
     # Clearing: Order's core (not yet replaced) and anything left brought down, the scene shown
     # again, the remains and the fallen structures' own actors cleared, the holes shown, everything
     # let play a moment and paused again (the doodads shown again give off their particles).
-    assert sent[-9:] == ["el core 1 0", "el killall 5", "el env on", "el clear all", "el holes show", "el hideall", "el play",
+    assert sent[-10:] == ["note Clearing the remains before the tiles", "el core 1 0", "el killall 5", "el env on", "el clear all", "el holes show", "el hideall", "el play",
                          "el freeze", "clean"]
     records = json.loads((tmp_path / "elements" / "elements.json").read_text())
     assert sorted(records) == ["camp-1-spawned", "structure-5-rubble", "structure-5-standing", "structure-6-rubble", "structure-6-standing"]
@@ -488,6 +531,37 @@ def test_the_elements_capture_shoots_each_element_then_brings_the_structures_dow
     assert records["structure-6-standing"]["camera"] == {"x": 10.0, "y": 20.0} and records["structure-6-standing"]["neighbours"] == [5]
     assert frame_exists(tmp_path / "elements" / "structure-6-standing-with-5")
     assert frame_exists(tmp_path / "elements" / "structure-5-rubble") and frame_exists(tmp_path / "elements" / "structure-5-rubble-black")
+
+
+def test_a_standing_shot_done_again_starts_from_what_is_really_shown(element_capture, tmp_path):
+    """The focus lost part way through a structure's shots (its neighbour faded in beside it): the
+    step done again fades that neighbour out in the command that moves the camera back, so the
+    structure's shot alone has nothing else in it."""
+
+    class Lost(Exception):
+        pass
+
+    class Session(_FakeSession):
+        grabs = 0
+
+        def grab(self, dark_ok=False):
+            if dark_ok:  # the capture's shots (an answer's frame isn't one)
+                Session.grabs += 1
+                if Session.grabs == 2:  # the white shot (the black comes with its answer), then the neighbour beside it
+                    raise Lost
+            return super().grab(dark_ok)
+
+    def step(action, what):
+        while True:
+            try:
+                return action()
+            except Lost:
+                pass
+
+    element_capture.step = step
+    session = Session()
+    element_capture.capture_elements(session, ELEMENTS_MANIFEST, tmp_path, _tile_command, _black_settled)
+    assert session.sent[7:12] == ["el at 1.00 2.00 1 2 1", "black", "el fades 3 1 1", "el at 1.00 2.00 1 2 0 3 1 0 1 2 1", "black"]
 
 
 def _copies_manifest():
@@ -512,10 +586,13 @@ def test_the_elements_capture_prepares_the_rubble_with_copies(element_capture, t
     # with the camera far back over it (numbered by group: the tower's spot leftmost), paused
     # before the next.
     assert [c for c in sent if c.startswith("el copy ")] == ["el copy 0 make 1 2 100 100", "el copy 1 make 30.5 30.5 140.5 60.5"]
+    assert sent[sent.index("el copy 0 make 1 2 100 100") - 1] == "note Preparing rubble: making copies of 2 structures"
     first = sent.index("el copy 1 make 30.5 30.5 140.5 60.5") + 1
-    assert sent[first:first + 6] == ["el wide 100.00 100.00 212.5", "el copykill 0 0", "el freeze",
+    assert sent[first:first + 8] == ["note Preparing rubble: bringing down copies of the structures, group 1 of 2",
+                                     "el wide 100.00 100.00 212.5", "el copykill 0 0", "el freeze",
+                                     "note Preparing rubble: bringing down copies of the structures, group 2 of 2",
                                      "el wide 140.50 60.50 212.5", "el copykill 1 1", "el freeze"]
-    assert sent.index("el fadeall 0") < first < sent.index("el at 1.00 2.00")
+    assert sent.index("el fadeall 0") < first < next(i for i, c in enumerate(sent) if c.startswith("el at 1.00 2.00"))
     tower = sent.index("el at 100.00 100.00")
     assert sent[tower + 1] == "black" and sent[sent.index("el at 140.50 60.50") + 1] == "black"
     assert not any(c.startswith("el kill ") for c in sent) and "el core 2 -1" in sent
@@ -524,6 +601,33 @@ def test_the_elements_capture_prepares_the_rubble_with_copies(element_capture, t
     assert records["structure-5-rubble"]["camera"] == {"x": -89.0, "y": -78.0}
     assert records["structure-5-rubble"]["x"] == 1 and records["structure-7-rubble"]["tile"] == 1  # its structure's tile
     assert "structure-6-rubble" in records
+
+
+def test_no_shot_is_taken_while_a_note_is_up(element_capture, tmp_path, monkeypatch):
+    """A note (the line at the top of the screen while the run waits) is up only until the next
+    "el at" or "tile", which the script takes it down for: every shot comes after one of them."""
+    monkeypatch.delenv(element_capture.COPY_TRYING, raising=False)
+    monkeypatch.delenv(element_capture.COPY_CRASHED, raising=False)
+
+    class Session(_FakeSession):
+        def grab(self, dark_ok=False):
+            if dark_ok:  # the capture's shots (an answer's frame isn't one)
+                self.sent.append("<shot>")
+            return super().grab(dark_ok)
+
+    for n, manifest in enumerate((ELEMENTS_MANIFEST, _copies_manifest())):
+        session, base = Session(), tmp_path / str(n)
+        base.mkdir()
+        element_capture.capture_elements(session, manifest, base, _tile_command, _black_settled)
+        assert any(c.startswith("note ") for c in session.sent) and "<shot>" in session.sent
+        up = False
+        for command in session.sent:
+            if command.startswith("note "):
+                up = True
+            elif command.startswith(("el at ", "tile ")):
+                up = False
+            elif command == "<shot>":
+                assert not up, session.sent
 
 
 def test_a_type_whose_copy_crashed_the_game_falls_in_waves_after_the_relaunch(element_capture, tmp_path, monkeypatch):
@@ -574,14 +678,14 @@ def test_a_camp_near_a_structure_is_spawned_after_the_structures_are_shot(elemen
     session = _FakeSession()
     element_capture.capture_elements(session, manifest, tmp_path, _tile_command, _black_settled)
     sent = session.sent
-    assert sent.index("el camp 1") > sent.index("el scopemsg 3 1 SetOpacity 0 0") and sent[1:4] == ["el fadeall 0", "el env off", "el scopemsg 1 2 SetOpacity 1 0"]
+    assert sent.index("el camp 1") > sent.index("el fades 3 1 0 1 2 0") and sent[1:4] == ["el fadeall 0", "el env off", "el at 1.00 2.00 1 2 1"]
 
 
 def test_a_resumed_elements_capture_only_brings_the_structures_down(element_capture, tmp_path):
     element_capture.capture_elements(_FakeSession(), ELEMENTS_MANIFEST, tmp_path, _tile_command, _black_settled)
     again = _FakeSession()
     element_capture.capture_elements(again, ELEMENTS_MANIFEST, tmp_path, _tile_command, _black_settled)
-    assert again.sent == ["tile 0 0.00 0.00", "el fadeall 0", "el env off", "el core 1 0", "el core 2 0", "el killall 5",
+    assert again.sent == ["tile 0 0.00 0.00", "el fadeall 0", "el env off", "note Clearing the remains before the tiles", "el core 1 0", "el core 2 0", "el killall 5",
                           "el env on", "el clear all", "el holes show", "el hideall", "el play", "el freeze", "clean"]
 
 
@@ -645,12 +749,29 @@ def test_a_cut_out_keeps_a_tinted_glow_see_through():
 
     from heroes_capture import elements, stitch
 
-    white = np.full((40, 40, 3), 230, np.uint8)
+    white = np.full((40, 40, 3), 198, np.uint8)  # the light sky (too little of it to measure: LIGHT_LEVEL)
     black = np.zeros((40, 40, 3), np.uint8)
-    white[20, 20], black[20, 20] = (223, 242, 243), (13, 35, 58)
-    assert stitch.matte(white, black, 230.0)[20, 20, 3] == 255
+    white[18:23, 18:23], black[18:23, 18:23] = (193, 212, 213), (13, 35, 58)  # a patch of glow (a speck isn't taken for moving)
+    assert stitch.matte(white, black, 198.0)[20, 20, 3] == 255
     cut = elements.cut_out(white, black, (20, 20), 10)
     assert 0 < cut[20, 20, 3] < 60 and cut[20, 20, :3].max() > 200
+
+
+def test_a_thin_rim_that_differs_between_the_shots_isn_t_taken_for_moving():
+    """Something that moved between the shots is a patch, taken for moving and left opaque; a
+    one-pixel rim along an edge that differs by a hair between them (what was left once the map was
+    frozen and the light sky a grey) keeps its matte, its soft edge."""
+    from heroes_capture import stitch
+
+    white = np.full((60, 60, 3), 198, np.uint8)  # the light sky
+    black = np.zeros((60, 60, 3), np.uint8)
+    white[30, 5:55], black[30, 5:55] = (150, 130, 100), (60, 50, 40)  # a rim: half see-through, its difference tinted
+    white[5:15, 5:15], black[5:15, 5:15] = (220, 120, 60), (20, 20, 20)  # a patch that moved
+    moved = stitch.moved_pixels(white, black)
+    assert moved[5:15, 5:15].all() and not moved[30].any()
+    rgba = stitch.matte(white, black, 198.0)
+    assert (rgba[5:15, 5:15, 3] == 255).all()  # the patch: opaque
+    assert (rgba[30, 5:55, 3] < 200).all()  # the rim: still see-through
 
 
 def test_a_seam_takes_a_floating_piece_from_one_screenshot_not_a_ghost_of_both():

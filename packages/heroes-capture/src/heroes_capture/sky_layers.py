@@ -166,7 +166,7 @@ def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep:
     sized so the sky, moving at its measured rate, moves `keep` of a screen between
     positions), the map clipped away, and at each position the keyed copies of the parallax
     model are shot (sky.py KEY_VARIANTS: the background art alone; white without haze; the
-    haze over white; over black), then the background art over the map's own fixed skybox
+    haze over the light grey; over black), then the background art over the map's own fixed skybox
     (where the art lets it through). The fixed skybox once, alone. Into <id>/sky/, with
     positions.json; stitch.py makes the layers and composites from them."""
     sky = manifest.get("sky") or {}
@@ -235,7 +235,7 @@ def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep:
                     camera = at(x, y, clip)
                     if camera is None:
                         raise RuntimeError("the map didn't answer")
-                    for variant in ("bare", "whitebare", "white", "black"):
+                    for variant in ("bare", "lightbare", "light", "black"):
                         if session.send(f"sky parallax{variant} 1") is None:
                             raise RuntimeError("the map didn't answer")
                         settle(SKY_SETTLE)  # drawn; set anew at speed 1, the haze is at the same frozen moment each time

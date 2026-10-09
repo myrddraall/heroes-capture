@@ -288,8 +288,9 @@ one, or show the map as it stood at a moment of a replay.
 | `file`, `rect` | The state's cut-out (WebP with transparency) and where it goes on the map layer: left, top, width, height in its pixels. |
 | `hiddenBy` | A standing structure's only: where a neighbouring structure stands in front of it (a wall over a tower's base, but under its orb), a mask per neighbour (`id`, and `file`: a WebP the size of the cut-out, opaque where hidden). While that neighbour is standing too, erase the masked pixels from this cut-out before drawing it. |
 
-Draw the cut-outs over the map layer, further north first (by `cell` y, larger first), so nearer
-ones overlap further ones as in the game; where two standing structures overlap, their `hiddenBy`
+Draw the cut-outs over the map layer: every one shown as rubble first, then the rest (standing
+structures, camps), each further north first (by `cell` y, larger first), so nearer ones overlap
+further ones as in the game and rubble, which lies on the ground, never covers a standing building; where two standing structures overlap, their `hiddenBy`
 masks settle which is in front, whichever is drawn first. They carry no shadows: each was shot with nothing round
 it. The colours are an observer's (the left team blue).
 

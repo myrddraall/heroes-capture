@@ -179,7 +179,8 @@ async function openPack() {
   const shown = {};
   for (const meta of pack.layers) shown[groupOf(meta)] = true;
 
-  // The elements render's structures and camps (PACK.md, Elements), further north first: each one
+  // The elements render's structures and camps (PACK.md, Elements), further north first (drawn with
+  // the rubble under the rest: drawOrder): each one
   // in its kind's state (the buttons: structures standing, as rubble or off; camps on or off), or
   // in its own (a click on it cycles that one).
   const elements = pack.data && pack.data.elements;
@@ -229,6 +230,9 @@ async function openPack() {
   const HIT_ALPHA = 48;  // a pixel at least this opaque is the element's
   let hovered = null;  // the element under the pointer: drawn with a glow
   const stateOf = (piece) => piece.own || kindState[piece.kind];
+  // Back to front: every piece shown as rubble first, then the rest, each further north first (the
+  // rubble lies on the ground: a standing building is never under a fallen neighbour's remains).
+  const drawOrder = () => [...pieces.filter((p) => stateOf(p) === "rubble"), ...pieces.filter((p) => stateOf(p) !== "rubble")];
   const structureById = new Map(pieces.filter((p) => p.kind === "structure").map((p) => [p.id, p]));
 
   // A cut-out as it is drawn: with the parts erased where a neighbour that is standing too stands
@@ -432,27 +436,48 @@ async function openPack() {
     const meta = elementsLayer();
     if (!meta) return;
     const [u, v] = middlePixel(meta);
-    for (const piece of pieces) {
+    // On whole device pixels, as the map's tiles are: drawn between pixels it would be
+    // resampled, and come out softer than the terrain under it.
+    const placed = ([x, y, w, h]) => {
+      const left = snap(width / 2 + (x - u) * zoom), top = snap(height / 2 + (y - v) * zoom);
+      return [left, top, snap(width / 2 + (x + w - u) * zoom) - left, snap(height / 2 + (y + h - v) * zoom) - top];
+    };
+    const drawn = [];
+    for (const piece of drawOrder()) {
       const cut = piece.states[stateOf(piece)];
       if (!cut || !cut.bitmap) continue;
-      const [x, y, w, h] = cut.rect;
-      // On whole device pixels, as the map's tiles are: drawn between pixels it would be
-      // resampled, and come out softer than the terrain under it.
-      const left = snap(width / 2 + (x - u) * zoom), top = snap(height / 2 + (y - v) * zoom);
-      const at = [left, top, snap(width / 2 + (x + w - u) * zoom) - left, snap(height / 2 + (y + h - v) * zoom) - top];
-      const image = stateOf(piece) === "standing" ? drawnCut(piece, cut) : cut.bitmap;
-      if (piece === hovered) {
-        // The glow: its own shape's shadow, soft and bright, drawn twice to strengthen it.
-        ctx.save();
-        ctx.shadowColor = "rgba(255, 236, 160, 0.95)";
-        ctx.shadowBlur = Math.max(8, 14 * Math.sqrt(zoom));
-        ctx.drawImage(image, ...at);
-        ctx.drawImage(image, ...at);
-        ctx.restore();
-      }
-      ctx.drawImage(image, ...at);
+      drawn.push({ piece, image: stateOf(piece) === "standing" ? drawnCut(piece, cut) : cut.bitmap, at: placed(cut.rect) });
     }
+    // The hovered one's glow under everything (drawn with it, the neighbours drawn after it covered
+    // the glow except where their masks let it show, in the masks' jagged shapes). One turned off
+    // glows in the shape it has when it stands (its hit cut), with nothing drawn in it.
+    const blur = Math.max(8, 14 * Math.sqrt(zoom));
+    const lit = drawn.find((d) => d.piece === hovered);
+    if (lit) drawGlow(lit.image, lit.at, blur);
+    else if (hovered && stateOf(hovered) === "off" && hovered.hit && hovered.hit.bitmap)
+      drawGlow(hovered.hit.bitmap, placed(hovered.hit.rect), blur);
+    for (const { image, at } of drawn) ctx.drawImage(image, ...at);
   }
+
+  // A picture's glow alone: its own shape's shadow, soft and bright, drawn twice to strengthen it,
+  // with the shape itself taken out; made on a canvas of its own with room for the blur round it.
+  function drawGlow(image, [x, y, w, h], blur) {
+    const pad = Math.ceil(blur * 2);
+    const c = document.createElement("canvas");
+    c.width = Math.ceil((w + 2 * pad) * dpr);
+    c.height = Math.ceil((h + 2 * pad) * dpr);
+    const g = c.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.shadowColor = "rgba(255, 236, 160, 0.95)";
+    g.shadowBlur = blur;
+    g.drawImage(image, pad, pad, w, h);
+    g.drawImage(image, pad, pad, w, h);
+    g.shadowColor = "transparent";
+    g.globalCompositeOperation = "destination-out";
+    g.drawImage(image, pad, pad, w, h);
+    ctx.drawImage(c, x - pad, y - pad, w + 2 * pad, h + 2 * pad);
+  }
+
 
   // The element under a point of the window: the nearest drawn first, found by its hit picture's
   // opaque pixels (where it stands, not the reach of its rubble).
@@ -461,7 +486,7 @@ async function openPack() {
     if (!meta) return null;
     const [u, v] = middlePixel(meta);
     const px = u + (clientX - width / 2) / zoom, py = v + (clientY - height / 2) / zoom;
-    for (const piece of [...pieces].reverse()) {
+    for (const piece of drawOrder().reverse()) {
       const cut = piece.hit;
       if (!cut || !cut.alpha) continue;
       const [x, y, w, h] = cut.rect;

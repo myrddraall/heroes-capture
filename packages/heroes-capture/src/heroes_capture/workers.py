@@ -4,7 +4,7 @@ import os
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 
-WORKERS = min(8, os.cpu_count() or 4)  # threads for the per-tile work (image decoding and numpy release Python's lock)
+WORKERS = os.cpu_count() or 4  # threads for the per-tile work, one a core (image decoding and numpy release Python's lock)
 
 
 def ordered_map(fn, items, workers: int = WORKERS):

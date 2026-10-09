@@ -99,6 +99,18 @@ def test_the_battleground_maps_are_found(storage):
         assert game_data.map_file(storage, wanted)[0] == wanted
 
 
+def test_every_model_a_map_can_use_gets_its_particles_frozen(storage):
+    """The models whose particles the capture freezes are every model of the shared data, wherever
+    its catalog defines it: those in ModelData.xml, and those beside what uses them (the loot
+    banner sconce's, in LootBoxData.xml, kept its purple smoke moving through the paused tiles)."""
+    ids = set(game_data.map_model_ids(storage, []))
+    model_data = storage.read("mods\\heroesdata.stormmod\\base.stormdata\\gamedata\\modeldata.xml").decode("utf-8", errors="replace")
+    assert set(game_data.model_ids_in(model_data)) <= ids
+    assert "LootBannerSconce" in ids
+    lootbox = storage.read("mods\\heroesdata.stormmod\\base.stormdata\\gamedata\\lootbox\\lootboxdata.xml").decode("utf-8", errors="replace")
+    assert set(game_data.model_ids_in(lootbox)) <= ids
+
+
 def test_tilesets_light_sets_and_sky_models(storage):
     table = game_data.light_sets(storage)
     assert len(table["terrains"]) > 30 and len(table["lights"]) > 300
@@ -139,6 +151,10 @@ def test_prepared_maps(map_name, sky_mode, arenas, extra, tmp_path, blizzard_gal
     unknown = sorted(n for n in names if not n.startswith("hrsCap_") and n not in KEYWORDS | ACCEPTED
                      and not re.search(r"\b" + re.escape(n) + r"\b", blizzard_galaxy))
     assert not unknown, f"names Blizzard's code doesn't have: {unknown}"
+    # The note at the top middle of the screen: its command, and taken down by every command a
+    # shot starts with before anything is drawn for it.
+    assert 'else if ((lv_word == "note")) { lv_t = hrsCap_gt_Note; }' in script
+    assert re.search(r'if \(\(lv_word == "tile"\) \|\| \(\(lv_word == "el"\) && \(StringWord\(lp_text, 2\) == "at"\)\)\) \{\s*hrsCap_NoteHide\(\);', script)
     # The elements probe's objective: spawned through Battlefield of Eternity's library only.
     assert ("libMLBD_gf_MMBOESpawnBoss" in capture) == (map_name == "Battlefield of Eternity")
     # One call with the wrong number or kind of arguments stops the script as surely as an unknown

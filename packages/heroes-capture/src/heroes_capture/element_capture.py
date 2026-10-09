@@ -89,6 +89,8 @@ PLAY_WAIT = 3.0
 # Cells within which another structure is a neighbour whose overlap with a structure is measured
 # (stand): a wall's end on a tower, a gate between its towers.
 NEIGHBOUR_REACH = 10.0
+# Structures faded in one command at most ("<x> <y> <opacity>" each: the script reads 17 words).
+FADES_A_COMMAND = 4
 # Seconds from a structure shown (or a camp frozen) to its shot: a frame or two to be drawn.
 SHOW_SETTLE = 0.1
 # A fall gives off its particles (smoke, dust, sparks, a core's lava) only near the camera (the
@@ -98,6 +100,8 @@ SHOW_SETTLE = 0.1
 # all). So everything brought down at once is brought down with the camera that far back over
 # it, all of it within VIEW_SHARE of that view either way of its middle (elements.view_groups).
 VIEW_BACK, VIEW_SHARE = 2.5, 0.5
+# Words a note may have ("note <text>" and the command's number: the script reads 17 words).
+NOTE_WORDS = 15
 # Commands in a row the map doesn't answer before the match counts as lost.
 FAILURES = 3
 # Copies the map script keeps (hrsCap_copies); any more are brought down in waves.
@@ -137,12 +141,30 @@ def capture_elements(session, manifest: dict, base: Path, tile_command, black_se
             raise Recoverable(f"the map stopped answering during the elements capture (\"{command}\")", resume_at=0)
         return False
 
-    def go(element: dict) -> dict:
+    def note(text: str) -> None:
+        """A line at the top middle of the screen saying what the run waits on while nothing is
+        shot (the script's "note"); the next "el at" or "tile", which every shot starts with,
+        takes it down."""
+        if len(text.split()) > NOTE_WORDS or ";" in text:
+            raise ValueError(f"a note has at most {NOTE_WORDS} words and no ';': {text}")
+        send(f"note {text}")
+
+    def triples(fading: list[tuple[dict, int]]) -> str:
+        """Structures to fade, as the script's "<x> <y> <opacity>" words."""
+        return " ".join(f"{u['x']:g} {u['y']:g} {value}" for u, value in fading)
+
+    def go(element: dict, fading: list[tuple[dict, int]] = ()) -> dict:
         """The camera straight above the element ("el at": the lighting refitted there, as the tiles
         do, but none of the rest of their scene), the white sky back; answered once the camera has
-        stopped. Returns the grid tile it belongs to, the one the stitch places it by."""
-        send(f"el at {element['x']:.2f} {element['y']:.2f}")
+        stopped. `fading`: structures faded first, in the same command (at most FADES_A_COMMAND).
+        Returns the grid tile it belongs to, the one the stitch places it by."""
+        send(f"el at {element['x']:.2f} {element['y']:.2f}" + (f" {triples(fading)}" if fading else ""))
         return source_tile(element, tiles)
+
+    def fade_all(fading: list[tuple[dict, int]]) -> None:
+        """Structures faded, as few commands as the script takes ("el fades")."""
+        for i in range(0, len(fading), FADES_A_COMMAND):
+            send(f"el fades {triples(fading[i:i + FADES_A_COMMAND])}")
 
     def pair(stem: str) -> dict | None:
         """The view over white and over black, saved as <stem> and <stem>-black; the camera's
@@ -184,13 +206,15 @@ def capture_elements(session, manifest: dict, base: Path, tile_command, black_se
         copykill"), the slowest first, so each has fallen for just its own fall_wait when
         everything is paused (and the early camps born, by the first group's pause)."""
         copied = sorted((u for u in structures if u["id"] in plan), key=lambda u: plan[u["id"]])
+        note(f"Preparing rubble: making copies of {len(copied)} structures" if copied else "Waiting for the camps to spawn")
         for u in copied:
             os.environ[COPY_TRYING] = u["type"]
             send(f"el copy {plan[u['id']]} make {u['x']:g} {u['y']:g} {u['copy']['x']:g} {u['copy']['y']:g}")
         os.environ.pop(COPY_TRYING, None)
         camps_born = early["at"] + CAMP_WAIT if early["camps"] else 0.0
-        for group in copy_groups or [[]]:
+        for n, group in enumerate(copy_groups or [[]], start=1):
             if group:
+                note(f"Preparing rubble: bringing down copies of the structures, group {n} of {len(copy_groups)}")
                 look_over(*view_middle(group, at=lambda u: (u["copy"]["x"], u["copy"]["y"])))
             started_at = time.time()
             ends = [started_at, camps_born]
@@ -208,31 +232,43 @@ def capture_elements(session, manifest: dict, base: Path, tile_command, black_se
             log(f"  rubble prepared: {len(copied)} copies brought down on their spots, in {len(copy_groups)} groups")
         prepared["done"] = True
 
-    def fade(u: dict, value: int) -> None:
-        send(f"el scopemsg {u['x']:g} {u['y']:g} SetOpacity {value} 0")
+    # What the standing shots left faded in: the structure last shot and its last neighbour. Each
+    # structure fades them out in the command that fades it in and moves the camera, each neighbour
+    # the one before it; kept as soon as each command is answered, so a step done again after a
+    # lost focus starts from what is really shown.
+    shown: dict[str, dict | None] = {"structure": None, "neighbour": None}
+
+    def leftovers() -> list[tuple[dict, int]]:
+        return [(s, 0) for s in (shown["structure"], shown["neighbour"]) if s is not None]
+
+    def put_away() -> None:
+        """Whatever the standing shots left faded in, faded out."""
+        if fading := leftovers():
+            fade_all(fading)
+        shown.update(structure=None, neighbour=None)
 
     def stand(u: dict) -> None:
-        """A structure faded in, shot alone over white and black, then (the sky still black) over
-        black again with each neighbour (NEIGHBOUR_REACH) faded in beside it, one at a time:
-        where the neighbour covers it, the neighbour stands in front (the stitch makes its masks:
-        stitch.write_elements); faded out again."""
-        fade(u, 1)
-        tile = go(u)
+        """A structure faded in (what the one before left faded out, in the same command as the
+        camera's move), shot alone over white and black, then (the sky still black) over black
+        again with each neighbour (NEIGHBOUR_REACH) faded in beside it, one at a time, each in
+        place of the one before: where the neighbour covers it, the neighbour stands in front (the
+        stitch makes its masks: stitch.write_elements). Left faded in for the next one to put away."""
+        tile = go(u, leftovers() + [(u, 1)])
+        shown.update(structure=u, neighbour=None)
         key = element_key("structure", u, "standing")
         if (camera := pair(key)) is not None:
             beside = []
             for n in structures:
                 if n is u or math.dist((n["x"], n["y"]), (u["x"], u["y"])) >= NEIGHBOUR_REACH:
                     continue
-                fade(n, 1)
+                fade_all(([(shown["neighbour"], 0)] if shown["neighbour"] else []) + [(n, 1)])
+                shown["neighbour"] = n
                 settle(SHOW_SETTLE)
                 frame = session.grab(dark_ok=True)
-                fade(n, 0)
                 if frame is not None:
                     save_frame(folder / f"{key}-with-{n['id']}", frame)
                     beside.append(n["id"])
             record("structure", u, "standing", tile, camera, neighbours=beside)
-        fade(u, 0)
 
     def spawn(camps_now: list[dict]) -> None:
         send("el keep 1")  # the sweep leaves them
@@ -243,6 +279,7 @@ def capture_elements(session, manifest: dict, base: Path, tile_command, black_se
         """Camps far enough apart spawned together, left to be born, frozen, each one shot
         (spawned: already, with the structures' first wave, and frozen with it)."""
         if not spawned:
+            note("Waiting for the camps to spawn")
             spawn(camps_now)
             settle(CAMP_WAIT)
             send("el freeze")
@@ -263,14 +300,14 @@ def capture_elements(session, manifest: dict, base: Path, tile_command, black_se
                 camera = {"x": camera["x"] + u["x"] - spot["x"], "y": camera["y"] + u["y"] - spot["y"]}
             record("structure", {**u, "radius": rubble_radius(u)}, "rubble", tile, camera)
 
-    def wave(structures_now: list[dict]) -> None:
+    def wave(structures_now: list[dict], n: int, waves: int) -> None:
         """A wave brought down (faded in first: faded out after its standing shot), a group at a
         time with the camera over it (look_over), each group left to settle and paused; then each
-        one's rubble shot alone, and the remains cleared away."""
+        one's rubble shot alone, and the remains cleared away. `n` of `waves`: for the note."""
+        note(f"Rubble wave {n} of {waves}: waiting for the structures to fall")
         for group in grouped(structures_now):
             look_over(*view_middle(group))
-            for u in group:
-                fade(u, 1)
+            fade_all([(u, 1) for u in group])
             # The slowest brought down first, so each has fallen for just its own fall_wait at the pause.
             started_at, longest, ends = time.time(), max(fall_wait(u) for u in group), []
             for u in sorted(group, key=lambda u: -fall_wait(u)):
@@ -335,6 +372,7 @@ def capture_elements(session, manifest: dict, base: Path, tile_command, black_se
             for u in pending_structures:
                 step(lambda: stand(u), element_key("structure", u, "standing"))
                 advance()
+            step(put_away, "the last structure shot faded out")
             if early["camps"]:
                 step(lambda: camp_wave(early["camps"], spawned=True), "camps spawned early")
                 advance(len(early["camps"]))
@@ -359,10 +397,11 @@ def capture_elements(session, manifest: dict, base: Path, tile_command, black_se
                 send("el clear")  # the copies' remains
             for n, structures_now in enumerate(waves, start=1):
                 log(f"  wave {n} of {len(waves)}: {len(structures_now)} structure(s)")
-                step(lambda: wave(structures_now), f"rubble wave {n}")
+                step(lambda: wave(structures_now, n, len(waves)), f"rubble wave {n}")
                 advance(len(structures_now))
     with stage("elements (clearing)"):
         def clear() -> None:
+            note("Clearing the remains before the tiles")
             for team in (1, 2):  # a resumed run: everything still standing comes down now
                 if team not in replaced:
                     send(f"el core {team} 0", timeout=5.0)

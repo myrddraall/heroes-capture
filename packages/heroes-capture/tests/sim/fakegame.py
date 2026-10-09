@@ -78,7 +78,7 @@ class Game:
         sky_small = rng.integers(0, 255, size=(64 * 3, 64 * 3, 3)).astype(np.uint8)
         self.sky_world = np.asarray(Image.fromarray(sky_small).resize((64 * 48, 64 * 48), Image.BILINEAR))
         self.clip = 5.0
-        self.layer0, self.layer1 = "white", "mapparallax"
+        self.layer0, self.layer1 = "lightgrey", "mapparallax"
         yy, xx = np.mgrid[0 : 64 * 48 : 8, 0 : 64 * 48 : 8]
         haze = np.clip(0.3 * np.sin(xx / 300.0) * np.cos(yy / 200.0), 0, 0.3).astype(np.float32)
         self.haze_alpha = np.asarray(Image.fromarray((haze * 255).astype(np.uint8)).resize((64 * 48, 64 * 48), Image.BILINEAR), np.float32) / 255
@@ -197,7 +197,7 @@ class Game:
             self.sky = 2
             ack(0.05)
         elif cmd == "sky":
-            self.sky = {"white": 1, "black": 2}.get(words[1], 0)
+            self.sky = {"lightgrey": 1, "black": 2}.get(words[1], 0)
             if len(words) > 3 and words[2] == "1":
                 self.layer1 = words[1]
             else:
@@ -212,7 +212,7 @@ class Game:
         elif cmd == "hidemap":
             self.clip, self.layer0, self.sky = float(words[1]), "none", 0
             ack(0.05)
-        elif cmd in ("clean", "pause", "bgspeed", "refitwait", "hidemap"):
+        elif cmd in ("clean", "pause", "bgspeed", "refitwait", "hidemap", "note"):
             ack(0.05)
         elif cmd == "focus":
             self.box_focus = True
@@ -256,7 +256,7 @@ class Game:
         key = (self.cam, self.sky, self.clip, self.layer0, self.layer1, tuple(bits))
         if key in self.cache:
             return self.cache[key]
-        frame = np.full((H, W, 3), 230 if self.sky == 1 else 0, np.uint8)
+        frame = np.full((H, W, 3), 198 if self.sky == 1 else 0, np.uint8)  # the light sky drawn at about 198
         world = self.world
         cx, cy = self.cam
         if self.clip > 230:  # the map clipped away: the sky shells, moving at sky_rate of the map
@@ -275,14 +275,14 @@ class Game:
             if self.layer0 == "mapsky":
                 frame[:] = np.linspace(60, 110, W, dtype=np.float32)[None, :, None] * np.array([1.0, 0.6, 0.9])
         elif self.clip > 230 and self.layer1 != "mapparallax":
-            # The keyed copies: background art real or white/black, haze kept or not.
+            # The keyed copies: background art real or light grey/black, haze kept or not.
             v = self.layer1.replace("parallax", "")
             base = frame.astype(np.float32)
-            if v in ("white", "whitebare"):
-                base[:] = 230
+            if v in ("light", "lightbare"):
+                base[:] = 198
             elif v == "black":
                 base[:] = 0
-            if v in ("white", "black"):
+            if v in ("light", "black"):
                 a = np.zeros((H, W), np.float32)
                 a[sy0 : sy0 + wy1 - wy0, sx0 : sx0 + wx1 - wx0] = self.haze_alpha[wy0:wy1, wx0:wx1]
                 base = base * (1 - a[..., None]) + 200 * a[..., None]

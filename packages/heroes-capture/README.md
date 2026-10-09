@@ -257,13 +257,16 @@ parallax sky also keeps `<id>\sky-layers.json` in its working files, the measure
   referenced by path, and a file in the map at that path replaces the game's, so each colour is
   a stock mesh (the Braxis bowl and the "parallax" bowls; the big heaven/Luxoria bowl won't swap
   at run time) plus solid-colour DDS textures, with the mesh's cloud layers made transparent.
-  The script sets the camera-fixed skybox (`GameSetBackground` layer 0) white at every tile and
-  black on `black`; the tileset's parallax layer and fog are turned off; cloud layers placed in
-  the map as doodads (Battlefield of Eternity, Punisher Arena) are hidden by type. Each tile is
-  shot over white and over black, and the stitch turns the pair into colour and transparency
-  (difference matting: the difference between the shots is exactly the see-through share; the
-  white level is measured from the shots, the game renders it at about 230; pixels that changed
-  between the shots other than by the sky, an animated glow, stay opaque). Whether a map's
+  The script sets the camera-fixed skybox (`GameSetBackground` layer 0) to a light grey at every
+  tile and black on `black`; the tileset's parallax layer and fog are turned off; cloud layers
+  placed in the map as doodads (Battlefield of Eternity, Punisher Arena) are hidden by type. Each
+  tile is shot over the light grey and over black, and the stitch turns the pair into colour and
+  transparency (difference matting: the difference between the shots is exactly the see-through
+  share; the light grey's level is measured from the shots, the game renders it at about 198;
+  pixels that changed between the shots other than by the sky, an animated glow, stay opaque).
+  Not white: the game draws a white sky at about 230, bright enough to set off its bloom, a soft
+  halo round everything in the void that the matte would keep; the light grey doesn't (the matte
+  probe). Whether a map's
   void shows the sky is read from its tileset (from the game's data, with the map's own overrides:
   the lowest terrain level undrawn, or a skybox). Without that (Dragon Shire, Towers of Doom,
   Tomb of the Spider Queen) the void is terrain drawn black, which no skybox shows through:

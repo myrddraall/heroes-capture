@@ -12,7 +12,7 @@ import numpy as np
 from PIL import Image
 
 from . import sky_layers
-from .elements import changed, cut_out, describe, screen_point
+from .elements import changed, screen_point
 from .game_control import quit_match, send_command, settle, step
 from .runlog import done, log, warn
 from .screen import changed_share
@@ -123,7 +123,7 @@ def probe_sky(session, manifest: dict, out: Path) -> None:
         settle(2.0)
         send_command("clean")
         settle(0.5)
-        sequence = os.environ.get("HRS_SKY_SEQUENCE") or "start:0|black 0:2.5|white 0:2.5|magenta 0:2.5|lime 0:2.5|none 0:2.5"
+        sequence = os.environ.get("HRS_SKY_SEQUENCE") or "start:0|black 0:2.5|white 0:2.5|grey 0:2.5|lightgrey 0:2.5|none 0:2.5"
         previous = None
         for k, item in enumerate(sequence.split("|")):
             command, wait = item.rsplit(":", 1)
@@ -229,7 +229,7 @@ def probe_waits(session, manifest: dict, out: Path) -> None:
                         warn("sky: no answer")
                         return
                 settle(1.0)
-                if session.send("sky parallaxwhite 1") is None:
+                if session.send("sky parallaxlight 1") is None:
                     return
                 settle(wait)
                 frame = session.grab(dark_ok=True)
@@ -247,88 +247,45 @@ def probe_waits(session, manifest: dict, out: Path) -> None:
 
 
 
-# The film probe: every kind of structure on both teams filmed falling, to choose the moment each
-# kind's rubble is shot (one time for all of a kind didn't suit both teams: a Hell moonwell's lay
-# under thick smoke, a Heaven tower's under its blue glow, some walls' were only a puff). Each a
-# copy on an empty spot of its own (a keep falls itself: its copy crashed the game), the camera on
-# it (a fall gives off its particles only near the camera), a frame every FILM_GAP for
-# FILM_SECONDS in a circle of FILM_RADIUS cells. A kind: a type prefix and a team, the first such
-# structure on the map ("=" before the type: that type exactly).
-FILM_KINDS = [(kind, owner) for owner in ("order", "chaos") for kind in (
-    "TownCannonTowerL2", "=TownCannonTowerL3", "TownCannonTowerL3Standalone", "TownGateL215", "TownGateL3",
-    "TownWallRadial", "TownMoonwellL2", "TownMoonwellL3", "TownTownHallL2", "TownTownHallL3")] + [
-    ("TownWallRadial5L2", "order"), ("TownWallRadial17L2", "chaos"), ("TownWallRadial18L2", "chaos")]
-FILM_SECONDS, FILM_GAP, FILM_RADIUS = 8.0, 0.25, 14.0
-# Cells an empty spot keeps from every structure and camp, and from the other spots.
-DUP_CLEAR = 20.0
+# The matte probe: the same paused view over white, black and two greys at a few spots with light
+# that adds to what is behind it (a core's shield, a tower's orb, a core's lava and fire, the embers
+# in the void by the Hell side), to compare the matte as it is (white and black: the white sky,
+# drawn at about 230, clips a bright see-through spark at 255) with one over grey and black plus a
+# glow layer for the light left over. The shots only: the comparison is worked out from them
+# afterwards. Each spot: a name, its cell (or how to find it), and the radius in cells kept round it.
+MATTE_SKIES = ["white", "black", "grey", "lightgrey"]
+MATTE_RADIUS = 16.0
 
 
-def empty_spots(manifest: dict, count: int) -> list[dict]:
-    """Spots on the map with nothing near them (DUP_CLEAR), inside the camera's bounds, on a grid
-    of 4 cells: the first `count`, nearest the map's middle first."""
-    bounds, found = manifest["cameraBounds"], manifest["elements"]
-    taken = [(u["x"], u["y"]) for u in found["structures"]] + [(c["x"], c["y"]) for c in found["camps"]]
-    mid = ((bounds["left"] + bounds["right"]) / 2, (bounds["bottom"] + bounds["top"]) / 2)
-    grid = sorted(((x, y) for x in range(int(bounds["left"]) + 8, int(bounds["right"]) - 7, 4)
-                   for y in range(int(bounds["bottom"]) + 8, int(bounds["top"]) - 7, 4)), key=lambda p: math.dist(p, mid))
-    spots: list[dict] = []
-    for p in grid:
-        if all(math.dist(p, t) >= DUP_CLEAR for t in taken):
-            spots.append({"x": float(p[0]), "y": float(p[1])})
-            taken.append(p)
-            if len(spots) == count:
-                break
+def matte_spots(manifest: dict) -> list[dict]:
+    """The matte probe's spots: Order's core (its shield), an Order level 3 tower (its orb),
+    Chaos's core (its lava and fire), and the void past the Hell side's top and right edges."""
+    found, bounds = manifest["elements"]["structures"], manifest["cameraBounds"]
+    spots = []
+    for name, pick in (("order-core", lambda u: u["core"] and u["owner"] == "order"),
+                       ("order-tower", lambda u: u["type"].startswith("TownCannonTowerL3") and u["owner"] == "order"),
+                       ("chaos-core", lambda u: u["core"] and u["owner"] == "chaos")):
+        u = next((u for u in found if pick(u)), None)
+        if u is not None:
+            spots.append({"name": name, "x": u["x"], "y": u["y"], "radius": 24.0 if u["core"] else MATTE_RADIUS})
+    mid_y = (bounds["bottom"] + bounds["top"]) / 2
+    spots.append({"name": "hell-top-edge", "x": bounds["left"] + (bounds["right"] - bounds["left"]) * 0.65, "y": bounds["top"], "radius": MATTE_RADIUS})
+    spots.append({"name": "hell-right-edge", "x": bounds["right"], "y": mid_y, "radius": MATTE_RADIUS})
     return spots
 
 
-def write_film_page(folder: Path, films: list[dict]) -> None:
-    """index.html in the film probe's folder: each kind's frames, stepped through with a slider (or
-    the arrow keys), the time since its fall under it."""
-    page = """<!doctype html><meta charset="utf-8"><title>Falls filmed</title>
-<style>body{font:14px system-ui;margin:16px;background:#ddd}section{margin:0 0 28px}h2{font-size:15px;margin:4px 0}
-img{max-width:100%;background:#e6e6e6;display:block}input{width:100%}</style>
-<p>Each kind's fall, a frame every quarter second: drag the slider (or click it and use the arrow keys); the time since the fall is under it.</p>
-<div id="films"></div>
-<script>
-const films = FILMS;
-const root = document.getElementById("films");
-for (const film of films) {
-  const s = document.createElement("section");
-  s.innerHTML = `<h2>${film.name}</h2><img><input type="range" min="0" max="${film.frames.length - 1}" value="0"><div></div>`;
-  const [img, range, label] = [s.querySelector("img"), s.querySelector("input"), s.querySelector("div")];
-  const show = () => { const f = film.frames[range.value]; img.src = f; label.textContent = f.split("/")[1].replace(".jpg", ""); };
-  range.addEventListener("input", show);
-  show();
-  root.appendChild(s);
-}
-</script>"""
-    (folder / "index.html").write_text(page.replace("FILMS", json.dumps(films)), encoding="utf-8")
-
-
 def probe_elements(session, manifest: dict, out: Path) -> None:
-    """Each kind of structure on each team filmed falling (FILM_KINDS), to choose when its rubble is
-    shot. On Battlefield of Eternity, every structure faded out ("el fadeall 0") and the scene hidden
-    ("el env off"), each kind in turn: its copy made on an empty spot ("el copy make"; a keep: the
-    structure itself, where it stands), the camera straight above it ("el at"), brought down
-    ("el copykill"; "el kill") and filmed over white, a frame every FILM_GAP seconds for
-    FILM_SECONDS in a circle of FILM_RADIUS cells; then paused, its remains cleared. Every frame
-    full size, probe-elements-<time>/<n>-<owner>-<type>/<seconds>s.jpg, and index.html there to
-    step through each kind's (write_film_page)."""
-
+    """The matte probe (matte_spots, MATTE_SKIES): the map as the tiles shoot it (paused, the
+    structures standing), the camera over each spot ("el at": the lighting refitted there, the
+    capture camera), shot over each sky in turn ("sky <colour>"), the part MATTE_RADIUS cells (a
+    core's: 24) round the spot kept, lossless: probe-matte-<time>/<spot>-<sky>.png, and spots.json
+    (each spot's cell, camera, and where its crop lies in the screen)."""
     left = int((manifest.get("status") or {}).get("pageLeft", 0))
-    probe_dir = out.parent / f"probe-elements-{time.strftime('%H%M%S')}"
+    probe_dir = out.parent / f"probe-matte-{time.strftime('%H%M%S')}"
     probe_dir.mkdir(exist_ok=True)
-    found = manifest["elements"]["structures"]
-    ppc = manifest["pxPerCell"]
-    screen = manifest["screen"]
-    tests = []
-    for kind, owner in FILM_KINDS:
-        exact = kind.startswith("=")
-        u = next((u for u in found if u["owner"] == owner and (u["type"] == kind[1:] if exact else u["type"].startswith(kind))), None)
-        if u is not None:
-            tests.append(u)
-    spots = iter(empty_spots(manifest, len(tests)))
-    log(f"elements probe: {len(tests)} kinds of structure filmed falling: {', '.join(u['owner'] + ' ' + u['type'] for u in tests)}")
+    ppc, screen = manifest["pxPerCell"], manifest["screen"]
+    spots = matte_spots(manifest)
+    log(f"matte probe: {len(spots)} spots over {', '.join(MATTE_SKIES)}: {', '.join(s['name'] for s in spots)}")
 
     def command(text: str, timeout: float = 3.0) -> bool:
         if session.send(text, timeout=timeout) is None:
@@ -336,48 +293,30 @@ def probe_elements(session, manifest: dict, out: Path) -> None:
             return False
         return True
 
-    films: list[dict] = []
-
     def run() -> None:
-        command("el fadeall 0")
-        command("el env off", timeout=10.0)
-        for n, u in enumerate(tests):
-            keep = u["type"].startswith("TownTownHallL3")
-            at = u if keep else {**u, **{k: v + u[k] % 1 for k, v in next(spots).items()}}
-            if not keep:
-                command(f"el copy {n} make {u['x']:g} {u['y']:g} {at['x']:g} {at['y']:g}")
-            command(f"el at {at['x']:.2f} {at['y']:.2f}")
+        for spot in spots:
+            command(f"el at {spot['x']:.2f} {spot['y']:.2f}")
+            settle(0.5)
             status = session.status()
-            camera = {"x": status.camera_x, "y": status.camera_y} if status else at
-            cx, cy = screen_point(at, camera, screen, ppc)
-            r = int(FILM_RADIUS * ppc)
-            box = (slice(max(0, int(cy) - r), int(cy) + r), slice(max(left, int(cx) - r), int(cx) + r))
-            if keep:
-                command(f"el scopemsg {u['x']:g} {u['y']:g} SetOpacity 1 0")
-                command(f"el kill {u['x']:g} {u['y']:g} -1")
-            else:
-                command(f"el copykill {n} {n}")
-            started = time.time()
-            frames: list[tuple[float, np.ndarray]] = []
-            while time.time() - started < FILM_SECONDS:
+            camera = {"x": status.camera_x, "y": status.camera_y} if status else spot
+            cx, cy = screen_point(spot, camera, screen, ppc)
+            r = int(spot["radius"] * ppc)
+            box = (max(0, int(cy) - r), int(cy) + r, max(left, int(cx) - r), int(cx) + r)
+            spot.update(camera=camera, box=box)
+            for sky in MATTE_SKIES:
+                command(f"sky {sky} 0")
+                settle(1.0)  # the sky swap drawn (a frame or two), the scene paused
                 frame = session.grab(dark_ok=True)
-                if frame is not None:
-                    frames.append((time.time() - started, frame[box].copy()))
-                settle(FILM_GAP)
-            command("el freeze")
-            command("el clear")
-            name = f"{n:02d}-{u['owner']}-{u['type']}"
-            (probe_dir / name).mkdir(exist_ok=True)
-            names = []
-            for t, crop in frames:
-                names.append(f"{name}/{t:05.2f}s.jpg")
-                Image.fromarray(np.ascontiguousarray(crop[..., :3])).save(probe_dir / names[-1], quality=92)
-            films.append({"name": name, "frames": names})
-            log(f"  {u['owner']} {u['type']} ({'itself' if keep else 'a copy'}): {len(frames)} frames")
-        command("el env on", timeout=10.0)
-        write_film_page(probe_dir, films)
+                if frame is None:
+                    warn(f"  {spot['name']} over {sky}: no frame")
+                    continue
+                crop = frame[box[0]:box[1], box[2]:box[3], :3]
+                Image.fromarray(np.ascontiguousarray(crop)).save(probe_dir / f"{spot['name']}-{sky}.png")
+            log(f"  {spot['name']} at ({spot['x']:g}, {spot['y']:g}): {len(MATTE_SKIES)} skies")
+        command("sky white 0")
+        (probe_dir / "spots.json").write_text(json.dumps(spots, indent=1))
 
-    step(run, "elements probe, every kind filmed falling")
+    step(run, "matte probe, each spot over each sky")
     quit_match()
     done(f"probe screenshots in {probe_dir}")
 

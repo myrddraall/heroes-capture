@@ -20,6 +20,7 @@ from pathlib import Path
 from string import Template
 
 from . import js_json
+from .sky import LIGHT_SKY, model_id
 
 TEMPLATE = Path(__file__).with_name("capture_script.galaxy")
 
@@ -36,6 +37,17 @@ def fixed(n: float) -> str:
     if float(n).is_integer():
         return js_json.number(n) + ".0"
     return str(Decimal(n).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
+
+
+# The map's event off before the gates open, on a map whose objective isn't brought in for the
+# tiles (no opening timers cut short): Battlefield of Eternity's Immortals fought in the middle of
+# the tiles, depending on the timing. MapMechanicsLib's own switch, which a map's event checks when
+# the gates open (and the map's own disable trigger run, where it has one).
+EVENT_OFF_LINES = """    if (!libGame_gv_gameStarted && !hrsCap_eventOff) {
+        hrsCap_eventOff = true;
+        libMapM_gf_EnableDisableMapEvent(false);
+    }
+"""
 
 
 def capture_script(
@@ -72,7 +84,8 @@ def capture_script(
     sky each tile starts under, white (then "black" for the matte's second shot) or black.
     map_width, map_height: the map's size in cells (MapInfo), for the reveal: RegionEntireMap() is
     only the playable area. opening_timers: the map's timers between the gates and its first
-    objective (opening-timers.json), cut short so the objective is in place before the tiles.
+    objective (opening-timers.json), cut short so the objective is in place before the tiles; a map
+    without any has its event switched off instead (EVENT_OFF_LINES).
     map_sky: the map's own sky models {fixed, parallax}, for the probe commands "sky mapsky" and
     "sky mapparallax". map_id: the prepared map's identity, 0..65535, shown in the status strip.
     hide_doodads: doodad types to hide (cloud layers placed in the map as doodads). keep_intro:
@@ -176,10 +189,13 @@ def capture_script(
         "hero_ui_lines": hero_ui_lines,
         "ui_lines": ui_lines,
         "bounds_line": bounds_line,
-        "sky_model": "Black" if sky_colour == "black" else "White",
+        "sky_model": model_id(sky_colour),
         "sky_state": "2" if sky_colour == "black" else "1",
+        "light_sky": LIGHT_SKY,
+        "light_sky_model": model_id(LIGHT_SKY),
         "doodad_lines": doodad_lines,
         "cut_short_lines": "\n".join(f"        hrsCap_CutShort({t});" for t in opening_timers),
+        "event_off_lines": "" if opening_timers else EVENT_OFF_LINES,
         "skip_intro_line": "" if keep_intro else "    hrsCap_SkipIntro();\n",
         "arena_quit_line": arena_quit_line,
         "boss_line": boss_line,

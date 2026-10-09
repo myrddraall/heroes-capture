@@ -11,7 +11,7 @@ to work; the rest is still to build.
 ## How an element is cut out
 
 Each element is shot **alone over the sky**: from the grid tile nearest it, everything else is
-hidden, and the element is shot once over the white skybox and once over the black one. The pair
+hidden, and the element is shot once over the light grey skybox and once over the black one. The pair
 is matted exactly as the stitch mattes a tile (`stitch.matte`): its colour, and its transparency
 from how much of the sky shows through, so soft edges, glass and glows come out right with no
 threshold. *Probed:* a tower, a camp's defenders and the Immortal came out clean, and the two
@@ -42,10 +42,12 @@ also shot once with nothing shown: whatever is still there is left out of its el
 
 Then the cut-out is cleaned (`elements.cut_out`, measured on the prototype's three elements):
 
-- opacity of 8 or less (of 255) is made transparent: the white sky isn't quite even, and 99.9%
-  of the pixels that are sky in both shots came out at 7 or less;
-- opacity of 235 or more is made opaque, its colour the black shot's: the white sky brightens
-  solid parts by up to about 14–19 levels of its 230;
+- opacity of 8 or less (of 255) is made transparent: over the white sky the shots were taken over
+  at first, 99.9% of the pixels that are sky in both came out at 7 or less (the white sky's bloom);
+  over the light grey they come out at exactly 0;
+- opacity of 235 or more is made opaque, its colour the black shot's: the white sky's bloom
+  brightened solid parts by up to about 14–19 levels of its 230; over the light grey they come out
+  at exactly 255;
 - soft edges and glows lie between and stay as they are.
 
 **Shadows don't come with it:** there is no ground for an element's shadow to fall on while it is

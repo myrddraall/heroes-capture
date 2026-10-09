@@ -12,6 +12,7 @@ import numpy as np
 from scipy import ndimage
 
 from .stormlib import Archive
+from .sky import LIGHT_LEVEL
 
 # The Order team's computer player (libCore_gv_cOMPUTER_TeamOrder), who owns its structures, and
 # its number in libGame_gv_teams.
@@ -21,11 +22,11 @@ TOWN_RADIUS = 14
 # Pixels that differ by more than this (the largest of the three channels) count as changed.
 ELEMENT_THRESHOLD = 24
 # An element's cut-out from its shots alone over the sky (cut_out), opacity out of 255. At or below
-# VEIL: transparent (the white sky isn't quite even: 99.9% of the pixels that are sky in both shots
-# came out at 7 or less, the elements had almost none that low). At or above SOLID: opaque (the
-# white sky brightens solid parts by up to about 14-19 levels of its 230, putting them at 236 and
-# up; soft edges, glass and glows lie between). Measured on Battlefield of Eternity's tower, camp
-# and Immortal (the elements probe).
+# VEIL: transparent. At or above SOLID: opaque; soft edges, glass and glows lie between. Measured
+# over the white sky, whose bloom left a veil on the sky (99.9% of its pixels at 7 or less) and took
+# solid parts down to about 236 (Battlefield of Eternity's tower, camp and Immortal: the elements
+# probe); over the light grey the sky comes out at exactly 0 and solid parts at exactly 255 (the
+# matte probe), so they hold with room to spare.
 VEIL_ALPHA, SOLID_ALPHA = 8, 235
 # A pixel of an element's shot within this much (the largest of the three channels) of the same
 # pixel in its tile's shot with everything hidden is something that can't be hidden (a cliff
@@ -387,8 +388,16 @@ def screen_point(spot: dict, tile: dict, screen: dict, px_per_cell: float) -> tu
     return screen["w"] / 2 + (spot["x"] - tile["x"]) * px_per_cell, screen["h"] / 2 - (spot["y"] - tile["y"]) * px_per_cell
 
 
+def circle_box(centre: tuple[float, float], radius: float, shape: tuple[int, ...]) -> tuple[int, int, int, int]:
+    """The rows and columns (v0, v1, u0, u1) of a frame of `shape` that hold a circle (`centre`
+    and `radius` in pixels), a pixel to spare each way: all a cut-out needs of its shots."""
+    v0, v1 = max(0, math.floor(centre[1] - radius) - 1), min(shape[0], math.ceil(centre[1] + radius) + 2)
+    u0, u1 = max(0, math.floor(centre[0] - radius) - 1), min(shape[1], math.ceil(centre[0] + radius) + 2)
+    return v0, max(v0, v1), u0, max(u0, u1)
+
+
 def cut_out(white: np.ndarray, black: np.ndarray, centre: tuple[float, float], radius: float,
-            empty: np.ndarray | None = None, others: list[tuple[float, float]] = ()) -> np.ndarray:
+            empty: np.ndarray | None = None, others: list[tuple[float, float]] = (), level: float | None = None) -> np.ndarray:
     """An element's cut-out (RGBA) from its two shots alone over the sky, over white and over black:
     matted as the stitch mattes a tile, then only the circle round it kept (`centre` and `radius` in
     screen pixels), the sky's faint veil made transparent and the solid parts opaque, their colour
@@ -396,10 +405,12 @@ def cut_out(white: np.ndarray, black: np.ndarray, centre: tuple[float, float], r
     hidden; what is the same in both is what can't be hidden (the map's cliff doodads), left out.
     `others`: where other elements are on the shot (screen pixels), whose own pixels these may be
     (rubble shot with all the rest of the rubble lying there): only what is nearer `centre` than
-    any of them is kept."""
-    from .stitch import matte, white_level  # here: the stitch imports inject, which imports this module
+    any of them is kept. `level`: the light sky's level, measured on the whole shot (light_level),
+    when these are only part of it (circle_box: the matte works pixel by pixel, so a part of the
+    shots gives that part of the cut-out exactly); measured on these when not given."""
+    from .stitch import matte, light_level  # here: the stitch imports inject, which imports this module
 
-    rgba = matte(white, black, white_level(white, black) or 230.0, animated=False)
+    rgba = matte(white, black, level or light_level(white, black) or LIGHT_LEVEL, animated=False)
     alpha = rgba[..., 3]
     yy, xx = np.ogrid[: alpha.shape[0], : alpha.shape[1]]
     own = (xx - centre[0]) ** 2 + (yy - centre[1]) ** 2

@@ -45,7 +45,7 @@ from . import elements, game_data
 from . import js_json
 from .capture_script import STATUS_CELL_H, STATUS_CELL_W, STATUS_CELLS, STATUS_ROWS, capture_script
 from .light_data import has_sky, main_light, sky_models, tileset_of
-from .sky import PARALLAX_KEYS, SKIES, frozen_particle_models, painted_texture_files, parallax_keys, sky_files, solid_dds
+from .sky import LIGHT_SKY, PARALLAX_KEYS, SKIES, frozen_particle_models, painted_texture_files, parallax_keys, sky_files, solid_dds
 from .runlog import log, warn
 from .stormlib import Archive
 
@@ -282,8 +282,11 @@ def main(argv: list[str]) -> Path:
         # made to freeze its particles and ribbons while its animations are paused (sky.py).
         with Archive(target) as archive:
             map_mods = re.findall(r"([A-Za-z0-9_]+\.stormmod)", archive.read_text("DocumentInfo") or "")
-            own_models = archive.read_text("Base.StormData\\GameData\\ModelData.xml") or ""
-        model_ids = sorted(set(game_data.map_model_ids(storage, map_mods)) | set(re.findall(r'<CModel\b[^>]*\bid="([^"]+)"', own_models)))
+            # The map's own models, from every catalog file of its game data (as the mods').
+            listed = (archive.read_text("(listfile)") or "").splitlines()
+            own_models = [i for name in listed if name.strip().lower().startswith("base.stormdata\\gamedata\\") and name.strip().lower().endswith(".xml")
+                          for i in game_data.model_ids_in(archive.read_text(name.strip()) or "")]
+        model_ids = sorted(set(game_data.map_model_ids(storage, map_mods)) | set(own_models))
 
     with Archive(target) as archive:
         # (Widening the playable bounds in MapInfo, to move the game's boundary fade off the outer
@@ -300,11 +303,11 @@ def main(argv: list[str]) -> Path:
         # white and over black and the difference is the transparency. Otherwise the void is
         # terrain drawn black; one shot over black, and the stitch makes that black transparent.
         sky_mode = "matte" if has_sky(map_data, light_sets) else "black"
-        sky_start = "white" if sky_mode == "matte" else "black"
+        sky_start = LIGHT_SKY if sky_mode == "matte" else "black"
         # The map's own sky models, for probes that show them (command "sky mapsky" / "sky mapparallax").
         map_sky = sky_models(map_data, light_sets)
         log(f"map's own sky: fixed {map_sky['fixed'] or 'none'}, parallax {map_sky['parallax'] or 'none'}")
-        log("void: sky (each tile shot over white and black)" if sky_mode == "matte" else "void: black terrain (one shot over black)")
+        log("void: sky (each tile shot over the light grey and black)" if sky_mode == "matte" else "void: black terrain (one shot over black)")
         # A map of several arenas: its Regions file (none: one area, the camera bounds). One grid
         # per area; the camera bounds are lifted (unbound) so the camera can reach every area.
         regions = read("Regions")
@@ -385,7 +388,7 @@ def main(argv: list[str]) -> Path:
         key_spec = PARALLAX_KEYS.get(map_sky["parallax"])
         if key_spec and models.get(key_spec["file"]):
             keys = parallax_keys(map_sky["parallax"], models[key_spec["file"]])
-            log(f'keyed copies of {map_sky["parallax"]}: command "sky parallaxwhite", "parallaxblack", "parallaxbare", "parallaxwhitebare"')
+            log(f'keyed copies of {map_sky["parallax"]}: command "sky parallaxlight", "parallaxblack", "parallaxbare", "parallaxlightbare"')
         # The models' particles and ribbons frozen while paused, in the same catalog as the skies.
         frozen = frozen_particle_models(model_ids)
         log(f"particles and ribbons frozen with their animations: {len(frozen)} models (mods {', '.join(map_mods) or 'none'} and the shared data)")
