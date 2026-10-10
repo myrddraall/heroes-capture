@@ -10,6 +10,8 @@ from . import ui
 
 _path: Path | None = None
 _timings: list[tuple[str, float]] = []
+# The stage running and the last message logged (watch.py names its frames by them).
+current = {"stage": "", "message": ""}
 
 
 def set_log_file(path: Path) -> None:
@@ -18,6 +20,7 @@ def set_log_file(path: Path) -> None:
 
 
 def _append(text: str) -> None:
+    current["message"] = text
     if _path is not None:
         with open(_path, "a", encoding="utf-8") as f:
             f.write(text + "\n")
@@ -62,9 +65,12 @@ def paused(text: str):
 def stage(name: str):
     """Time a stage of the run; log_timings() lists them all at the end."""
     started = time.time()
+    outer = current["stage"]
+    current["stage"] = name
     try:
         yield
     finally:
+        current["stage"] = outer
         _timings.append((name, time.time() - started))
 
 

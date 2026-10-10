@@ -1,9 +1,13 @@
-# The map pack (format 1)
+# The map pack (format 3)
 
 What heroes-capture writes for each map so that a map viewer, built in another project, can show
 it: quickly at first, then sharper as the user zooms in, down to full detail. This document is the
 contract between the two. The viewer builds against it, and heroes-capture writes to it. A change
-a viewer would notice bumps the format number.
+a viewer would notice bumps the format number. Format 2: the sky layers' pictures are squared off,
+each filling its whole rectangle (see [Sky layers fill their rectangles](#sky-layers-fill-their-rectangles)).
+Format 3: each tiled layer has an [overview](#overviews), and the elements' cut-outs are in
+[atlases](#elements), at two scales, instead of a file each: a map's opening view takes a handful
+of requests however many structures it has.
 
 A pack is plain static files, made to be hosted as they are (GitHub Pages for now) and read by a
 browser with no server code.
@@ -43,7 +47,9 @@ maps/battlefield-of-eternity/
 ```
 
 The pack is for the map with its structures (forts, towers, cores, gates) kept. A render with
-them hidden writes the same layout into `terrain/` inside the map's folder. A map without the
+them hidden writes the same layout into `terrain/` inside the map's folder, and the elements render
+(`--structures elements`, in development: the bare terrain with each structure and camp cut out
+on its own, see [Elements](#elements)) into `elements/`. A map without the
 sky layers (no parallax sky in the game) has no `background`, `haze` or `fixed`.
 
 ## pack.json
@@ -54,7 +60,7 @@ illustrative):
 
 ```json
 {
-  "format": 1,
+  "format": 3,
   "tool": "heroes-capture 0.2.0",
   "gameBuild": 98025,
   "map": {
@@ -75,6 +81,7 @@ illustrative):
     {
       "id": "background", "kind": "parallax", "file": "background.pmtiles",
       "size": [8508, 4788], "levels": 6, "tileSize": 512, "rate": 0.4573,
+      "overview": { "file": "background-overview.webp", "level": 2, "size": [1064, 599] },
       "centreCell": [124.0, 103.0], "centrePixel": [4222.0, 2571.0], "pxPerCell": 22.1409
     },
     {
@@ -85,6 +92,7 @@ illustrative):
     {
       "id": "map", "kind": "map", "file": "map.pmtiles",
       "size": [12866, 9260], "levels": 6, "tileSize": 512, "rate": 1.0,
+      "overview": { "file": "map-overview.webp", "level": 2, "size": [1609, 1158] },
       "originCell": [-2.2519, 204.4259], "pxPerCell": 48.4038
     }
   ],
@@ -107,14 +115,14 @@ illustrative):
 | `map.id`, `map.name` | The folder's id and the map's name as the game shows it (English). |
 | `map.category` | `Battleground`, `Arena`, `Brawl` or `Other` (as `map list` shows them); `null` if unknown. |
 | `map.validated` | The tool's authors have checked this map's render. Information only. |
-| `map.structures` | `keep`: structures are in the map layer. |
+| `map.structures` | `keep`: structures are in the map layer; `hide`: they aren't; `elements`: the map layer is the bare terrain, and each structure and camp is in `data.elements`. |
 | `map.sizeCells` | The whole map in map cells (width, height). |
 | `map.cameraBounds` | Where the game lets the camera go, in map cells. A viewer can keep its camera inside. |
 | `capture` | How the render was taken: map pixels per cell planned, the game's screen size, field of view in degrees. |
 | `arenas` | `null`, or the arenas of a map of several (see [Several arenas](#several-arenas)). |
 | `layers` | The layers, back to front: draw them in this order (see [Layers and drawing](#layers-and-drawing)). |
 | `images` | The map's other pictures, each with its file and size in pixels (see [Images](#images)). Any may be missing. |
-| `data` | Information about the map, to grow: objectives, camps, lanes and so on. Empty for now. |
+| `data` | Information about the map, to grow. `elements` in the elements render (see [Elements](#elements)); otherwise empty. |
 | `files` | Every file in the pack (`pack.json` aside), its size and SHA-256. A viewer can cache by hash (GitHub Pages caches for only ten minutes). |
 
 ## Coordinates
@@ -157,6 +165,21 @@ The order in `layers` is the drawing order, back to front: fixed skybox, backgro
 map. Every layer except `fixed` has transparency (the map where the game lets the void through,
 the haze everywhere), so the layers behind show through.
 
+### Sky layers fill their rectangles
+
+The sky shells are a finite panel seen in perspective, so the parts of them the render sees are
+trapezoids: past their edges the window would show the layer behind, or nothing, a cut-off sky the
+game never shows. heroes-capture shoots as much of the shells as it can (from across the camera
+bounds, and through wider lenses for the rest) and squares each parallax layer off: its picture is
+the largest rectangle inside what it saw, so **a `parallax` layer's picture fills its whole
+rectangle** (`size`). The background art keeps the gaps where it lets the fixed skybox through, and
+the haze its clear patches: those are the sky, not its edge.
+
+So a viewer keeps the window inside every parallax layer's rectangle and never shows a sky edge. The
+window shows the layer's pixels from `u − windowWidth/(2s)` to `u + windowWidth/(2s)` across and
+`v − windowHeight/(2s)` to `v + windowHeight/(2s)` down (`s`, `u` and `v` as above); the layer fills
+the window when those are inside `0`..`size`.
+
 ### Several arenas
 
 On a map of several arenas (Punisher Arena) each arena is its own map layer, and `arenas` lists
@@ -193,6 +216,16 @@ no tile server.
 - **PMTiles' own header.** Its minimum and maximum zoom are `0` and `levels − 1`; its bounds and
   centre (made for maps of the Earth) mean nothing here. `pack.json` has everything a viewer
   needs.
+
+### Overviews
+
+Each tiled layer's `overview` is one of its pyramid's levels whole, as a single WebP: the finest
+level no longer than 2048 px on a side (`level`, counted as the pyramid's levels are, 0 the
+coarsest; `size` in that level's pixels). Its pixels are the level's tiles' pixels. A viewer
+fetches it first and cuts it into that level's tiles (`tileSize` apart), so the whole layer is on
+screen after one request, and reads the pyramid only for the finer levels, as the camera zooms
+in; the fade from a coarser level to a finer one is then the same whether the coarser tiles came
+from the overview or the pyramid.
 
 ## Images
 
@@ -253,19 +286,70 @@ the whole picture, strokes and all.
 Maps whose custom minimap isn't in their archive have neither image (Alterac Pass, Hanamura
 Temple and Pull Party name one in `MapInfo` that the game's data doesn't have).
 
+## Elements
+
+The elements render's map layer is the bare terrain: every structure was destroyed and its remains
+cleared before the tiles were shot. Each structure and mercenary camp was shot on its own over the
+sky instead, and `data.elements` lists them with their cut-outs, so a viewer can show or hide each
+one, or show the map as it stood at a moment of a replay.
+
+```json
+"elements": {
+  "layer": "map",
+  "atlases": {
+    "standing": {"file": "elements/standing.webp", "size": [4096, 1420], "scale": 1},
+    "rubble": {"file": "elements/rubble.webp", "size": [4096, 1690], "scale": 1},
+    "masks": {"file": "elements/masks.webp", "size": [4096, 1380], "scale": 1},
+    "small": {"file": "elements/small.webp", "size": [1024, 410], "scale": 0.125}
+  },
+  "structures": [
+    {"id": 1013, "type": "TownCannonTowerL2", "cell": [108, 60], "owner": "order", "town": 3, "core": false,
+     "states": {"standing": {"rect": [5120, 3410, 140, 132], "atlas": "standing", "at": [860, 0], "small": [108, 0],
+                             "hiddenBy": [{"id": 1014, "at": [860, 0]}]},
+                "rubble": {"rect": [5126, 3418, 128, 118], "atlas": "rubble", "at": [0, 140], "small": [0, 18]}}}
+  ],
+  "towns": [{"town": 3, "lane": 2, "owner": "order", "region": 12, "name": "Lane 2 - Order - Town 1"}],
+  "camps": [
+    {"camp": 2, "type": "BruiserCamp1", "cell": [95.86, 94.95],
+     "states": {"spawned": {"rect": [4200, 4980, 180, 330], "atlas": "standing", "at": [1000, 0], "small": [125, 0]}}}
+  ]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `layer` | The map layer the cut-outs belong to (their rectangles are in its pixels). |
+| `atlases` | The cut-outs' pictures, packed: `standing` (the standing structures and the camps), `rubble`, `masks` (see `hiddenBy`), each at the map layer's scale (`scale` 1), and `small`, every state's cut-out at the map layer's overview scale (`scale`: 1/8 for a six-level pyramid). Lossless WebP with transparency; `size` in pixels. |
+| `structures` | Every structure the map places: its placed unit's `id`, its unit `type`, its `cell`, its `owner` (`order`, `chaos`), the `town` it belongs to (`null`: the cores and anything outside the towns) and whether it's a `core`. |
+| `towns` | The map's towns as its script numbers them: lane, owner, and the map's region for it. |
+| `camps` | The mercenary camps as the script numbers them (the game's own camp numbers), their defender `type` and the `cell` they gather round. |
+| `states` | Each state the element was shot in: `standing` and `rubble` for a structure (a tower's rubble as the game shows a fallen one), `spawned` for a camp's defenders. `null`: nothing is left of it in that state (a fallen moonwell). A state that couldn't be shot is missing. |
+| `rect` | Where the state's cut-out goes on the map layer: left, top, width, height in its pixels. |
+| `atlas`, `at` | The cut-out's picture: its top-left corner in that atlas (`standing` or `rubble`), `rect`'s width and height in size. |
+| `small` | The same cut-out's top-left corner in the `small` atlas, where it is ⌈width · scale⌉ by ⌈height · scale⌉ pixels (the atlas's `scale`). Zoomed out, draw this one; zoomed in past about twice its scale, the full one. |
+| `hiddenBy` | A standing structure's only: where a neighbouring structure stands in front of it (a wall over a tower's base, but under its orb), a mask per neighbour (`id`, and `at`: its top-left corner in the `masks` atlas, the size of the cut-out, opaque where hidden). While that neighbour is standing too, erase the masked pixels from this cut-out before drawing it. At the small scale the overlaps are a pixel or two: no masks are needed. |
+
+Draw the cut-outs over the map layer: every one shown as rubble first, then the rest (standing
+structures, camps), each further north first (by `cell` y, larger first), so nearer ones overlap
+further ones as in the game and rubble, which lies on the ground, never covers a standing building; where two standing structures overlap, their `hiddenBy`
+masks settle which is in front, whichever is drawn first. They carry no shadows: each was shot with nothing round
+it. The colours are an observer's (the left team blue).
+
 ## Raw layers
 
 Next to the pack, `raw/` holds each layer at full resolution as PNG (lossless): `map.png` (or
 `map-<arena>.png`), `background.png`, `haze.png` and `fixed.png`, and the composites
 (`composite.png`, `composite-on-black.png`, `composite-with-fixed.png`). Its `layers.json`
 places the layers the same way as `pack.json` does. They're for keeping and for further work, not for a viewer: the
-pack's tiles come from them.
+pack's tiles come from them. The elements render's cut-outs are in `raw/elements/` as PNG, one
+file each, as they were before being packed into the atlases.
 
 ## Hosting
 
-- **Range requests.** A viewer reads PMTiles by range requests, which GitHub Pages serves. This
-  repository publishes its packs to Pages from `packages/site` (a home page listing the maps,
-  each pack at `maps/<map id>/`).
+- **Range requests.** A viewer reads PMTiles by range requests, which GitHub Pages serves. The
+  packs are published from [heroes-maps](https://github.com/myrddraall/heroes-maps) (its `maps/`
+  folder, a catalog at `maps/index.json`, each pack at `maps/<map id>/`), served by Pages at
+  `https://myrddraall.github.io/heroes-maps/`.
 - **Size limits.** git refuses files over 100 MB, and GitHub Pages expects a site under about
   1 GB. One map's pack is expected to come to about 60–100 MB, so Pages holds a handful of maps,
   not all of them. Past that, packs can move to an S3-style bucket (Cloudflare R2, for example)
@@ -275,5 +359,4 @@ pack's tiles come from them.
 
 ## Later
 
-- Map data in `data`: objectives, camps, structures and lanes, from the map's placed units.
-- The map without its structures, as a second map layer a viewer can switch to.
+- More map data in `data`: objectives and lanes.

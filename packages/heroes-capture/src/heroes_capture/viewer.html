@@ -9,13 +9,14 @@
   html, body { margin: 0; height: 100%; overflow: hidden; background: var(--backdrop); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
   #fixed { position: fixed; inset: 0; background: center / cover no-repeat; }
   #view { position: fixed; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+  #view.over-element { cursor: pointer; }
   #view.dragging { cursor: grabbing; }
   #bar { position: fixed; top: 12px; left: 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 6px 10px; border-radius: 8px; background: var(--panel); max-width: calc(100vw - 48px); }
   #bar button { font: inherit; color: var(--text); background: transparent; border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
   #bar button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
   #bar button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   #status { opacity: 0.75; font-variant-numeric: tabular-nums; }
-  #layers { display: flex; flex-wrap: wrap; gap: 4px; }
+  #layers, #kinds { display: flex; flex-wrap: wrap; gap: 4px; }
   #minimap { position: fixed; left: 0; top: 0; pointer-events: none; transition: opacity 600ms ease; }
   #minimap svg { display: block; width: 100%; height: 100%; }
   /* The outline's lines on screen (they don't scale with the zoom): the light line 4 px, and 4 px
@@ -41,7 +42,7 @@
 <div id="fixed"></div>
 <canvas id="view" aria-label="Map; drag to pan, mouse wheel to zoom"></canvas>
 <div id="minimap" hidden></div>
-<div id="bar"><strong id="title">Loading…</strong><span id="arenas"></span><span id="layers" role="group" aria-label="Layers"></span><span id="status" aria-live="polite"></span></div>
+<div id="bar"><strong id="title">Loading…</strong><span id="arenas"></span><span id="layers" role="group" aria-label="Layers"></span><span id="kinds" role="group" aria-label="Elements"></span><span id="status" aria-live="polite"></span></div>
 <div id="open" hidden>
   <div>
     <p>This page was opened from disk, and a browser won't let a page read the files next to it by itself.
@@ -58,8 +59,9 @@
 // by the zoom and its rate, placed by the pixel at the window's middle; every visible tile at the
 // level whose pixels are about one screen pixel, drawn from the finest level loaded so far until
 // its own arrives, which then fades in. The custom minimap (its SVG) lies on the map while the
-// first view loads, then fades away; each layer can be shown or hidden. A check that the pack
-// works, not the map viewer itself.
+// first view loads, then fades away; each layer can be shown or hidden. The elements render's
+// structures and camps are drawn over the terrain, each in the state chosen for it. A check that the
+// pack works, not the map viewer itself.
 const FADE_MS = 250;  // a tile's fade-in once loaded
 const MAX_LOADS = 8;  // tiles fetched at once
 const MAX_TILES = 900;  // decoded tiles kept (least recently drawn dropped first)
@@ -98,8 +100,8 @@ async function openPack() {
 
 (async () => {
   const { pack, archive, url } = await openPack();
-  if (pack.format !== 1) {
-    statusEl.textContent = `This viewer reads pack format 1; this pack is format ${pack.format}.`;
+  if (pack.format !== 3) {
+    statusEl.textContent = `This viewer reads pack format 3; this pack is format ${pack.format}.`;
     return;
   }
   document.title = pack.map.name;
@@ -173,9 +175,102 @@ async function openPack() {
   // What's shown: each layer by its group (every map layer is the terrain), and the minimap,
   // which starts shown as the loading screen and fades away once the first view is drawn.
   const groupOf = (meta) => (meta.kind === "map" ? "map" : meta.id);
-  const LABELS = { fixed: "Background", background: "Sky", haze: "Haze", map: "Terrain", minimap: "Minimap" };
+  const LABELS = { fixed: "Background", background: "Sky", haze: "Haze", map: "Terrain", elements: "Elements", minimap: "Minimap" };
   const shown = {};
   for (const meta of pack.layers) shown[groupOf(meta)] = true;
+
+  // The elements render's structures and camps (PACK.md, Elements), further north first (drawn with
+  // the rubble under the rest: drawOrder): each one
+  // in its kind's state (the buttons: structures standing, as rubble or off; camps on or off), or
+  // in its own (a click on it cycles that one).
+  const elements = pack.data && pack.data.elements;
+  const KIND_STATES = { structure: ["standing", "rubble", "off"], camp: ["spawned", "off"] };
+  const kindState = { structure: "standing", camp: "spawned" };
+  const pieces = [];
+  if (elements) {
+    shown.elements = true;
+    for (const s of elements.structures) pieces.push({ kind: "structure", id: s.id, cell: s.cell, states: s.states, own: null });
+    for (const c of elements.camps) pieces.push({ kind: "camp", cell: c.cell, states: c.states, own: null });
+    pieces.sort((a, b) => b.cell[1] - a.cell[1]);
+    for (const piece of pieces) {
+      // What a click or the pointer finds it by, whatever it shows: its first state's picture (a
+      // structure standing, a camp spawned), where that picture isn't see-through (a rubble's
+      // circle reaches far wider than the structure).
+      piece.hit = piece.states[KIND_STATES[piece.kind][0]] || Object.values(piece.states).find(Boolean) || null;
+    }
+    // The cut-outs come packed in atlases (PACK.md, Elements): each is cut out of its atlas at
+    // full size into a picture of its own once the atlas arrives (this reference viewer draws the
+    // full size at every zoom; a viewer can draw the `small` atlas zoomed out instead).
+    const atlasPictures = {};
+    const cutOut = (atlas, [x, y], w, h) => {
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      c.getContext("2d").drawImage(atlas, x, y, w, h, 0, 0, w, h);
+      return c;
+    };
+    const atlasLoaded = (name) => {
+      for (const piece of pieces) {
+        for (const cut of Object.values(piece.states)) {
+          if (!cut) continue;  // nothing left of it in that state
+          const [, , w, h] = cut.rect;
+          if (cut.atlas === name) {
+            cut.bitmap = cutOut(atlasPictures[name], cut.at, w, h);
+            if (cut === piece.hit) cut.alpha = alphaOf(cut.bitmap);
+          }
+          if (name === "masks") {
+            for (const mask of cut.hiddenBy || []) mask.bitmap = cutOut(atlasPictures.masks, mask.at, w, h);
+          }
+        }
+      }
+      redraw();
+    };
+    for (const name of ["standing", "masks", "rubble"]) {
+      const atlas = elements.atlases[name];
+      if (!atlas) continue;
+      fetch(url(atlas.file)).then((r) => r.blob()).then(createImageBitmap)
+        .then((bitmap) => { atlasPictures[name] = bitmap; atlasLoaded(name); })
+        .catch(() => {});  // an atlas that can't be read leaves its cut-outs out
+    }
+  }
+  // A picture's transparency, one byte a pixel, for finding what the pointer is over.
+  function alphaOf(bitmap) {
+    const c = document.createElement("canvas");
+    c.width = bitmap.width;
+    c.height = bitmap.height;
+    const g = c.getContext("2d", { willReadFrequently: true });
+    g.drawImage(bitmap, 0, 0);
+    const rgba = g.getImageData(0, 0, c.width, c.height).data;
+    const alpha = new Uint8Array(c.width * c.height);
+    for (let i = 0; i < alpha.length; i++) alpha[i] = rgba[i * 4 + 3];
+    return alpha;
+  }
+  const HIT_ALPHA = 48;  // a pixel at least this opaque is the element's
+  let hovered = null;  // the element under the pointer: drawn with a glow
+  const stateOf = (piece) => piece.own || kindState[piece.kind];
+  // Back to front: every piece shown as rubble first, then the rest, each further north first (the
+  // rubble lies on the ground: a standing building is never under a fallen neighbour's remains).
+  const drawOrder = () => [...pieces.filter((p) => stateOf(p) === "rubble"), ...pieces.filter((p) => stateOf(p) !== "rubble")];
+  const structureById = new Map(pieces.filter((p) => p.kind === "structure").map((p) => [p.id, p]));
+
+  // A cut-out as it is drawn: with the parts erased where a neighbour that is standing too stands
+  // in front of it (PACK.md, Elements: hiddenBy); the result kept until the neighbours change.
+  function drawnCut(piece, cut) {
+    const masks = (cut.hiddenBy || []).filter((m) => m.bitmap && structureById.has(m.id) && stateOf(structureById.get(m.id)) === "standing");
+    if (!masks.length) return cut.bitmap;
+    const key = masks.map((m) => m.id).join(",");
+    if (cut.composed && cut.composedKey === key) return cut.composed;
+    const c = document.createElement("canvas");
+    c.width = cut.bitmap.width;
+    c.height = cut.bitmap.height;
+    const g = c.getContext("2d");
+    g.drawImage(cut.bitmap, 0, 0);
+    g.globalCompositeOperation = "destination-out";
+    for (const m of masks) g.drawImage(m.bitmap, 0, 0, c.width, c.height);
+    cut.composed = c;
+    cut.composedKey = key;
+    return c;
+  }
   if (minimap) shown.minimap = true;
   let intro = Boolean(minimap);
 
@@ -341,12 +436,101 @@ async function openPack() {
         }
       }
     }
+    drawElements();
     const waiting = loading + queue.length;
     statusEl.textContent = mapLevel === null ? "" : `detail level ${mapLevel + 1}` + (waiting ? ` · loading ${waiting}` : "");
     pump();
     evict();
     if (fading) redraw();
     if (intro && complete && !fading) endIntro();
+  }
+
+  // The elements over the terrain: placed as the map layer is (its pixels at the zoom).
+  function elementsLayer() {
+    if (!elements || !shown.elements || elements.layer !== arenas[current].layer) return null;
+    return maps.find((l) => l.meta.id === elements.layer).meta;
+  }
+  function drawElements() {
+    const meta = elementsLayer();
+    if (!meta) return;
+    const [u, v] = middlePixel(meta);
+    // On whole device pixels, as the map's tiles are: drawn between pixels it would be
+    // resampled, and come out softer than the terrain under it.
+    const placed = ([x, y, w, h]) => {
+      const left = snap(width / 2 + (x - u) * zoom), top = snap(height / 2 + (y - v) * zoom);
+      return [left, top, snap(width / 2 + (x + w - u) * zoom) - left, snap(height / 2 + (y + h - v) * zoom) - top];
+    };
+    const drawn = [];
+    for (const piece of drawOrder()) {
+      const cut = piece.states[stateOf(piece)];
+      if (!cut || !cut.bitmap) continue;
+      drawn.push({ piece, image: stateOf(piece) === "standing" ? drawnCut(piece, cut) : cut.bitmap, at: placed(cut.rect) });
+    }
+    // The hovered one's glow under everything (drawn with it, the neighbours drawn after it covered
+    // the glow except where their masks let it show, in the masks' jagged shapes). One turned off
+    // glows in the shape it has when it stands (its hit cut), with nothing drawn in it.
+    const blur = Math.max(8, 14 * Math.sqrt(zoom));
+    const lit = drawn.find((d) => d.piece === hovered);
+    if (lit) drawGlow(lit.image, lit.at, blur);
+    else if (hovered && stateOf(hovered) === "off" && hovered.hit && hovered.hit.bitmap)
+      drawGlow(hovered.hit.bitmap, placed(hovered.hit.rect), blur);
+    for (const { image, at } of drawn) ctx.drawImage(image, ...at);
+  }
+
+  // A picture's glow alone: its own shape's shadow, soft and bright, drawn twice to strengthen it,
+  // with the shape itself taken out; made on a canvas of its own with room for the blur round it.
+  function drawGlow(image, [x, y, w, h], blur) {
+    const pad = Math.ceil(blur * 2);
+    const c = document.createElement("canvas");
+    c.width = Math.ceil((w + 2 * pad) * dpr);
+    c.height = Math.ceil((h + 2 * pad) * dpr);
+    const g = c.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.shadowColor = "rgba(255, 236, 160, 0.95)";
+    g.shadowBlur = blur;
+    g.drawImage(image, pad, pad, w, h);
+    g.drawImage(image, pad, pad, w, h);
+    g.shadowColor = "transparent";
+    g.globalCompositeOperation = "destination-out";
+    g.drawImage(image, pad, pad, w, h);
+    ctx.drawImage(c, x - pad, y - pad, w + 2 * pad, h + 2 * pad);
+  }
+
+
+  // The element under a point of the window: the nearest drawn first, found by its hit picture's
+  // opaque pixels (where it stands, not the reach of its rubble).
+  function elementAt(clientX, clientY) {
+    const meta = elementsLayer();
+    if (!meta) return null;
+    const [u, v] = middlePixel(meta);
+    const px = u + (clientX - width / 2) / zoom, py = v + (clientY - height / 2) / zoom;
+    for (const piece of drawOrder().reverse()) {
+      const cut = piece.hit;
+      if (!cut || !cut.alpha) continue;
+      const [x, y, w, h] = cut.rect;
+      const ix = Math.floor((px - x) * cut.bitmap.width / w), iy = Math.floor((py - y) * cut.bitmap.height / h);
+      if (ix < 0 || iy < 0 || ix >= cut.bitmap.width || iy >= cut.bitmap.height) continue;
+      if (cut.alpha[iy * cut.bitmap.width + ix] >= HIT_ALPHA) return piece;
+    }
+    return null;
+  }
+
+  // A click on an element: its own state, the next one after the one it shows.
+  function clickElement(clientX, clientY) {
+    const piece = elementAt(clientX, clientY);
+    if (!piece) return;
+    const states = KIND_STATES[piece.kind];
+    piece.own = states[(states.indexOf(stateOf(piece)) + 1) % states.length];
+    redraw();
+  }
+
+  // The element under the pointer glows (and the pointer says it can be clicked).
+  function hover(clientX, clientY) {
+    const piece = clientX === null ? null : elementAt(clientX, clientY);
+    canvas.classList.toggle("over-element", Boolean(piece));
+    if (piece === hovered) return;
+    hovered = piece;
+    redraw();
   }
 
   // The first view is drawn: the minimap fades away, and its layer is off from then on.
@@ -385,6 +569,24 @@ async function openPack() {
     button.setAttribute("aria-pressed", "true");
     button.addEventListener("click", () => setShown(group, !shown[group]));
     document.getElementById("layers").appendChild(button);
+  }
+
+  if (elements) {
+    const kinds = document.getElementById("kinds");
+    for (const kind of ["structure", "camp"]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      const label = () => { button.textContent = `${kind === "structure" ? "Structures" : "Camps"}: ${kindState[kind]}`; };
+      label();
+      button.addEventListener("click", () => {
+        const states = KIND_STATES[kind];
+        kindState[kind] = states[(states.indexOf(kindState[kind]) + 1) % states.length];
+        for (const piece of pieces) if (piece.kind === kind) piece.own = null;  // the kind's state for every one of them
+        label();
+        redraw();
+      });
+      kinds.appendChild(button);
+    }
   }
 
   function redraw() {
@@ -434,14 +636,18 @@ async function openPack() {
     });
   }
 
-  let last = null;
+  let last = null, down = null;
   canvas.addEventListener("pointerdown", (e) => {
     last = [e.clientX, e.clientY];
+    down = [e.clientX, e.clientY];
     canvas.setPointerCapture(e.pointerId);
     canvas.classList.add("dragging");
   });
   canvas.addEventListener("pointermove", (e) => {
-    if (!last) return;
+    if (!last) {
+      hover(e.clientX, e.clientY);
+      return;
+    }
     const cells = zoom * pxPerCell;
     cx -= (e.clientX - last[0]) / cells;
     cy += (e.clientY - last[1]) / cells;
@@ -450,8 +656,14 @@ async function openPack() {
     redraw();
   });
   const endDrag = () => { last = null; canvas.classList.remove("dragging"); };
-  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointerup", (e) => {
+    // A press that didn't move is a click: on an element, it changes that one's state.
+    if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 4) clickElement(e.clientX, e.clientY);
+    down = null;
+    endDrag();
+  });
   canvas.addEventListener("pointercancel", endDrag);
+  canvas.addEventListener("pointerleave", () => hover(null, null));
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
     // About the cursor: the map cell under it stays under it.

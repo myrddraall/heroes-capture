@@ -8,6 +8,8 @@ the script sets the camera-fixed skybox with GameSetBackground: white at each ti
 second clean shot, command "sky <colour>" for probes.
 """
 
+import html
+import math
 import struct
 
 TEXTURES = "Assets\\Textures\\"
@@ -34,13 +36,15 @@ SKIES = {
         "mesh": f"{SKYBOXES}Storm_Skybox_ArenaHell_Parallax\\Storm_Skybox_ArenaHell_Parallax.m3",
         "textures": {"Storm_Skybox_ArenaHell_Parallax": "colour", "Storm_Skybox_ArenaHell_Clouds_Hell_Diffuse": "clear"},
     },
-    "magenta": {
-        "rgb": (255, 0, 255),
+    # Two greys (the matte probe: a grey sky in place of the white one, which a bright see-through
+    # spark or glow clips at 255). The game draws a texture of 255 at about 230.
+    "grey": {
+        "rgb": (140, 140, 140),
         "mesh": f"{SKYBOXES}Storm_Skybox_SCBraxis\\Storm_Skybox_SCBraxis.m3",
         "textures": {"Storm_Doodad_SCBraxis_Skybox_Diff": "colour", "Storm_Doodad_SCBraxis_Skybox_Stars_Diff": "clear"},
     },
-    "lime": {
-        "rgb": (0, 255, 0),
+    "lightgrey": {
+        "rgb": (200, 200, 200),
         "mesh": f"{SKYBOXES}Storm_Skybox_ArenaHvH_Parallax\\Storm_Skybox_ArenaHvH_Parallax.m3",
         "textures": {
             "Storm_Skybox_ArenaHvH_Parallax": "colour",
@@ -49,6 +53,22 @@ SKIES = {
         },
     },
 }
+
+
+# The light sky the matte shoots over, with black: the light grey. The white sky (drawn at about
+# 230) set off the game's bloom, a soft halo round everything in the void that the matte kept; the
+# greys (drawn at about 155 and 198) don't, and a matte from either predicts a view over the other
+# almost exactly (the matte probe on Battlefield of Eternity: at the Hell side's edge the error
+# against a third sky fell from 2.5 levels on average to 0.05, and the sky came out at exactly 0
+# opacity, the solid parts at exactly 255). LIGHT_LEVEL: the level the game draws it at, the stitch's
+# fallback when a pair of shots has too little sky to measure it.
+LIGHT_SKY, LIGHT_LEVEL = "lightgrey", 198.0
+
+
+def lens_scale(fov: float, render_fov: float) -> float:
+    """How much more a lens of `fov` degrees sees across than the render's (the sky shots through
+    wider lenses): the ratio of the tangents of their half angles."""
+    return math.tan(math.radians(fov) / 2) / math.tan(math.radians(render_fov) / 2)
 
 
 def model_id(colour: str) -> str:
@@ -62,9 +82,9 @@ SCALED = {"colours": ["white", "black"], "scales": [3, 10]}
 
 # The map's own parallax sky models we can make keyed copies of: the model file (read from the
 # game's storage) and its background texture.
-# Each copy points that texture at a white or a black one (command "sky parallaxwhite" /
-# "sky parallaxblack") while sharing the haze textures, so the haze can be matted over white and
-# black within one match. The name is replaced by one of the same length, which leaves the rest of
+# Each copy points that texture at the light sky's grey or at black (command "sky parallaxlight" /
+# "sky parallaxblack") while sharing the haze textures, so the haze can be matted over the light
+# grey and black within one match (the light grey: see LIGHT_SKY). The name is replaced by one of the same length, which leaves the rest of
 # the model file valid.
 PARALLAX_KEYS = {
     "HeavenSkyboxParallax": {
@@ -75,14 +95,14 @@ PARALLAX_KEYS = {
 }
 
 # The keyed copies (command "sky parallax<name>"): what each puts in place of the background art (None:
-# the real art) and whether the haze stays. white/black: the haze over white and black (its matte);
-# bare: the background art without the haze (its own layer); whitebare: white without the haze (the
-# white level the game's lighting gives the key, for an exact matte).
+# the real art) and whether the haze stays. light/black: the haze over the light grey and black (its
+# matte); bare: the background art without the haze (its own layer); lightbare: the light grey
+# without the haze (the level the game's lighting gives the key, for an exact matte).
 KEY_VARIANTS = {
-    "white": {"base": "white", "haze": True},
+    "light": {"base": LIGHT_SKY, "haze": True},
     "black": {"base": "black", "haze": True},
     "bare": {"base": None, "haze": False},
-    "whitebare": {"base": "white", "haze": False},
+    "lightbare": {"base": LIGHT_SKY, "haze": False},
 }
 
 
@@ -118,11 +138,11 @@ def parallax_keys(model: str, m3: bytes) -> dict:
     base, haze = spec["base"], spec["haze"]
     stem = base[: base.rindex("_", 0, base.rindex("_")) + 1]  # "..._SkyParallax_"
     models, files = [], []
-    textures: dict[str, str] = {}  # key texture name -> 'white' | 'black' | 'clear'
+    textures: dict[str, str] = {}  # key texture name -> a SKIES colour | 'clear'
     for variant, plan in KEY_VARIANTS.items():
         copy = bytearray(m3)
         if plan["base"]:
-            name = _key_name(base, stem, "HrsKeyWhite" if plan["base"] == "white" else "HrsKeyBlack")
+            name = _key_name(base, stem, "HrsKeyLight" if plan["base"] == LIGHT_SKY else "HrsKeyBlack")
             _rename_texture(copy, base, name)
             textures[name] = plan["base"]
         if not plan["haze"]:
@@ -212,6 +232,15 @@ def append_to_catalog(existing: str | None, entries: list[str]) -> str:
     if existing and "</Catalog>" in existing:
         return existing.replace("</Catalog>", f"{eol.join(entries)}{eol}</Catalog>", 1)
     return f'<?xml version="1.0" encoding="us-ascii"?>{eol}<Catalog>{eol}{eol.join(entries)}{eol}</Catalog>{eol}'
+
+
+def frozen_particle_models(model_ids: list[str]) -> list[str]:
+    """Model entries that make each model's particles and ribbons hold still while its animations are
+    paused (the capture pauses every animation on the map): without them a model's particles and
+    ribbons run on whatever its animations do, which is what kept the structures' and doodads'
+    effects moving. The two settings models have for it (Blizzard's data sets them on a few)."""
+    return [f'    <CModel id="{html.escape(i, quote=True)}"><Flags index="FreezeParticlesAndRibbonsOnAnimPause" value="1"/>'
+            f'<PausedParticleSystemBehavior value="FreezeAll"/></CModel>' for i in model_ids]
 
 
 def sky_files(tileset: str, start: str, read, extra: dict | None = None) -> list[tuple[str, bytes]]:

@@ -18,7 +18,11 @@ from heroes_capture.stormlib import Archive
 pytestmark = [pytest.mark.game_data, pytest.mark.xdist_group("cdn")]
 
 # Names the script uses that Blizzard's code doesn't spell out but the game has accepted.
-ACCEPTED = {"BoolToInt", "RegionRect", "GameSetBackground", "CutsceneStop", "c_syncFrameTypeTextTag",
+# EnvironmentShow and its c_environment* constants: in the game executable's table of script
+# functions and constants, next to TerrainShowRegion (which the game has accepted); so is
+# c_actorIntersectAgainstCenter, beside the c_actorIntersectAgainstRadiusContact Blizzard uses.
+ACCEPTED = {"BoolToInt", "RegionRect", "GameSetBackground", "CutsceneStop", "c_syncFrameTypeTextTag", "TerrainShowRegion",
+            "EnvironmentShow", "c_environmentTerrain", "c_environmentDoodads", "c_environmentWater", "c_actorIntersectAgainstCenter",
             "libMapM_gv_mMIntroCutscene", "libMapM_gv_mMIntroCutsceneFinished", "libMapM_gv_uIJungleCampPanel"}
 KEYWORDS = {"if", "for", "while", "return", "else"}
 
@@ -95,6 +99,18 @@ def test_the_battleground_maps_are_found(storage):
         assert game_data.map_file(storage, wanted)[0] == wanted
 
 
+def test_every_model_a_map_can_use_gets_its_particles_frozen(storage):
+    """The models whose particles the capture freezes are every model of the shared data, wherever
+    its catalog defines it: those in ModelData.xml, and those beside what uses them (the loot
+    banner sconce's, in LootBoxData.xml, kept its purple smoke moving through the paused tiles)."""
+    ids = set(game_data.map_model_ids(storage, []))
+    model_data = storage.read("mods\\heroesdata.stormmod\\base.stormdata\\gamedata\\modeldata.xml").decode("utf-8", errors="replace")
+    assert set(game_data.model_ids_in(model_data)) <= ids
+    assert "LootBannerSconce" in ids
+    lootbox = storage.read("mods\\heroesdata.stormmod\\base.stormdata\\gamedata\\lootbox\\lootboxdata.xml").decode("utf-8", errors="replace")
+    assert set(game_data.model_ids_in(lootbox)) <= ids
+
+
 def test_tilesets_light_sets_and_sky_models(storage):
     table = game_data.light_sets(storage)
     assert len(table["terrains"]) > 30 and len(table["lights"]) > 300
@@ -117,12 +133,30 @@ def test_prepared_maps(map_name, sky_mode, arenas, extra, tmp_path, blizzard_gal
     with Archive(manifest["stormmap"]) as archive:
         script = archive.read_text("MapScript.galaxy")
         assert archive.has("Assets\\Textures\\HrsWhite.dds")
+        models = archive.read_text("Base.StormData\\GameData\\ModelData.xml")
+    # Every model the map can use freezes its particles and ribbons while its animations are
+    # paused: those of the shared data (a gate's) and of the map's own mods.
+    frozen = set(re.findall(r'<CModel id="([^"]+)"><Flags index="FreezeParticlesAndRibbonsOnAnimPause" value="1"/>'
+                            r'<PausedParticleSystemBehavior value="FreezeAll"/></CModel>', models))
+    assert "TownGateDamaged" in frozen and len(frozen) > 1000
+    if map_name == "Battlefield of Eternity":
+        assert "TownMoonwellHeaven" in frozen
     capture = script[script.index("// Map capture (injected"): script.index("void InitMap () {")]
     capture = re.sub(r"//[^\n]*", "", re.sub(r'"[^"\n]*"', '""', capture))
     names = set(re.findall(r"\b([A-Za-z_]\w*)\s*\(", capture)) | set(re.findall(r"\b(c_\w+|lib\w+_g[vf]_\w+)", capture))
+    if map_name == "Battlefield of Eternity":
+        # The cores' holes, filled in the file, are a region of one circle per cell the script
+        # opens as it starts.
+        assert capture.count("RegionAddCircle(hrsCap_holes, true, Point(") == 24 + 30
     unknown = sorted(n for n in names if not n.startswith("hrsCap_") and n not in KEYWORDS | ACCEPTED
                      and not re.search(r"\b" + re.escape(n) + r"\b", blizzard_galaxy))
     assert not unknown, f"names Blizzard's code doesn't have: {unknown}"
+    # The note at the top middle of the screen: its command, and taken down by every command a
+    # shot starts with before anything is drawn for it.
+    assert 'else if ((lv_word == "note")) { lv_t = hrsCap_gt_Note; }' in script
+    assert re.search(r'if \(\(lv_word == "tile"\) \|\| \(\(lv_word == "el"\) && \(StringWord\(lp_text, 2\) == "at"\)\)\) \{\s*hrsCap_NoteHide\(\);', script)
+    # The elements probe's objective: spawned through Battlefield of Eternity's library only.
+    assert ("libMLBD_gf_MMBOESpawnBoss" in capture) == (map_name == "Battlefield of Eternity")
     # One call with the wrong number or kind of arguments stops the script as surely as an unknown
     # name does (StringReplace(text, find, "", ...): it takes a range, not a replacement). Each
     # call of a function Blizzard defines in Galaxy is held to its parameters; each native's to
@@ -152,6 +186,40 @@ def test_prepared_maps(map_name, sky_mode, arenas, extra, tmp_path, blizzard_gal
                 if literal_kind(arg) and seen and literal_kind(arg) not in seen:
                     wrong.append(f"{name}(...): argument {k + 1} is a {literal_kind(arg)}, Blizzard passes {sorted(seen)}")
     assert not wrong, "calls unlike Blizzard's: " + "; ".join(wrong)
+
+
+def test_the_elements_probe_s_targets_on_battlefield_of_eternity(tmp_path):
+    """The elements probe (--probe-elements) finds what it shoots in the map's placed objects: the
+    Order team's forward town round its town hall, the camp nearest it, the Order core."""
+    from heroes_capture import elements
+
+    manifest = json.loads(inject.main(["Battlefield of Eternity", "--screen", "3440x1440", "--distance", "214", "--out", str(tmp_path)]).read_text())
+    targets = elements.element_targets(manifest)
+    hall, *rest = targets["town"]
+    assert (hall["type"], hall["x"], hall["y"]) == ("TownTownHallL2", 98, 65)
+    assert {u["type"] for u in rest} >= {"TownCannonTowerL2", "TownGateL215BLUR", "TownMoonwellL2", "TownWallRadial5L2"}
+    assert all(u["player"] == elements.ORDER_PLAYER for u in targets["town"]) and len(targets["town"]) <= 8
+    assert "MercCamp" in targets["camp"]["type"] and abs(targets["camp"]["x"] - 98) < 2 and abs(targets["camp"]["y"] - 95.5) < 1
+    assert (targets["core"]["type"], targets["core"]["x"], targets["core"]["y"]) == ("KingsCore", 49, 100)
+    # The element list in the manifest: the map's 72 structures in its 8 towns (the cores and one
+    # standalone tower in none), its 4 camps as the script numbers them.
+    found = manifest["elements"]
+    assert len(found["structures"]) == 72 and sum(u["core"] for u in found["structures"]) == 2
+    assert [(t["lane"], t["owner"]) for t in found["towns"]] == [(1, "order"), (1, "order"), (2, "order"), (2, "order"),
+                                                                 (1, "chaos"), (1, "chaos"), (2, "chaos"), (2, "chaos")]
+    assert sorted((u["type"], u["x"], u["y"]) for u in found["structures"] if u["town"] is None) == [
+        ("KingsCore", 49, 100), ("KingsCore", 199, 108), ("TownCannonTowerL3Standalone", 85, 131)]
+    assert [(c["camp"], c["type"]) for c in found["camps"]] == [(1, "SiegeCamp1"), (2, "BruiserCamp1"), (3, "SiegeCamp1"), (4, "BruiserCamp1")]
+    assert abs(found["camps"][1]["x"] - 95.9) < 0.1 and abs(found["camps"][1]["y"] - 95.0) < 0.1
+    # The holes the cores stand on (24 and 30 cells) filled in the prepared map, the rest of the
+    # map's holes (the void round the islands) as they were (the script opens the two again).
+    import numpy as np
+
+    with Archive(manifest["stormmap"]) as archive:
+        flags = archive.read("t3CellFlags")
+    holes = (np.frombuffer(flags, np.uint8, 248 * 208, 32).reshape(208, 248) & elements.CELL_HOLE) > 0
+    assert not holes[97:103, 46:52].any() and not holes[105:111, 196:202].any()
+    assert holes.sum() == 6704 - 24 - 30
 
 
 def test_a_map_s_own_pictures(storage, tmp_path):

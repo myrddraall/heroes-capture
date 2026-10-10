@@ -1,7 +1,9 @@
-"""Diagnostic runs (capture.py --probe-light, --probe-sky, --probe-waits): instead of the tiles, chosen views and
+"""Diagnostic runs (capture.py --probe-light, --probe-sky, --probe-waits, --probe-elements): instead of the tiles, chosen views and
 command sequences, a shot after each, kept in a probe-<what>-<time> folder next to the tiles.
 """
 
+import json
+import math
 import os
 import time
 from pathlib import Path
@@ -10,6 +12,7 @@ import numpy as np
 from PIL import Image
 
 from . import sky_layers
+from .elements import changed, screen_point
 from .game_control import quit_match, send_command, settle, step
 from .runlog import done, log, warn
 from .screen import changed_share
@@ -120,7 +123,7 @@ def probe_sky(session, manifest: dict, out: Path) -> None:
         settle(2.0)
         send_command("clean")
         settle(0.5)
-        sequence = os.environ.get("HRS_SKY_SEQUENCE") or "start:0|black 0:2.5|white 0:2.5|magenta 0:2.5|lime 0:2.5|none 0:2.5"
+        sequence = os.environ.get("HRS_SKY_SEQUENCE") or "start:0|black 0:2.5|white 0:2.5|grey 0:2.5|lightgrey 0:2.5|none 0:2.5"
         previous = None
         for k, item in enumerate(sequence.split("|")):
             command, wait = item.rsplit(":", 1)
@@ -131,6 +134,79 @@ def probe_sky(session, manifest: dict, out: Path) -> None:
             previous = command
 
     step(run, "the skybox probe")
+    quit_match()
+    done(f"probe screenshots in {probe_dir}")
+
+
+# The sky reach probe's lenses, in degrees, after the render's own (the camera can't go far past the
+# camera bounds: the game stops it short of the map's edges, so a wider lens is what sees further).
+SKY_REACH_FOVS = (16.0, 32.0)
+
+
+def probe_sky_reach(session, manifest: dict, out: Path) -> None:
+    """How much of the map's parallax sky there is to shoot (the sky layers' pictures are
+    trapezoids, from the shots inside the camera bounds). The bounds lifted ("unbound"), the camera
+    sent past the map's corners and edges (the game stops it where it may go) and to the middle; at
+    each, the map clipped away as the sky shots have it, and with the render's lens and each of
+    SKY_REACH_FOVS ("fov"), three shots: the background art alone ("bare", over nothing: black
+    where the art ends), the light grey alone, and the haze over it. Logged per shot: where the
+    camera went, the share of the screen the art fills and the share the haze reaches (where it
+    differs from the light grey alone), and the share of art along each side of the screen (where
+    the art ends). The shots kept at a quarter size."""
+    probe_dir = out.parent / f"probe-sky-reach-{time.strftime('%H%M%S')}"
+    probe_dir.mkdir(exist_ok=True)
+    left = int(manifest["status"].get("pageLeft", 0))
+    area = manifest["area"]
+    size = manifest["mapSize"]
+
+    def shot(name: str) -> np.ndarray | None:
+        frame = session.grab(dark_ok=True)
+        if frame is None:
+            log(f"  {name}: no frame")
+            return None
+        h, w = frame.shape[:2]
+        Image.fromarray(np.ascontiguousarray(frame)).resize((w // 4, h // 4)).save(probe_dir / f"{name}.png", compress_level=1)
+        return frame[:, left:].astype(np.int16)
+
+    def sides(art: np.ndarray) -> str:
+        """The share of art in a band a twentieth of the screen deep along each side."""
+        h, w = art.shape
+        bands = {"N": art[: h // 20], "S": art[-h // 20 :], "W": art[:, : w // 20], "E": art[:, -w // 20 :]}
+        return " ".join(f"{k} {v.mean() * 100:3.0f}%" for k, v in bands.items())
+
+    def run() -> None:
+        measured = sky_layers.measure(session, manifest, out.parent, area)
+        clip = measured["nearClip"] if measured else round(manifest["distance"] * sky_layers.NEAR_CLIP_SHARE)
+        if session.send("unbound") is None:
+            raise RuntimeError("the map didn't answer")
+        mid_x, mid_y = (area["left"] + area["right"]) / 2, (area["bottom"] + area["top"]) / 2
+        xs, ys = [-50.0, mid_x, size["width"] + 50.0], [-50.0, mid_y, size["height"] + 50.0]
+        fovs = [float(manifest.get("fov") or 8.0), *SKY_REACH_FOVS]
+        log(f"sky reach probe: bounds {area}, map {size}, near clip {clip}; camera x {xs}, y {ys}; lenses {fovs}")
+        for y in reversed(ys):  # north first
+            for x in xs:
+                answer = session.send(f"tile 0 {x:.2f} {y:.2f}", timeout=3.0)
+                if answer is None or session.send(f"hidemap {clip}") is None:
+                    log(f"  ({x:.0f}, {y:.0f}): the map didn't answer")
+                    continue
+                cam = (answer[0].camera_x, answer[0].camera_y)
+                for fov in fovs:
+                    session.send(f"fov {fov:g}")
+                    name = f"x{x:.0f}-y{y:.0f}-fov{fov:g}"
+                    frames = {}
+                    for variant in ("bare", "lightbare", "light"):
+                        session.send(f"sky parallax{variant} 1")
+                        settle(sky_layers.SKY_SETTLE)
+                        frames[variant] = shot(f"{name}-{variant}")
+                    if any(f is None for f in frames.values()):
+                        continue
+                    art = frames["bare"].max(axis=2) > 8
+                    haze = float((np.abs(frames["light"] - frames["lightbare"]).max(axis=2) > 3).mean())
+                    log(f"  camera at ({cam[0]:.1f}, {cam[1]:.1f}), lens {fov:g}: art fills {art.mean() * 100:5.1f}% "
+                        f"(along the sides: {sides(art)}), haze reaches {haze * 100:5.1f}%")
+        session.send("sky mapparallax 1")
+
+    step(run, "the sky reach probe")
     quit_match()
     done(f"probe screenshots in {probe_dir}")
 
@@ -226,7 +302,7 @@ def probe_waits(session, manifest: dict, out: Path) -> None:
                         warn("sky: no answer")
                         return
                 settle(1.0)
-                if session.send("sky parallaxwhite 1") is None:
+                if session.send("sky parallaxlight 1") is None:
                     return
                 settle(wait)
                 frame = session.grab(dark_ok=True)
@@ -242,3 +318,85 @@ def probe_waits(session, manifest: dict, out: Path) -> None:
     quit_match()
     done(f"probe screenshots in {probe_dir}")
 
+
+
+# The matte probe: the same paused view over white, black and two greys at a few spots with light
+# that adds to what is behind it (a core's shield, a tower's orb, a core's lava and fire, the embers
+# in the void by the Hell side), to compare the matte as it is (white and black: the white sky,
+# drawn at about 230, clips a bright see-through spark at 255) with one over grey and black plus a
+# glow layer for the light left over. The shots only: the comparison is worked out from them
+# afterwards. Each spot: a name, its cell (or how to find it), and the radius in cells kept round it.
+MATTE_SKIES = ["white", "black", "grey", "lightgrey"]
+MATTE_RADIUS = 16.0
+
+
+def matte_spots(manifest: dict) -> list[dict]:
+    """The matte probe's spots: Order's core (its shield), an Order level 3 tower (its orb),
+    Chaos's core (its lava and fire), and the void past the Hell side's top and right edges."""
+    found, bounds = manifest["elements"]["structures"], manifest["cameraBounds"]
+    spots = []
+    for name, pick in (("order-core", lambda u: u["core"] and u["owner"] == "order"),
+                       ("order-tower", lambda u: u["type"].startswith("TownCannonTowerL3") and u["owner"] == "order"),
+                       ("chaos-core", lambda u: u["core"] and u["owner"] == "chaos")):
+        u = next((u for u in found if pick(u)), None)
+        if u is not None:
+            spots.append({"name": name, "x": u["x"], "y": u["y"], "radius": 24.0 if u["core"] else MATTE_RADIUS})
+    mid_y = (bounds["bottom"] + bounds["top"]) / 2
+    spots.append({"name": "hell-top-edge", "x": bounds["left"] + (bounds["right"] - bounds["left"]) * 0.65, "y": bounds["top"], "radius": MATTE_RADIUS})
+    spots.append({"name": "hell-right-edge", "x": bounds["right"], "y": mid_y, "radius": MATTE_RADIUS})
+    return spots
+
+
+def probe_elements(session, manifest: dict, out: Path) -> None:
+    """The matte probe (matte_spots, MATTE_SKIES): the map as the tiles shoot it (paused, the
+    structures standing), the camera over each spot ("el at": the lighting refitted there, the
+    capture camera), shot over each sky in turn ("sky <colour>"), the part MATTE_RADIUS cells (a
+    core's: 24) round the spot kept, lossless: probe-matte-<time>/<spot>-<sky>.png, and spots.json
+    (each spot's cell, camera, and where its crop lies in the screen)."""
+    left = int((manifest.get("status") or {}).get("pageLeft", 0))
+    probe_dir = out.parent / f"probe-matte-{time.strftime('%H%M%S')}"
+    probe_dir.mkdir(exist_ok=True)
+    ppc, screen = manifest["pxPerCell"], manifest["screen"]
+    spots = matte_spots(manifest)
+    log(f"matte probe: {len(spots)} spots over {', '.join(MATTE_SKIES)}: {', '.join(s['name'] for s in spots)}")
+
+    def command(text: str, timeout: float = 3.0) -> bool:
+        if session.send(text, timeout=timeout) is None:
+            warn(f"  no answer to \"{text}\"")
+            return False
+        return True
+
+    def run() -> None:
+        for spot in spots:
+            command(f"el at {spot['x']:.2f} {spot['y']:.2f}")
+            settle(0.5)
+            status = session.status()
+            camera = {"x": status.camera_x, "y": status.camera_y} if status else spot
+            cx, cy = screen_point(spot, camera, screen, ppc)
+            r = int(spot["radius"] * ppc)
+            box = (max(0, int(cy) - r), int(cy) + r, max(left, int(cx) - r), int(cx) + r)
+            spot.update(camera=camera, box=box)
+            for sky in MATTE_SKIES:
+                command(f"sky {sky} 0")
+                settle(1.0)  # the sky swap drawn (a frame or two), the scene paused
+                frame = session.grab(dark_ok=True)
+                if frame is None:
+                    warn(f"  {spot['name']} over {sky}: no frame")
+                    continue
+                crop = frame[box[0]:box[1], box[2]:box[3], :3]
+                Image.fromarray(np.ascontiguousarray(crop)).save(probe_dir / f"{spot['name']}-{sky}.png")
+            log(f"  {spot['name']} at ({spot['x']:g}, {spot['y']:g}): {len(MATTE_SKIES)} skies")
+        command("sky white 0")
+        (probe_dir / "spots.json").write_text(json.dumps(spots, indent=1))
+
+    step(run, "matte probe, each spot over each sky")
+    quit_match()
+    done(f"probe screenshots in {probe_dir}")
+
+
+def elements_town(manifest: dict) -> dict:
+    """The Order team's forward town's hall (the busiest view: its gate, towers, orbs and walls)."""
+    found = manifest["elements"]["structures"]
+    halls = [u for u in found if u["type"].startswith("TownTownHall") and u["owner"] == "order"]
+    core = next(u for u in found if u["core"] and u["owner"] == "order")
+    return max(halls, key=lambda u: math.dist((u["x"], u["y"]), (core["x"], core["y"])))

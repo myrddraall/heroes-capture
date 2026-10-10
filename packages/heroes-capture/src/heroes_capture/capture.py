@@ -37,6 +37,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from . import element_capture
 from . import probes
 from . import sky_layers
 from . import ui
@@ -60,8 +61,10 @@ from .game_menus import ScriptBroken, game_menu_open, interface_all_shown
 from .game_state import IN_MAP, LOADING, MAP_FAILED, MENU, NOT_RUNNING, PHASES, game_state
 from .game_window import game_region, hold_key
 from .runlog import detail, done, log, log_timings, set_log_file, stage, warn
+from .sky import LIGHT_LEVEL
 from .screen import ScreenGrabber, disagree, looks_black, same_view, view_shift
 from .status import Status, StatusStrip
+from .watch import start_watch
 
 
 
@@ -201,11 +204,13 @@ class Session:
 # ------------------------------------------------------------------------------------------------
 
 
-def wait_for_strip(session: Session, out: Path) -> None:
+def wait_for_strip(session: Session, out: Path) -> int:
     """The status strip: drawn by the map script from its start, but the interface is hidden
     while the intro cutscene plays. Nothing is typed until it shows. Raises Recoverable when the
     game closes, the map fails to load, the menu comes back, or 3 minutes pass; ScriptBroken when
-    every interface panel shows instead (the script failed to compile: no relaunch helps)."""
+    every interface panel shows instead (the script failed to compile: no relaunch helps).
+    Returns the width of the column blanked for the strip from then on: its two columns of cells
+    as they came out on this screen (whatever the resolution and interface scale) and a margin."""
     deadline = time.time() + 180
     log("waiting for the map's status strip ...")
     failed_since, menu_since, dumped, broken_looks, broken_checked = None, None, False, 0, 0.0
@@ -250,8 +255,9 @@ def wait_for_strip(session: Session, out: Path) -> None:
         time.sleep(0.25)
     strip = session.strip
     log(f"  status strip: {strip.cell_w}x{strip.cell} px cells at {strip.origin}")
-    if session.strip_width and 2 * strip.cell_w + strip.origin[0] > session.strip_width:
-        warn(f"the strip ({2 * strip.cell_w + strip.origin[0]} px) is wider than the {session.strip_width} px blanked; lower the interface scale or raise pageLeft")
+    session.strip_width = 2 * strip.cell_w + strip.origin[0] + STRIP_MARGIN
+    log(f"  {session.strip_width} px blanked at the left edge for it")
+    return session.strip_width
 
 
 def wait_until_ready(session: Session) -> None:
@@ -342,7 +348,10 @@ def start_up(session: Session, manifest: dict, manifest_path: Path, out: Path, b
             # skipping it.
             log("letting the intro cutscene play out (nothing typed for 60 s) ...")
             step(lambda: settle(60.0), "the wait for the intro")
-        wait_for_strip(session, out)
+        # The blanked column's width goes into the manifest (status.pageLeft): the stitch leaves
+        # it out of every tile, and a resumed run blanks it from its first frame.
+        manifest["status"]["pageLeft"] = wait_for_strip(session, out)
+        manifest_path.write_text(json.dumps(manifest, indent=2))
         # The map running is the one prepared for this run (not one an earlier run left).
         expected_id = manifest["status"].get("mapId")
         seen = step(session.status, "reading the strip")
@@ -491,6 +500,7 @@ def offset_note(status: Status, tile: dict) -> str:
     return "  camera " + " and ".join(parts) + " of plan" if parts else ""
 
 
+STRIP_MARGIN = 4  # pixels blanked past the status strip's two columns (wait_for_strip)
 EDGE_BAND = 40  # pixels along a frame's outer edge checked for map content running on past it
 EDGE_CONTENT = 200  # this many content pixels in the band: the map goes on past the grid there
 EDGE_RINGS = 3  # at most this many tiles past the grid on any side
@@ -499,7 +509,7 @@ EDGE_RINGS = 3  # at most this many tiles past the grid on any side
 def edge_content(frame: np.ndarray, black: np.ndarray | None, matting: bool, left: int, side: str) -> bool:
     """Whether map content reaches the frame's edge on that side (top, bottom, left, right): mostly
     opaque pixels in the outermost band (matte maps: what differs little between the shots over
-    white and black; maps whose void is black terrain: anything not near-black). The status
+    the light sky and black; maps whose void is black terrain: anything not near-black). The status
     strip's column is left out."""
     band = {
         "top": np.s_[:EDGE_BAND, left:],
@@ -507,13 +517,13 @@ def edge_content(frame: np.ndarray, black: np.ndarray | None, matting: bool, lef
         "left": np.s_[:, left : left + EDGE_BAND],
         "right": np.s_[:, -EDGE_BAND:],
     }[side]
-    white = frame[band].astype(np.int16)
+    light = frame[band].astype(np.int16)
     if matting and black is not None:
-        content = (white - black[band].astype(np.int16)).mean(axis=2) < 115  # more than half opaque
+        content = (light - black[band].astype(np.int16)).mean(axis=2) < LIGHT_LEVEL / 2  # more than half opaque
     elif matting:
-        content = (white.min(axis=2) < 200) | (white.max(axis=2) - white.min(axis=2) > 20)  # not the white sky
+        content = (np.abs(light - LIGHT_LEVEL).max(axis=2) > 16) | (light.max(axis=2) - light.min(axis=2) > 20)  # not the light sky
     else:
-        content = white.max(axis=2) > 20
+        content = light.max(axis=2) > 20
     return int(content.sum()) >= EDGE_CONTENT
 
 
@@ -689,10 +699,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--probe-light", action="store_true", help="diagnostic: command sequences at chosen points (HRS_PROBE_POINTS, HRS_PROBE_TILE_PATH), a shot after each")
     ap.add_argument("--probe-sky", action="store_true", help="diagnostic: one edge tile over each solid-colour skybox, to check the colour shows and is uniform")
     ap.add_argument("--probe-waits", action="store_true", help="diagnostic: the fixed waits tried shorter on sample tiles and a sky swap, compared with the current ones; and the sky pass with positions further apart")
+    ap.add_argument("--probe-elements", action="store_true", help="diagnostic: the same views over white, black and two greys at spots with added light (shields, orbs, lava, embers), to compare mattes")
+    ap.add_argument("--probe-sky-reach", action="store_true", help="diagnostic: the camera as far past the camera bounds as it goes, the sky shot there with the render's lens and wider ones, to see how much parallax sky there is")
     ap.add_argument("--probe-depth", action="store_true", help="diagnostic: only measure the sky layers' parallax (done during the start-up in every render)")
     ap.add_argument("--settle", type=float, default=0.1, help="least seconds from a move to the kept screenshot (default 0.1; the waits probe found differences only where the scene animates anyway, as at 0.5)")
     ap.add_argument("--start", type=int, default=0, help="first tile, to resume a run (default 0)")
-    ap.add_argument("--monitor", type=int, help="capture this mss monitor number instead of the game window")
+    ap.add_argument("--monitor", help="put the game on this monitor before launching the map (its number as Windows lists them, its device name, or primary); the map then runs at its resolution")
+    ap.add_argument("--monitor-region", type=int, help="diagnostic: capture this mss monitor number instead of the game window")
     return ap.parse_args(argv)
 
 
@@ -722,7 +735,7 @@ def main(argv: list[str]) -> None:
         game = args.game or find_install()
         if not game:
             sys.exit("Heroes of the Storm's install wasn't found (uninstall entries, the Battle.net app's list, the usual folders); pass --game")
-        launch_map(manifest, str(game), args.battlenet)
+        launch_map(manifest, str(game), args.battlenet, args.monitor)
     if args.launch_only:
         done("Launched. In the game, type commands ending in ';' (the map's command box has the keyboard): 'tile <n>;' moves to a tile, 'clean;', 'black;', 'sky <colour>;', 'pause;'.")
         return
@@ -733,23 +746,32 @@ def main(argv: list[str]) -> None:
         log(f"Waits probe on {manifest['map']}: sample tiles and a sky swap with shorter waits, compared with the current ones.")
     elif args.probe_depth:
         log(f"Sky depth probe on {manifest['map']}: the sky layers' parallax, measured at three camera positions.")
+    elif args.probe_elements:
+        log(f"Elements probe on {manifest['map']}: the same views over white, black and two greys, for the matte.")
+    elif args.probe_sky_reach:
+        log(f"Sky reach probe on {manifest['map']}: the camera as far past the camera bounds as it goes, the sky shot there through wider lenses.")
     elif args.probe_sky:
         log(f"Skybox probe on {manifest['map']}: one edge tile, a scripted sequence of skybox swaps, a shot after each.")
     else:
-        shots = "two shots each (over white, over black)" if (manifest.get("sky") or {}).get("mode") == "matte" else "one shot each (over black; the void is black terrain)"
+        shots = "two shots each (over the light grey, over black)" if (manifest.get("sky") or {}).get("mode") == "matte" else "one shot each (over black; the void is black terrain)"
         resumed = f", carrying on at tile {args.start + 1}" if args.start else ""
         log(f"Capturing {manifest['map']}: {len(tiles)} tiles{resumed}, {shots}. Leave the keyboard and mouse alone.")
     with stage("launch and load"):
         wait_for_map_load(not args.no_launch)
 
     expected = (manifest["screen"]["w"], manifest["screen"]["h"])
-    region = ScreenGrabber.monitor(args.monitor) if args.monitor else game_region()
+    region = ScreenGrabber.monitor(args.monitor_region) if args.monitor_region else game_region()
     with ScreenGrabber(region, duplication=os.environ.get("HRS_CAPTURE", "duplication") != "mss") as screen:
         log(f"capturing {region['width']}x{region['height']} at ({region['left']}, {region['top']}) by {screen.method}")
+        if os.environ.get("HRS_WATCH"):
+            # Beside the run's folder, which a finished render removes.
+            watch_folder = out.parent.parent / f"watch-{time.strftime('%H%M%S')}"
+            start_watch(region, watch_folder)
+            log(f"watching the screen into {watch_folder} (HRS_WATCH)")
         if (region["width"], region["height"]) != expected:
             warn(f"that is not the {expected[0]}x{expected[1]} the grid was planned for; the stitch will still work, at a different scale")
         session = Session(screen, int(manifest["status"].get("pageLeft", 0)))
-        probe = args.probe_light or args.probe_sky or args.probe_waits or args.probe_depth
+        probe = args.probe_light or args.probe_sky or args.probe_sky_reach or args.probe_waits or args.probe_depth or args.probe_elements
         measured = None
         sky_waits = False  # the sky work put off until the map is ready (its world was hidden)
 
@@ -784,11 +806,17 @@ def main(argv: list[str]) -> None:
         if args.probe_light:
             probes.probe_light(session, manifest, out)
             return
+        if args.probe_sky_reach:
+            probes.probe_sky_reach(session, manifest, out)
+            return
         if args.probe_sky:
             probes.probe_sky(session, manifest, out)
             return
         if args.probe_waits:
             probes.probe_waits(session, manifest, out)
+            return
+        if args.probe_elements:
+            probes.probe_elements(session, manifest, out)
             return
         if args.probe_depth:
             with stage("sky depth measurement"):
@@ -797,6 +825,10 @@ def main(argv: list[str]) -> None:
                 quit_match()
             log_timings("capture")
             return
+        if manifest.get("structures") == "elements":
+            # Each structure and camp on its own, then every structure brought down: the tiles
+            # are the bare terrain (a resumed run only brings them down again).
+            element_capture.capture_elements(session, manifest, out.parent, tile_command, black_settled)
         capture_tiles(session, manifest, args.start, args.settle, out, positions, positions_path, args.manifest)
 
     with stage("leaving"):

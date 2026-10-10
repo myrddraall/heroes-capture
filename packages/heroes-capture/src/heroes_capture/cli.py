@@ -30,7 +30,7 @@ from rich.table import Table
 from . import ui
 from .game_menus import ScriptBroken
 
-PROBES = ("probe_light", "probe_sky", "probe_depth", "probe_waits")
+PROBES = ("probe_light", "probe_sky", "probe_sky_reach", "probe_depth", "probe_waits", "probe_elements")
 DISTANCE = "214"  # camera distance: far, so tall objects lean little at the seams
 KEEP = "0.4"  # share of each screenshot used, centred
 VALIDATED = Path(__file__).with_name("validated-maps.json")
@@ -56,17 +56,14 @@ def version() -> str:
         return "0.0.0-dev"
 
 
-def screen_size() -> str | None:
-    """The primary monitor's resolution in real pixels ("3440x1440"), on Windows."""
+def screen_size(monitor: str | None = None) -> str | None:
+    """A monitor's resolution in real pixels ("3440x1440"), on Windows: the one `monitor` names
+    (monitors.choose), or the primary. ValueError when none is named so."""
     if sys.platform != "win32":
         return None
-    import ctypes
+    from .monitors import choose
 
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except (AttributeError, OSError):
-        ctypes.windll.user32.SetProcessDPIAware()
-    return f"{ctypes.windll.user32.GetSystemMetrics(0)}x{ctypes.windll.user32.GetSystemMetrics(1)}"
+    return choose(monitor or "primary").size
 
 
 def run_capture(argv: list[str]) -> None:
@@ -192,6 +189,7 @@ def working_files(folder: Path) -> list[Path]:
 class Structures(str, Enum):
     keep = "keep"
     hide = "hide"
+    elements = "elements"
 
 
 class Category(str, Enum):
@@ -319,7 +317,8 @@ def render_one(map_spec: str, name: str, options: list[str], output_dir: Path, k
     manifest = str(manifest_path)
     if start < len(planned["tiles"]):
         if not start:
-            shutil.rmtree(manifest_path.with_suffix("") / "tiles", ignore_errors=True)  # old screenshots would mix in
+            for folder in ("tiles", "elements"):  # old screenshots would mix in (the elements' record skips what it lists)
+                shutil.rmtree(manifest_path.with_suffix("") / folder, ignore_errors=True)
         with ui.step(f"Capturing {name} in the game"):
             run_capture([manifest, *(["--start", str(start)] if start else []), *capture_options])
     with ui.step(f"Stitching {name}"):
@@ -334,15 +333,18 @@ def render_one(map_spec: str, name: str, options: list[str], output_dir: Path, k
 def render(
     ctx: typer.Context,
     category: Annotated[Optional[Category], typer.Option("--category", "-c", help="Render every map of a category instead of one map; all: every map. Unsupported maps are always left out.", show_default=False)] = None,
-    structures: Annotated[Structures, typer.Option(help="Keep or hide forts, towers, cores and gates.")] = Structures.keep,
+    structures: Annotated[Structures, typer.Option(help="Keep or hide forts, towers, cores and gates; or elements: each structure and camp on its own, over the bare terrain (in development, ELEMENTS-PLAN.md).")] = Structures.keep,
     output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Where the maps' folders go: <output-dir>/<map id>, e.g. maps/dragon-shire.")] = MAPS,
     force: Annotated[bool, typer.Option("--force", help="Render maps already rendered in the output folder again, from the start.")] = False,
     keep_tmp: Annotated[bool, typer.Option("--keep-tmp", help="Leave the working files (screenshots, the prepared map, diagnostic logs) in tmp\\ for diagnosis.")] = False,
     game: Annotated[Optional[str], typer.Option(hidden=True)] = None,  # the install, when it isn't found by itself
+    monitor: Annotated[Optional[str], typer.Option("--monitor", help="Put the game on this monitor before launching the map, and render at its resolution: its number as Windows lists them (the run's log lists the monitors), its device name, or primary.", show_default=False)] = None,
     probe_light: Annotated[bool, typer.Option(hidden=True)] = False,  # diagnostics instead of the tiles
     probe_sky: Annotated[bool, typer.Option(hidden=True)] = False,
+    probe_sky_reach: Annotated[bool, typer.Option(hidden=True)] = False,
     probe_depth: Annotated[bool, typer.Option(hidden=True)] = False,
     probe_waits: Annotated[bool, typer.Option(hidden=True)] = False,
+    probe_elements: Annotated[bool, typer.Option(hidden=True)] = False,
     show_ui: Annotated[bool, typer.Option(hidden=True)] = False,  # diagnostic: launch with the HUD up and stop
 ) -> None:
     """Prepare, capture and stitch a map, or every map of a category.
@@ -360,7 +362,7 @@ def render(
     map_spec, extra = split_map(list(ctx.args))
     if (map_spec is None) == (category is None):
         raise typer.BadParameter("name one map, or pick maps with --category")
-    chosen = {"probe_light": probe_light, "probe_sky": probe_sky, "probe_depth": probe_depth, "probe_waits": probe_waits}
+    chosen = {"probe_light": probe_light, "probe_sky": probe_sky, "probe_sky_reach": probe_sky_reach, "probe_depth": probe_depth, "probe_waits": probe_waits, "probe_elements": probe_elements}
     probe = next((f"--{name.replace('_', '-')}" for name in PROBES if chosen[name]), None)
     if category and (probe or show_ui):
         raise typer.BadParameter("the diagnostics take one map")
@@ -370,13 +372,18 @@ def render(
     options = ["--structures", structures.value, *extra]
     if "--out" not in extra:
         options += ["--out", str(TMP)]
-    if "--screen" not in extra and screen_size():
-        options += ["--screen", screen_size()]
+    if "--screen" not in extra:
+        try:
+            screen = screen_size(monitor)
+        except ValueError as e:
+            raise typer.BadParameter(str(e)) from e
+        if screen:
+            options += ["--screen", screen]
     if not {"--distance", "--fov"} & set(extra):
         options += ["--distance", DISTANCE]
     if "--keep" not in extra:
         options += ["--keep", KEEP]
-    capture_options = ["--game", game] if game else []
+    capture_options = [*(["--game", game] if game else []), *(["--monitor", monitor] if monitor else [])]
     log_to(work)
 
     if probe or show_ui:  # diagnostics: prepared afresh; their files stay in tmp\
@@ -456,7 +463,7 @@ STATUS_STYLE = {"validated": "[green]✓ validated[/]", "not yet": "[yellow]not 
 def view(
     map: Annotated[str, typer.Argument(help="The map as the game names it (case and punctuation don't matter), or its folder's name.", show_default=False)],  # noqa: A002
     output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Where the maps' folders are.")] = MAPS,
-    structures: Annotated[Structures, typer.Option(help="Which render: with the structures kept or hidden.")] = Structures.keep,
+    structures: Annotated[Structures, typer.Option(help="Which render: with the structures kept or hidden, or the elements render.")] = Structures.keep,
 ) -> None:
     """Open a rendered map's pack in its reference viewer, in the browser.
 
@@ -638,7 +645,7 @@ def self_check() -> None:
     from . import __path__ as package_path
 
     # The modules that drive the game need Windows to import at all.
-    windows_only = {"capture", "game_control", "game_state", "game_window", "probes", "screen", "sky_layers"}
+    windows_only = {"capture", "game_control", "game_state", "game_window", "monitors", "probes", "screen", "sky_layers"}
     skip = {"__main__"} | (set() if sys.platform == "win32" else windows_only)
     modules = [f"heroes_capture.{m.name}" for m in pkgutil.iter_modules(package_path) if m.name not in skip]
     modules += ["numpy.fft", "scipy.ndimage", "scipy.optimize", "PIL.Image", "pyvips"]

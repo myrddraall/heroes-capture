@@ -2,21 +2,19 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: the maps for the site's next release, each rendered fresh (--force) into
-rem maps\<map id>\pack: Battlefield of Eternity, Dragon Shire and Volskaya Foundry (new on the
-rem site), and Punisher Arena again (its site copy predates the minimap as SVG). One after the
-rem other; one that fails doesn't stop the rest. Afterwards, "py -m heroes_capture map view
-rem "<map>"" opens one (Ctrl+C stops it).
-rem A map that fails leaves its working files in tmp\ (pip, when it runs, writes tmp\setup.log).
+rem Current step: a full elements render of Battlefield of Eternity with all the sky there is: the
+rem sky also shot through 16 and 32 degree lenses (the sky reach probe: the camera can't go past the
+rem camera bounds, a wider lens sees the rest of the shells), each layer squared off to the largest
+rem rectangle inside its picture (pack format 3: a sky picture fills its rectangle). The log's sky
+rem layer images line should list the positions per lens, and "background" and "haze" should each
+rem say "squared off from" a much bigger canvas.
+rem A failed run leaves its working files in tmp\ (pip, when it runs, writes tmp\setup.log).
 setlocal
 pushd "%~dp0"
 set "PYTHONPATH=%~dp0src"
 rem The tool's dependencies, installed quietly when missing (pip's output in tmp\setup.log).
 py -c "import heroes_capture.cli, numpy, PIL, pyvips, scipy, mss, pydirectinput, dxcam, typer, rich, pmtiles" 2>nul || call :install || goto :copy
-for %%M in ("Battlefield of Eternity" "Dragon Shire" "Volskaya Foundry" "Punisher Arena") do (
-  py -m heroes_capture map render %%M --force
-  if errorlevel 1 echo.& echo %%~M failed; going on with the next.
-)
+py -m heroes_capture map render "Battlefield of Eternity" --structures elements --force
 popd
 
 :copy

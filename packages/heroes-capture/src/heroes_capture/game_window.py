@@ -125,9 +125,9 @@ def park_cursor() -> None:
         pass  # no window yet; nothing to park over
 
 
-def bring_game_to_front() -> bool:
-    """Find the game's window and put it in front (so a menu shot can be taken and keys go to
-    it). Windows only lets a process that has just sent input do that, hence the Alt tap."""
+def game_window_handle():
+    """The game's own window (its program's, and big enough to be the game rather than a helper
+    window), or None."""
     user32 = ctypes.windll.user32
     found = []
 
@@ -141,12 +141,20 @@ def bring_game_to_front() -> bool:
         return True
 
     user32.EnumWindows(visit, 0)
-    if not found:
+    return found[0] if found else None
+
+
+def bring_game_to_front() -> bool:
+    """Find the game's window and put it in front (so a menu shot can be taken and keys go to
+    it). Windows only lets a process that has just sent input do that, hence the Alt tap."""
+    user32 = ctypes.windll.user32
+    hwnd = game_window_handle()
+    if hwnd is None:
         return False
     hold_key("alt", 0.02)
-    user32.ShowWindow(found[0], 9)  # SW_RESTORE
-    user32.SwitchToThisWindow(found[0], True)  # what Alt+Tab does; SetForegroundWindow alone is often refused
-    user32.SetForegroundWindow(found[0])
+    user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    user32.SwitchToThisWindow(hwnd, True)  # what Alt+Tab does; SetForegroundWindow alone is often refused
+    user32.SetForegroundWindow(hwnd)
     time.sleep(0.5)
     park_cursor()
     return foreground_is_game()

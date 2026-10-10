@@ -240,6 +240,42 @@ def light_sets(storage: Storage) -> dict:
     return {"terrains": terrains, "lights": lights}
 
 
+CMODEL = re.compile(r'<CModel\b([^>]*)\bid="([^"]+)"')
+
+
+def model_ids_in(text: str) -> list[str]:
+    """The models (CModel) a catalog file defines; abstract ones (default="1") left out."""
+    return [m.group(2) for m in CMODEL.finditer(text) if 'default="1"' not in m.group(1)]
+
+
+def map_model_ids(storage: Storage, map_mods: list[str]) -> list[str]:
+    """Every model (CModel) a map's data can use: those of the core mod and the shared Heroes data
+    (every map has them), and of the mods the map names in its DocumentInfo, with the mods each of
+    those names in turn. From every catalog file of their game data, not only ModelData.xml: many
+    models are defined beside what uses them (the loot banner sconce's in LootBoxData.xml, a hero's
+    in its own data). Abstract ones (default="1") left out."""
+    wanted, queue = set(), [m.lower() for m in map_mods]
+    while queue:
+        mod = queue.pop()
+        if mod in wanted:
+            continue
+        wanted.add(mod)
+        for info in storage.find(f"*\\{mod}\\documentinfo"):
+            queue += [m.decode().lower() for m in re.findall(rb"([A-Za-z0-9_]+\.stormmod)", storage.read(info) or b"")]
+    ids = []
+    for name in storage.find("*.xml"):
+        low = name.lower()
+        if "\\base.stormdata\\gamedata\\" not in low:
+            continue
+        if not (low.startswith(("mods\\core.stormmod\\", "mods\\heroesdata.stormmod\\")) or any(f"\\{mod}\\" in low for mod in wanted)):
+            continue
+        data = storage.read(name) or b""
+        if b"<CModel" not in data:
+            continue
+        ids += model_ids_in(data.decode("utf-8", errors="replace"))
+    return sorted(set(ids))
+
+
 def sky_model_file(storage: Storage, file_name: str) -> bytes | None:
     """A skybox model's .m3 (as named in sky.py's PARALLAX_KEYS), or None."""
     stem = file_name.rsplit(".", 1)[0].lower()

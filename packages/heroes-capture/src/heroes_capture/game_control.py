@@ -19,6 +19,7 @@ from .game_window import (
     foreground_program,
     game_region,
     game_running,
+    game_window_handle,
     hold_key,
     park_cursor,
     type_unicode,
@@ -243,9 +244,36 @@ def ensure_game_running(battlenet: str | None, game: str) -> None:
     warn("couldn't tell whether Heroes reached the menu; carrying on")
 
 
-def launch_map(manifest: dict, game: str, battlenet: str | None) -> None:
+def place_game_on_monitor(spec: str) -> None:
+    """The game's window put on the monitor `spec` names (monitors.choose) and sized to it, at the
+    main menu before the map is launched, so the map loads at that monitor's resolution. The
+    window's size afterwards is checked: the capture follows the window wherever and whatever
+    size it is, so a window that didn't take the monitor's size is only warned about."""
+    from .monitors import choose, monitors, place_window
+
+    found = monitors()
+    log("monitors: " + "; ".join(m.describe() for m in found))
+    monitor = choose(spec, found)
+    deadline = time.time() + 60
+    while (hwnd := game_window_handle()) is None:
+        if time.time() > deadline:
+            sys.exit(f"the game's window didn't appear within a minute; it can't be put on monitor {spec}")
+        time.sleep(1.0)
+    place_window(hwnd, monitor)
+    time.sleep(1.5)  # the game redraws at the new size
+    bring_game_to_front()
+    region = game_region()
+    where = f"{region['width']}x{region['height']} at ({region['left']}, {region['top']})"
+    if (region["left"], region["top"], region["width"], region["height"]) == (monitor.left, monitor.top, monitor.width, monitor.height):
+        log(f"the game is on monitor {monitor.describe()}")
+    else:
+        warn(f"the game's window is {where} after being put on monitor {monitor.describe()}; the capture follows the window as it is")
+
+
+def launch_map(manifest: dict, game: str, battlenet: str | None, monitor: str | None = None) -> None:
     """Hand the prepared map to the running game (Heroes must be at the main menu: a running
-    match keeps its map), starting Heroes first if it isn't running."""
+    match keeps its map), starting Heroes first if it isn't running; with `monitor`, the game's
+    window put on that monitor first (place_game_on_monitor)."""
     switcher = Path(game) / "Support64" / "HeroesSwitcher_x64.exe"
     if not switcher.exists():
         sys.exit(f"not found: {switcher} (pass --game)")
@@ -253,6 +281,8 @@ def launch_map(manifest: dict, game: str, battlenet: str | None) -> None:
         # Back at the menu first: an earlier run may have left its match without waiting.
         wait_for_menu()
     ensure_game_running(battlenet, game)
+    if monitor:
+        place_game_on_monitor(monitor)
     # The game wants an absolute path, and may not read one on a network share (such as
     # \\wsl.localhost\...), so launch a local copy. Each launch gets a new name: with a
     # reused one the game ran an earlier preparation's map, whose grid didn't match.
