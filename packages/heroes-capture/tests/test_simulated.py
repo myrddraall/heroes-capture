@@ -36,6 +36,7 @@ SCENARIOS = {
     "monitor": ("matte", ["--monitor", "1"], {}, "finished", ("monitors: 1 \\\\.\\DISPLAY1 3440x1440 at (0, 0) primary", "the game is on monitor 1 \\\\.\\DISPLAY1")),
     "probe sky": ("matte", ["--probe-sky"], {}, "finished", "05-none-layer0"),
     "probe depth": ("matte", ["--probe-depth"], {}, "finished", "sky layers: parallax rate"),
+    "probe monitor": ("matte", ["--probe-monitor", "--monitor", "1"], {}, "finished", ("the game's window is 3440x1440 at (0, 0), monitor 1", "monitor probe at 3440x1440: 6 of 6 checks ok")),
     "launch only": ("matte", ["--launch-only"], {}, "finished", ""),
 }
 

@@ -33,6 +33,14 @@ import numpy as np
 
 CELLS = 88
 ROWS = 64
+
+
+def interface_height(width: int, height: int) -> float:
+    """The height the game lays its interface out for, in pixels: the screen's, unless the screen
+    is narrower than 4:3, when the interface (1600 x 1200 units at 4:3) is scaled to the width
+    instead (1680 x 1344 gave cells 1.05 times their unit size, not 1.12). Everything measured
+    "relative to the screen's height" means this height."""
+    return min(height, width * 1200 / 1600)
 SEARCH_WIDTH = 160  # the strip is looked for this far from the left edge
 SEARCH_HEIGHT_SHARE = 0.9
 

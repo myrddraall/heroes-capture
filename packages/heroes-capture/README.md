@@ -137,7 +137,18 @@ the render for that monitor's resolution: `--monitor 2`, by the number Windows l
 in (the run's log starts with the list: `monitors: 1 \\.\DISPLAY1 3440x1440 at (0, 0) primary;
 2 ...`), or its device name, or `primary`. Without it the game stays where it is and the primary
 monitor's resolution is planned for. The capture follows the game's window either way; a window
-that didn't take the monitor's size is warned about.
+that didn't take the monitor's size is warned about. The game puts its window back on its own
+monitor when it redraws at a new size, so the window is watched for a few seconds and placed again
+when that happens (up to three times). The narrowest picture the game draws is 5:4: on a narrower
+monitor (1680x1440, say) it draws a 5:4 picture the monitor's width wide (1680x1344), centred, with
+black above and below, and the render is planned for that picture.
+
+To check a monitor before rendering on it, `map render <map> --probe-monitor --monitor <which>`
+runs the start-up there and then reports, instead of rendering: whether the window took the
+monitor, the status strip's cells against what the screen's height predicts, the width blanked for
+the strip, and where the camera lands when sent to a tile. The report (`report.json`, the strip's
+column and the screen at half size) goes to `tmp\probe-monitor-<WxH>-<time>\`; the log line
+`monitor probe at WxH: n of 6 checks ok` sums it up.
 
 ### Options (prepare; `map render` passes them on)
 
@@ -311,7 +322,9 @@ parallax sky also keeps `<id>\sky-layers.json` in its working files, the measure
   is playing, and how many opening timers were cut short.
 - **capture.py** starts Heroes through the Battle.net app if it isn't running (started
   directly it can't authenticate; `--battlenet` or `HRS_BATTLENET` if the app isn't in the
-  usual place), then launches the map through `Support64\HeroesSwitcher_x64.exe` (Heroes must be
+  usual place; the app can let the first launch command go by, so it is sent again after 45 s,
+  then as the `battlenet://Hero` link, and after that the run pauses, up to 10 minutes, for Play
+  to be pressed on the app's Heroes page), then launches the map through `Support64\HeroesSwitcher_x64.exe` (Heroes must be
   at the main menu: a running match keeps its map), waits for the status strip, on a map with its own sky, measures and shoots the sky layers
   while the map gets ready (or once it is ready, when an in-game hero selection hides the world
   meanwhile: Punisher Arena), measures the camera bounds the game really applies (an arena's are far tighter than its map file says)

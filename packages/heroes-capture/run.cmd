@@ -2,12 +2,10 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: a full elements render of Battlefield of Eternity with all the sky there is: the
-rem sky also shot through 16 and 32 degree lenses (the sky reach probe: the camera can't go past the
-rem camera bounds, a wider lens sees the rest of the shells), each layer squared off to the largest
-rem rectangle inside its picture (pack format 3: a sky picture fills its rectangle). The log's sky
-rem layer images line should list the positions per lens, and "background" and "haze" should each
-rem say "squared off from" a much bigger canvas.
+rem Current step: a full elements render of Battlefield of Eternity, pack format 3 (the elements'
+rem cut-outs in atlases, an overview per tiled layer), on the primary monitor. --monitor <n> on the
+rem command puts the game on another monitor first (the run's log lists them); --probe-monitor
+rem --monitor <n> checks a monitor instead of rendering (README, Monitors).
 rem A failed run leaves its working files in tmp\ (pip, when it runs, writes tmp\setup.log).
 setlocal
 pushd "%~dp0"

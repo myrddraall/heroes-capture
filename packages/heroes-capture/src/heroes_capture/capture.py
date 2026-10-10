@@ -47,6 +47,7 @@ from .game_control import (
     GamePaused,
     Recoverable,
     dismiss_failed_dialog,
+    keep_game_on_monitor,
     launch_map,
     quit_match,
     require_focus,
@@ -702,6 +703,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--probe-elements", action="store_true", help="diagnostic: the same views over white, black and two greys at spots with added light (shields, orbs, lava, embers), to compare mattes")
     ap.add_argument("--probe-sky-reach", action="store_true", help="diagnostic: the camera as far past the camera bounds as it goes, the sky shot there with the render's lens and wider ones, to see how much parallax sky there is")
     ap.add_argument("--probe-depth", action="store_true", help="diagnostic: only measure the sky layers' parallax (done during the start-up in every render)")
+    ap.add_argument("--probe-monitor", action="store_true", help="diagnostic: the start-up at this monitor's resolution (with --monitor), then a report on the window, the strip's cells and the first tile; run once per monitor")
     ap.add_argument("--settle", type=float, default=0.1, help="least seconds from a move to the kept screenshot (default 0.1; the waits probe found differences only where the scene animates anyway, as at 0.5)")
     ap.add_argument("--start", type=int, default=0, help="first tile, to resume a run (default 0)")
     ap.add_argument("--monitor", help="put the game on this monitor before launching the map (its number as Windows lists them, its device name, or primary); the map then runs at its resolution")
@@ -746,6 +748,8 @@ def main(argv: list[str]) -> None:
         log(f"Waits probe on {manifest['map']}: sample tiles and a sky swap with shorter waits, compared with the current ones.")
     elif args.probe_depth:
         log(f"Sky depth probe on {manifest['map']}: the sky layers' parallax, measured at three camera positions.")
+    elif args.probe_monitor:
+        log(f"Monitor probe on {manifest['map']}: the start-up at this monitor's resolution, then a report on what the tool found there.")
     elif args.probe_elements:
         log(f"Elements probe on {manifest['map']}: the same views over white, black and two greys, for the matte.")
     elif args.probe_sky_reach:
@@ -758,6 +762,8 @@ def main(argv: list[str]) -> None:
         log(f"Capturing {manifest['map']}: {len(tiles)} tiles{resumed}, {shots}. Leave the keyboard and mouse alone.")
     with stage("launch and load"):
         wait_for_map_load(not args.no_launch)
+        if args.monitor:
+            keep_game_on_monitor(args.monitor, "as the map loaded")
 
     expected = (manifest["screen"]["w"], manifest["screen"]["h"])
     region = ScreenGrabber.monitor(args.monitor_region) if args.monitor_region else game_region()
@@ -771,7 +777,7 @@ def main(argv: list[str]) -> None:
         if (region["width"], region["height"]) != expected:
             warn(f"that is not the {expected[0]}x{expected[1]} the grid was planned for; the stitch will still work, at a different scale")
         session = Session(screen, int(manifest["status"].get("pageLeft", 0)))
-        probe = args.probe_light or args.probe_sky or args.probe_sky_reach or args.probe_waits or args.probe_depth or args.probe_elements
+        probe = args.probe_light or args.probe_sky or args.probe_sky_reach or args.probe_waits or args.probe_depth or args.probe_elements or args.probe_monitor
         measured = None
         sky_waits = False  # the sky work put off until the map is ready (its world was hidden)
 
@@ -817,6 +823,9 @@ def main(argv: list[str]) -> None:
             return
         if args.probe_elements:
             probes.probe_elements(session, manifest, out)
+            return
+        if args.probe_monitor:
+            probes.probe_monitor(session, manifest, out)
             return
         if args.probe_depth:
             with stage("sky depth measurement"):

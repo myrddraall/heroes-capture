@@ -14,8 +14,10 @@ from PIL import Image
 from . import sky_layers
 from .elements import changed, screen_point
 from .game_control import quit_match, send_command, settle, step
-from .runlog import done, log, warn
+from .game_window import game_region
+from .runlog import done, log, stage, warn
 from .screen import changed_share
+from .status import ROWS, interface_height
 
 
 def _save(frame: np.ndarray, path: Path) -> None:
@@ -90,6 +92,93 @@ def probe_light(session, manifest: dict, out: Path) -> None:
     step(run, "the lighting probe")
     quit_match()
     done(f"probe screenshots in {probe_dir}")
+
+
+def probe_monitor(session, manifest: dict, out: Path) -> None:
+    """Does the tool work on this monitor, at its resolution? Run with `--monitor <n>`, once per
+    monitor. The start-up has already happened at that resolution (the strip found, the map
+    ready, the first tile, the camera bounds); this records what it found, in the log and in
+    probe-monitor-<WxH>-<time>/: report.json, the strip's column at full size (edge.png) and the
+    whole screen at half size (frame.png). The checks: the window took the monitor's size and
+    place; the manifest planned for that size; the strip's cells are the size the height predicts
+    (25 x 15 interface units, 1200 units to the screen's height; the second column is directly
+    right of the first); the first tile's camera is where it was sent."""
+    from .monitors import monitors
+
+    region = game_region()
+    w, h = region["width"], region["height"]
+    probe_dir = out.parent.parent / f"probe-monitor-{w}x{h}-{time.strftime('%H%M%S')}"
+    probe_dir.mkdir(parents=True, exist_ok=True)
+    checks: list[tuple[str, bool, str]] = []
+
+    def check(name: str, ok: bool, detail: str) -> None:
+        checks.append((name, ok, detail))
+        (log if ok else warn)(f"  monitor probe: {name}: {'ok' if ok else 'NOT OK'} ({detail})")
+
+    rect = (region["left"], region["top"], w, h)
+    on = next((m for m in monitors() if m.game_rect() == rect), None)
+    letterboxed = on is not None and on.game_rect() != (on.left, on.top, on.width, on.height)
+    log(f"  monitor probe: the game's window is {w}x{h} at ({region['left']}, {region['top']})"
+        + (f", monitor {on.describe()}" + (" (letterboxed: the monitor is narrower than the game's 5:4)" if letterboxed else "") if on
+           else ", not a monitor's rectangle nor the game's 5:4 picture on one"))
+    check("window fills a monitor (or its 5:4 picture of one)", on is not None, f"{w}x{h} at ({region['left']}, {region['top']})")
+    planned = (manifest["screen"]["w"], manifest["screen"]["h"])
+    check("grid planned for this size", planned == (w, h), f"planned {planned[0]}x{planned[1]}, window {w}x{h}")
+    strip = session.strip
+    # The cells: 25 x 15 interface units; the interface is 1200 units tall (or 1600 wide on a
+    # screen narrower than 4:3: interface_height).
+    unit = interface_height(w, h) / 1200
+    expect_w, expect_h = 25 * unit, 15 * unit
+    cells_ok = abs(strip.pitch_y - expect_h) <= 1.0 and abs(strip.cell_w - expect_w) <= 1.0
+    check("strip cells the size the height predicts", cells_ok,
+          f"cells {strip.cell_w}x{strip.cell} px, row pitch {strip.pitch_y:.2f}; expected {expect_w:.2f}x{expect_h:.2f} ({unit:.3f} px per interface unit"
+          + (", scaled to the width: the screen is narrower than 4:3)" if interface_height(w, h) < h else ")"))
+    check("strip's second column directly right of the first", abs(strip.pitch_x - strip.cell_w) <= 1.0,
+          f"column pitch {strip.pitch_x:.2f}, cell width {strip.cell_w}")
+    check("strip fits the screen's height", strip.origin[1] + ROWS * strip.pitch_y <= h,
+          f"{ROWS} rows from y={strip.origin[1]} end at {strip.origin[1] + ROWS * strip.pitch_y:.0f}, screen {h} tall")
+    log(f"  monitor probe: {session.strip_width} px blanked at the left edge; {manifest['pxPerCell']} px per cell planned")
+    # The camera sent to the middle tile (where no bound can clamp it) and read back through the
+    # strip; then to a corner tile, logged only: how far the bounds clamp it there says how the
+    # planned grid fits this screen's shape.
+    tiles = manifest["tiles"]
+    mid_x = (min(t["x"] for t in tiles) + max(t["x"] for t in tiles)) / 2
+    mid_y = (min(t["y"] for t in tiles) + max(t["y"] for t in tiles)) / 2
+    middle = min(tiles, key=lambda t: abs(t["x"] - mid_x) + abs(t["y"] - mid_y))
+    corner = min(tiles, key=lambda t: (t["x"], t["y"]))
+
+    def camera_at(tile: dict) -> tuple[float, float] | None:
+        """The camera once the map acknowledges the tile (it has moved and been clamped by then)."""
+        answer = session.send(f"tile {tile['index']} {tile['x']:.2f} {tile['y']:.2f}", timeout=3.0)
+        return (answer[0].camera_x, answer[0].camera_y) if answer else None
+
+    camera = camera_at(middle)
+    if camera:
+        off = math.hypot(camera[0] - middle["x"], camera[1] - middle["y"])
+        check("the camera goes where a tile sends it", off <= 0.5,
+              f"middle tile sent to ({middle['x']:.2f}, {middle['y']:.2f}), camera at ({camera[0]:.2f}, {camera[1]:.2f}), {off:.2f} cells off")
+    else:
+        check("the camera goes where a tile sends it", False, "the strip couldn't be read")
+    at_corner = camera_at(corner)
+    if at_corner:
+        log(f"  monitor probe: corner tile sent to ({corner['x']:.2f}, {corner['y']:.2f}), camera at ({at_corner[0]:.2f}, {at_corner[1]:.2f}), "
+            f"{math.hypot(at_corner[0] - corner['x'], at_corner[1] - corner['y']):.2f} cells off (the bounds clamp it there)")
+    frame = session.raw_grab()
+    _save(np.ascontiguousarray(frame[:, : max(session.strip_width, 1) + 32]), probe_dir / "edge.png")
+    Image.fromarray(np.ascontiguousarray(frame)).reduce(2).save(probe_dir / "frame.png")
+    report = {
+        "window": region, "monitor": on.describe() if on else None, "planned": {"w": planned[0], "h": planned[1]},
+        "strip": {"origin": list(strip.origin), "cell": [strip.cell_w, strip.cell], "pitch": [strip.pitch_x, strip.pitch_y], "blanked": session.strip_width},
+        "pxPerCell": manifest["pxPerCell"], "fov": manifest.get("fov"), "tiles": len(tiles),
+        "camera": {"middle": {"sent": [middle["x"], middle["y"]], "at": camera}, "corner": {"sent": [corner["x"], corner["y"]], "at": at_corner}},
+        "checks": [{"check": n, "ok": ok, "detail": d} for n, ok, d in checks],
+    }
+    (probe_dir / "report.json").write_text(json.dumps(report, indent=2))
+    failed = [n for n, ok, _ in checks if not ok]
+    (done if not failed else warn)(f"monitor probe at {w}x{h}: {len(checks) - len(failed)} of {len(checks)} checks ok"
+                                   + (f"; not ok: {', '.join(failed)}" if failed else "") + f"; report in {probe_dir}")
+    with stage("leaving"):
+        quit_match()
 
 
 def probe_sky(session, manifest: dict, out: Path) -> None:

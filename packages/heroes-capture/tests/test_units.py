@@ -845,3 +845,40 @@ def test_each_kind_on_each_team_is_shot_at_its_own_time(element_capture):
     assert w({"type": "TownWallRadial17L2", "owner": "chaos", "core": False}) == 1.33
     assert w({"type": "TownWallRadial14L3", "owner": "chaos", "core": False}) == 2.24
     assert w({"type": "KingsCore", "owner": "chaos", "core": True}) == element_capture.CORE_WAIT
+
+
+def test_the_game_draws_at_most_5_to_4_narrow():
+    from heroes_capture.monitors import Monitor, game_size
+
+    assert game_size(3440, 1440) == (3440, 1440)
+    assert game_size(1680, 1440) == (1680, 1344)  # the game letterboxed a 7:6 monitor to 5:4
+    assert game_size(1080, 1920) == (1080, 864)  # a portrait monitor gets a 5:4 picture its width wide
+    narrow = Monitor(3, "\\\\.\\DISPLAY3", 3440, 0, 1680, 1440, False)
+    assert narrow.game_size == "1680x1344"
+    assert narrow.game_rect() == (3440, 48, 1680, 1344)  # centred, as the game put it
+    wide = Monitor(4, "\\\\.\\DISPLAY4", 0, 0, 3440, 1440, True)
+    assert wide.game_rect() == (0, 0, 3440, 1440)
+
+
+def test_the_interface_scales_to_the_width_on_a_narrow_screen():
+    from heroes_capture.status import interface_height
+
+    assert interface_height(3440, 1440) == 1440
+    assert interface_height(1680, 1344) == 1260  # 1600 units across 1680 px: 1.05 px a unit, 1200 units tall
+    assert interface_height(1920, 1440) == 1440  # 4:3 exactly: either way
+
+
+def test_the_narrow_menu_layout_is_recognised():
+    """The main menu as the game draws it at 1680x1344 (a 5:4 picture on a 7:6 monitor): a
+    different layout from the 16:9 one, kept at half size from a run where the usual
+    reference found 1 part of 3. The frame is put back to full size for the check."""
+    from pathlib import Path
+
+    from PIL import Image
+
+    from heroes_capture.game_state import menu_matches
+
+    half = Image.open(Path(__file__).with_name("fixtures") / "menu-narrow-1680x1344-half.png").convert("RGB")
+    frame = np.asarray(half.resize((1680, 1344), Image.BILINEAR), dtype=np.uint8)
+    details: list[str] = []
+    assert menu_matches(frame, details) == 3, details

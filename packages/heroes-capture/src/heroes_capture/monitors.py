@@ -8,13 +8,24 @@ import ctypes
 import ctypes.wintypes as wt
 from dataclasses import dataclass
 
-try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)
-except (AttributeError, OSError):
-    ctypes.windll.user32.SetProcessDPIAware()
+if hasattr(ctypes, "windll"):  # on Windows (the pure parts, game_size, are usable anywhere)
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except (AttributeError, OSError):
+        ctypes.windll.user32.SetProcessDPIAware()
 
 MONITORINFOF_PRIMARY = 0x1
 SWP_NOZORDER, SWP_FRAMECHANGED = 0x0004, 0x0020
+# The narrowest picture the game draws: 5:4. On a narrower screen it draws a 5:4 picture the
+# screen's width wide, centred, with black above and below (a 1680x1440 monitor got 1680x1344 at
+# 48 px from the top), and its window is that picture.
+MIN_ASPECT = 5 / 4
+
+
+def game_size(width: int, height: int) -> tuple[int, int]:
+    """The size the game draws at on a screen this size: the screen's, unless it is narrower than
+    MIN_ASPECT, then as tall as 5:4 allows."""
+    return width, min(height, int(round(width / MIN_ASPECT)))
 
 
 class MONITORINFOEXW(ctypes.Structure):
@@ -34,6 +45,17 @@ class Monitor:
     @property
     def size(self) -> str:
         return f"{self.width}x{self.height}"
+
+    @property
+    def game_size(self) -> str:
+        """The size the game draws at on this monitor (game_size), as "WxH"."""
+        return "{}x{}".format(*game_size(self.width, self.height))
+
+    def game_rect(self) -> tuple[int, int, int, int]:
+        """Where the game's window is when it is on this monitor: the monitor, or on one narrower
+        than the game draws, its 5:4 picture centred on it."""
+        w, h = game_size(self.width, self.height)
+        return (self.left, self.top + (self.height - h) // 2, w, h)
 
     def describe(self) -> str:
         return f"{self.number} {self.device} {self.size} at ({self.left}, {self.top})" + (" primary" if self.primary else "")

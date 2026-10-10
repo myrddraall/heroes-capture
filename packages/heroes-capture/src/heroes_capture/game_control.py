@@ -11,6 +11,8 @@ import tempfile
 import time
 from pathlib import Path
 
+import numpy as np
+
 from .game_menus import game_menu_open
 from .game_state import IN_MAP, LOADING, MAP_FAILED, MENU, NOT_RUNNING, game_state, menu_matches
 from .game_window import (
@@ -208,12 +210,33 @@ def ensure_game_running(battlenet: str | None, game: str) -> None:
             "in update.cmd (or pass --battlenet)."
         )
     log(f"Heroes isn't running; starting it through Battle.net ({launcher}) ...")
-    subprocess.Popen([str(launcher), "--exec=launch Hero"])
+    # Battle.net can let a launch command go by: told to launch right after the game was killed,
+    # it still showed the game's page with Play ready, and started nothing. So the command is
+    # sent again after 45 s, then as the battlenet:// link the app also launches from, and
+    # after that the run waits (as a pause, up to 10 minutes) for Play to be pressed by hand.
+    attempts = [
+        ("the launch command", lambda: subprocess.Popen([str(launcher), "--exec=launch Hero"])),
+        ("the launch command again", lambda: subprocess.Popen([str(launcher), "--exec=launch Hero"])),
+        ("the battlenet://Hero link", lambda: subprocess.Popen(["cmd", "/c", "start", "", "battlenet://Hero"], shell=False)),
+    ]
+    started = time.time()
+    for n, (how, start) in enumerate(attempts):
+        if n:
+            log(f"  Heroes hasn't started after {time.time() - started:.0f} s; trying {how}")
+        start()
+        wait_until = time.time() + 45
+        while not game_running() and time.time() < wait_until:
+            time.sleep(1.0)
+        if game_running():
+            break
+    if not game_running():
+        with paused("Battle.net didn't start Heroes: press Play on its Heroes of the Storm page to carry on"):
+            deadline = time.time() + 600
+            while not game_running():
+                if time.time() > deadline:
+                    sys.exit("Heroes didn't start within 10 minutes (is the Battle.net app logged in, and does it show the game as installed?)")
+                time.sleep(1.0)
     deadline = time.time() + 180
-    while not game_running():
-        if time.time() > deadline:
-            sys.exit("Heroes didn't start within 3 minutes")
-        time.sleep(1.0)
     while not bring_game_to_front():  # Heroes starting up: put in front as its window appears
         if time.time() > deadline:
             sys.exit("Heroes started, but its window didn't appear within 3 minutes")
@@ -244,30 +267,136 @@ def ensure_game_running(battlenet: str | None, game: str) -> None:
     warn("couldn't tell whether Heroes reached the menu; carrying on")
 
 
+def _dump_unrecognised(frame, name: str) -> None:
+    """A frame the game's state couldn't be read from, saved at half size beside the run's
+    diagnostic log (or in tmp\\) as <name>-<time>.png, with the menu parts' scores in the log."""
+    if frame is None:
+        warn(f"  nothing recognised on screen for a while (the game isn't in front, so no frame to keep)")
+        return
+    from PIL import Image
+
+    from . import ui
+
+    folder = (ui.log_file() or Path("tmp") / "x").parent
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{name}-{time.strftime('%H%M%S')}.png"
+    try:
+        Image.fromarray(np.ascontiguousarray(frame)).reduce(2).save(path)
+    except (OSError, ValueError) as e:
+        warn(f"  couldn't keep the screen ({e})")
+        return
+    details: list[str] = []
+    menu_matches(frame, details)
+    warn(f"  nothing recognised on screen for a while: it is in {path}; the menu's parts: " + "; ".join(details))
+
+
+def game_display_settings() -> list[str]:
+    """The display lines of the game's own settings (Documents\\Heroes of the Storm\\Variables.txt):
+    what it thinks its window's mode, size, place and monitor are. Empty when the file isn't
+    found (the Documents folder is asked of Windows: it may be redirected, to OneDrive say)."""
+    import ctypes
+
+    candidates = [Path.home() / "Documents", Path.home() / "OneDrive" / "Documents"]
+    try:
+        buffer = ctypes.c_wchar_p()
+        # FOLDERID_Documents {FDD39AD0-238F-46AF-ADB4-6C85480369C7}, as the GUID's bytes in memory
+        folder_id = ctypes.c_char_p(bytes.fromhex("D09AD3FD8F23AF46ADB46C85480369C7"))
+        if ctypes.windll.shell32.SHGetKnownFolderPath(folder_id, 0, None, ctypes.byref(buffer)) == 0 and buffer.value:
+            candidates.insert(0, Path(buffer.value))
+    except (AttributeError, OSError, TypeError):
+        pass
+    for documents in candidates:
+        settings = documents / "Heroes of the Storm" / "Variables.txt"
+        if settings.exists():
+            keys = ("display", "window", "width", "height", "monitor", "fullscreen", "resolution")
+            lines = [line.strip() for line in settings.read_text(errors="replace").splitlines() if any(k in line.lower() for k in keys)]
+            return [f"({settings})", *lines]
+    log("the game's settings file wasn't found (looked for Heroes of the Storm\\Variables.txt in " + ", ".join(str(c) for c in candidates) + ")")
+    return []
+
+
+def window_rect() -> tuple[int, int, int, int]:
+    r = game_region()
+    return (r["left"], r["top"], r["width"], r["height"])
+
+
 def place_game_on_monitor(spec: str) -> None:
     """The game's window put on the monitor `spec` names (monitors.choose) and sized to it, at the
-    main menu before the map is launched, so the map loads at that monitor's resolution. The
-    window's size afterwards is checked: the capture follows the window wherever and whatever
-    size it is, so a window that didn't take the monitor's size is only warned about."""
+    main menu before the map is launched, so the map loads at that monitor's resolution. The game
+    may move its window back by itself (it has a monitor of its own in its settings, and puts the
+    window there again when it redraws at a new size), so the window is watched for a few seconds
+    and placed again, up to three times; where it is after that is logged. The capture follows
+    the window wherever and whatever size it is, so a window that didn't take the monitor's size
+    is only warned about. The game's own display settings are logged first, for the diagnosis."""
     from .monitors import choose, monitors, place_window
 
     found = monitors()
     log("monitors: " + "; ".join(m.describe() for m in found))
+    settings = game_display_settings()
+    if settings:
+        log("the game's display settings: " + "; ".join(settings))
     monitor = choose(spec, found)
+    # Where the window should be: the monitor, or on one narrower than the game draws (5:4), the
+    # letterboxed picture the game makes its window.
+    wanted = monitor.game_rect()
+    if wanted[3] != monitor.height:
+        log(f"monitor {monitor.number} is narrower than the game draws (5:4): it will draw {monitor.game_size}, centred, with black above and below")
     deadline = time.time() + 60
     while (hwnd := game_window_handle()) is None:
         if time.time() > deadline:
             sys.exit(f"the game's window didn't appear within a minute; it can't be put on monitor {spec}")
         time.sleep(1.0)
-    place_window(hwnd, monitor)
-    time.sleep(1.5)  # the game redraws at the new size
-    bring_game_to_front()
-    region = game_region()
-    where = f"{region['width']}x{region['height']} at ({region['left']}, {region['top']})"
-    if (region["left"], region["top"], region["width"], region["height"]) == (monitor.left, monitor.top, monitor.width, monitor.height):
-        log(f"the game is on monitor {monitor.describe()}")
-    else:
-        warn(f"the game's window is {where} after being put on monitor {monitor.describe()}; the capture follows the window as it is")
+    before = window_rect()
+    log(f"the game's window is {before[2]}x{before[3]} at ({before[0]}, {before[1]}); putting it on monitor {monitor.describe()}")
+    _place_and_watch(hwnd, monitor, wanted)
+
+
+def keep_game_on_monitor(spec: str, when: str) -> None:
+    """The window placed again if the game moved it since (it puts the window back where its
+    settings remember, windowx/windowy in Variables.txt, as the map loads: a window left at 48
+    px from the top of a 1440 monitor had the taskbar over its bottom). `when` names the moment,
+    for the log."""
+    from .monitors import choose, monitors
+
+    monitor = choose(spec, monitors())
+    wanted = monitor.game_rect()
+    rect = window_rect()
+    if rect == wanted:
+        return
+    hwnd = game_window_handle()
+    if hwnd is None:
+        warn(f"the game's window is {rect[2]}x{rect[3]} at ({rect[0]}, {rect[1]}) {when}, and can't be found to place it again")
+        return
+    log(f"the game moved its window to {rect[2]}x{rect[3]} at ({rect[0]}, {rect[1]}) {when}; putting it back on monitor {monitor.number}")
+    _place_and_watch(hwnd, monitor, wanted)
+
+
+def _place_and_watch(hwnd, monitor, wanted: tuple[int, int, int, int]) -> None:
+    """The window put on the monitor, watched for 6 s and placed again when the game moves it
+    back, up to three times; where it is after that is logged."""
+    from .monitors import place_window
+
+    for attempt in range(1, 4):
+        place_window(hwnd, monitor)
+        time.sleep(1.5)  # the game redraws at the new size
+        bring_game_to_front()
+        # Watched for 6 s: the game may put the window back where its settings say.
+        moved_back = None
+        started = time.time()
+        while time.time() - started < 6.0:
+            rect = window_rect()
+            if rect != wanted:
+                moved_back = (round(time.time() - started, 1), rect)
+                break
+            time.sleep(0.5)
+        if moved_back is None:
+            log(f"the game is on monitor {monitor.describe()}" + (f" (placed {attempt} times)" if attempt > 1 else ""))
+            return
+        seconds, (x, y, w, h) = moved_back
+        warn(f"placing {attempt}: the game moved its window to {w}x{h} at ({x}, {y}) after {seconds} s"
+             + ("; placing it again" if attempt < 3 else ""))
+    x, y, w, h = window_rect()
+    warn(f"the game's window is {w}x{h} at ({x}, {y}) after being put on monitor {monitor.describe()} three times; the capture follows the window as it is")
 
 
 def launch_map(manifest: dict, game: str, battlenet: str | None, monitor: str | None = None) -> None:
@@ -369,8 +498,14 @@ def wait_for_menu(quit_sent: bool = False, until_leaving: bool = False) -> None:
     strip = StatusStrip()
     with ScreenGrabber(game_region(), duplication=False) as screen:
         started = time.time()
-        state, phases, menu_looks, resent = None, [], 0, False
+        state, phases, menu_looks, resent, dumped = None, [], 0, False, False
         while time.time() - started < 120:
+            # The window can move or change size as the match ends (the game redraws, and may put
+            # the window where its settings say): the reading follows it, or it would look at the
+            # wrong part of the desktop and never see the menu.
+            if foreground_is_game() and (region := game_region()) != screen.region:
+                log(f"  the game's window is now {region['width']}x{region['height']} at ({region['left']}, {region['top']}); following it")
+                screen.region = region
             seen = game_state(screen.grab() if foreground_is_game() else None, strip)
             if seen == IN_MAP and not resent and time.time() - started > 3:
                 resent = True
@@ -378,6 +513,11 @@ def wait_for_menu(quit_sent: bool = False, until_leaving: bool = False) -> None:
             if seen != state:
                 state = seen
                 phases.append(f"{state} at {time.time() - started:.1f} s")
+            if state == LOADING and time.time() - started > 45 and not dumped:
+                # The match ended long ago and nothing is recognised: the screen as it is, and how
+                # far each part of the menu was from being found, for the diagnosis.
+                dumped = True
+                _dump_unrecognised(screen.grab() if foreground_is_game() else None, "menu-unseen")
             if until_leaving and state not in (IN_MAP, None):
                 log(f"  the match is ending ({state}); the next launch waits for the menu")
                 return
