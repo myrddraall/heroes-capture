@@ -647,7 +647,7 @@ def self_check() -> None:
     from . import __path__ as package_path
 
     # The modules that drive the game need Windows to import at all.
-    windows_only = {"capture", "game_control", "game_state", "game_window", "monitors", "probes", "screen", "sky_layers"}
+    windows_only = {"capture", "element_capture", "game_control", "game_state", "game_window", "monitors", "probes", "screen", "sky_layers", "watch"}
     skip = {"__main__"} | (set() if sys.platform == "win32" else windows_only)
     modules = [f"heroes_capture.{m.name}" for m in pkgutil.iter_modules(package_path) if m.name not in skip]
     modules += ["numpy.fft", "scipy.ndimage", "scipy.optimize", "PIL.Image", "pyvips"]
