@@ -138,6 +138,79 @@ def probe_sky(session, manifest: dict, out: Path) -> None:
     done(f"probe screenshots in {probe_dir}")
 
 
+# The sky reach probe's lenses, in degrees, after the render's own (the camera can't go far past the
+# camera bounds: the game stops it short of the map's edges, so a wider lens is what sees further).
+SKY_REACH_FOVS = (16.0, 32.0)
+
+
+def probe_sky_reach(session, manifest: dict, out: Path) -> None:
+    """How much of the map's parallax sky there is to shoot (the sky layers' pictures are
+    trapezoids, from the shots inside the camera bounds). The bounds lifted ("unbound"), the camera
+    sent past the map's corners and edges (the game stops it where it may go) and to the middle; at
+    each, the map clipped away as the sky shots have it, and with the render's lens and each of
+    SKY_REACH_FOVS ("fov"), three shots: the background art alone ("bare", over nothing: black
+    where the art ends), the light grey alone, and the haze over it. Logged per shot: where the
+    camera went, the share of the screen the art fills and the share the haze reaches (where it
+    differs from the light grey alone), and the share of art along each side of the screen (where
+    the art ends). The shots kept at a quarter size."""
+    probe_dir = out.parent / f"probe-sky-reach-{time.strftime('%H%M%S')}"
+    probe_dir.mkdir(exist_ok=True)
+    left = int(manifest["status"].get("pageLeft", 0))
+    area = manifest["area"]
+    size = manifest["mapSize"]
+
+    def shot(name: str) -> np.ndarray | None:
+        frame = session.grab(dark_ok=True)
+        if frame is None:
+            log(f"  {name}: no frame")
+            return None
+        h, w = frame.shape[:2]
+        Image.fromarray(np.ascontiguousarray(frame)).resize((w // 4, h // 4)).save(probe_dir / f"{name}.png", compress_level=1)
+        return frame[:, left:].astype(np.int16)
+
+    def sides(art: np.ndarray) -> str:
+        """The share of art in a band a twentieth of the screen deep along each side."""
+        h, w = art.shape
+        bands = {"N": art[: h // 20], "S": art[-h // 20 :], "W": art[:, : w // 20], "E": art[:, -w // 20 :]}
+        return " ".join(f"{k} {v.mean() * 100:3.0f}%" for k, v in bands.items())
+
+    def run() -> None:
+        measured = sky_layers.measure(session, manifest, out.parent, area)
+        clip = measured["nearClip"] if measured else round(manifest["distance"] * sky_layers.NEAR_CLIP_SHARE)
+        if session.send("unbound") is None:
+            raise RuntimeError("the map didn't answer")
+        mid_x, mid_y = (area["left"] + area["right"]) / 2, (area["bottom"] + area["top"]) / 2
+        xs, ys = [-50.0, mid_x, size["width"] + 50.0], [-50.0, mid_y, size["height"] + 50.0]
+        fovs = [float(manifest.get("fov") or 8.0), *SKY_REACH_FOVS]
+        log(f"sky reach probe: bounds {area}, map {size}, near clip {clip}; camera x {xs}, y {ys}; lenses {fovs}")
+        for y in reversed(ys):  # north first
+            for x in xs:
+                answer = session.send(f"tile 0 {x:.2f} {y:.2f}", timeout=3.0)
+                if answer is None or session.send(f"hidemap {clip}") is None:
+                    log(f"  ({x:.0f}, {y:.0f}): the map didn't answer")
+                    continue
+                cam = (answer[0].camera_x, answer[0].camera_y)
+                for fov in fovs:
+                    session.send(f"fov {fov:g}")
+                    name = f"x{x:.0f}-y{y:.0f}-fov{fov:g}"
+                    frames = {}
+                    for variant in ("bare", "lightbare", "light"):
+                        session.send(f"sky parallax{variant} 1")
+                        settle(sky_layers.SKY_SETTLE)
+                        frames[variant] = shot(f"{name}-{variant}")
+                    if any(f is None for f in frames.values()):
+                        continue
+                    art = frames["bare"].max(axis=2) > 8
+                    haze = float((np.abs(frames["light"] - frames["lightbare"]).max(axis=2) > 3).mean())
+                    log(f"  camera at ({cam[0]:.1f}, {cam[1]:.1f}), lens {fov:g}: art fills {art.mean() * 100:5.1f}% "
+                        f"(along the sides: {sides(art)}), haze reaches {haze * 100:5.1f}%")
+        session.send("sky mapparallax 1")
+
+    step(run, "the sky reach probe")
+    quit_match()
+    done(f"probe screenshots in {probe_dir}")
+
+
 def _difference(a: np.ndarray, b: np.ndarray, left: int) -> str:
     """How two shots of the same view differ: the share of 32-pixel blocks that changed (as the
     capture's half-drawn check measures), the mean difference, and the 99.9th percentile."""

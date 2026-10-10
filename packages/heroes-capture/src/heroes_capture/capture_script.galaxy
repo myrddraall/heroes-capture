@@ -20,6 +20,7 @@ trigger hrsCap_gt_Pause;
 trigger hrsCap_gt_Move;
 trigger hrsCap_gt_Look;
 trigger hrsCap_gt_Clip;
+trigger hrsCap_gt_Fov;
 trigger hrsCap_gt_Note;
 trigger hrsCap_gt_BgSpeed;
 trigger hrsCap_gt_Unbound;
@@ -320,6 +321,7 @@ void hrsCap_RunCommand (string lp_text, int lp_player) {
     else if ((lv_word == "move")) { lv_t = hrsCap_gt_Move; }
     else if ((lv_word == "look")) { lv_t = hrsCap_gt_Look; }
     else if ((lv_word == "clip")) { lv_t = hrsCap_gt_Clip; }
+    else if ((lv_word == "fov")) { lv_t = hrsCap_gt_Fov; }
     else if ((lv_word == "hidemap")) { lv_t = hrsCap_gt_HideMap; }
     else if ((lv_word == "pause")) { lv_t = hrsCap_gt_Pause; }
     else if ((lv_word == "refitwait")) { lv_t = hrsCap_gt_RefitWait; }
@@ -920,6 +922,18 @@ bool hrsCap_gt_Look_Func (bool testConds, bool runActions) {
     lv_x = StringToFixed(StringWord(hrsCap_cmd, 2));
     lv_y = StringToFixed(StringWord(hrsCap_cmd, 3));
     CameraPan(hrsCap_cmdPlayer, Point(lv_x, lv_y), 0.0, -1, 10.0, false);
+    hrsCap_Ack();
+    return true;
+}
+
+// "fov <degrees>" (--probe-sky-reach): the camera's field of view, until the next "tile" puts the
+// capture camera's back. Probe: how much more of the sky shells a wider lens sees from where the
+// camera can go.
+bool hrsCap_gt_Fov_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    CameraSetValue(hrsCap_cmdPlayer, c_cameraValueFieldOfView, StringToFixed(StringWord(hrsCap_cmd, 2)), 0.0, -1, 10.0);
     hrsCap_Ack();
     return true;
 }
@@ -1739,6 +1753,7 @@ void hrsCap_Init () {
     hrsCap_gt_Sky = TriggerCreate("hrsCap_gt_Sky_Func");
     hrsCap_gt_Black = TriggerCreate("hrsCap_gt_Black_Func");
     hrsCap_gt_Clip = TriggerCreate("hrsCap_gt_Clip_Func");
+    hrsCap_gt_Fov = TriggerCreate("hrsCap_gt_Fov_Func");
     hrsCap_gt_HideMap = TriggerCreate("hrsCap_gt_HideMap_Func");
     hrsCap_gt_RefitWait = TriggerCreate("hrsCap_gt_RefitWait_Func");
     hrsCap_gt_Unbound = TriggerCreate("hrsCap_gt_Unbound_Func");

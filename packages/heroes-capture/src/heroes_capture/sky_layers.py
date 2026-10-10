@@ -25,6 +25,7 @@ from .frames import save_frame
 from .game_control import settle, step
 from . import ui
 from .runlog import log, warn
+from .sky import lens_scale
 
 SKY_SETTLE = 0.1  # real seconds for a sky swap to be drawn before its shot (was 1; the waits probe found shots within one level down to 0.05)
 MAP_SETTLE = 0.1  # real seconds after a camera move before a shot of the map (as the tiles' settle)
@@ -157,6 +158,12 @@ def measure(session, manifest: dict, out_dir: Path, area: dict | None = None) ->
     return result
 
 
+# The wider lenses the sky is also shot through, in degrees (the render's own is about 8): the game
+# stops the camera at the camera bounds, so a wider lens is what sees the rest of the sky shells
+# (the sky reach probe on Battlefield of Eternity: through 16 degrees the background art filled
+# every shot but to the south, where it ends; through 32 its edges showed). Each shot through them
+# is softer, so the stitch prefers the narrowest lens wherever the shots overlap.
+WIDE_LENSES = (16.0, 32.0)
 SKY_KEEP = 0.8  # the share of a screen the sky moves between neighbouring camera positions (0.6 gave 20 positions on Battlefield of Eternity, 0.8 gives 12; the shots must overlap for sky_stitch to fit the shells' tilt)
 FIXED_CLIP = 600  # a near clip past the parallax shells and short of the fixed skybox (which survives 1000)
 
@@ -167,8 +174,11 @@ def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep:
     positions), the map clipped away, and at each position the keyed copies of the parallax
     model are shot (sky.py KEY_VARIANTS: the background art alone; white without haze; the
     haze over the light grey; over black), then the background art over the map's own fixed skybox
-    (where the art lets it through). The fixed skybox once, alone. Into <id>/sky/, with
-    positions.json; stitch.py makes the layers and composites from them."""
+    (where the art lets it through). The same again through each of WIDE_LENSES wider than the
+    render's ("fov"), over fewer positions (3x3 through the widest), for the rest of the sky the
+    camera can't go over. The fixed skybox once per lens, alone. Into <id>/sky/, with
+    positions.json (each position's camera and lens); sky_stitch.py makes the layers and
+    composites from them."""
     sky = manifest.get("sky") or {}
     if not sky.get("keys") or not measured:
         return
@@ -193,12 +203,21 @@ def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep:
         count = max(1, math.ceil((hi - lo) / step_cells) + 1)
         return [lo + (hi - lo) * k / (count - 1) for k in range(count)] if count > 1 else [(lo + hi) / 2]
 
-    xs = spread(area["left"], area["right"], screen["w"], rate_xy[0])
-    ys = spread(area["bottom"], area["top"], screen["h"], rate_xy[1])
+    render_fov = float(manifest.get("fov") or 0) or None
+    lenses = [render_fov, *(f for f in WIDE_LENSES if render_fov and f > render_fov)]
+    # Per lens: its name prefix and its grid (the widest's: the bounds' corners, edges and middle).
+    grids = []
+    for k, fov in enumerate(lenses):
+        widest = k == len(lenses) - 1 and k > 0
+        wide = lens_scale(fov, render_fov) if fov else 1.0
+        xs = [area["left"], (area["left"] + area["right"]) / 2, area["right"]] if widest else spread(area["left"], area["right"], screen["w"] * wide, rate_xy[0])
+        ys = [area["bottom"], (area["bottom"] + area["top"]) / 2, area["top"]] if widest else spread(area["bottom"], area["top"], screen["h"] * wide, rate_xy[1])
+        grids.append(("p" if k == 0 else f"f{fov:g}-", fov, xs, ys))
     clip = measured["nearClip"]
-    log(f"sky layer images: {len(xs)}x{len(ys)} camera positions, near clip {clip} ...")
+    log(f"sky layer images: {len(grids[0][2])}x{len(grids[0][3])} camera positions, near clip {clip}"
+        + "".join(f"; {len(xs)}x{len(ys)} through {fov:g} degrees" for _, fov, xs, ys in grids[1:]) + " ...")
     saver = ThreadPoolExecutor(max_workers=2)
-    record = {"keep": keep, "rateUsedForSteps": rate_xy, "mapPxPerCell": scale, "nearClip": clip, "screen": screen, "positions": {}}
+    record = {"keep": keep, "rateUsedForSteps": rate_xy, "mapPxPerCell": scale, "nearClip": clip, "screen": screen, "fov": render_fov, "positions": {}}
 
     def save(frame: np.ndarray, name: str) -> None:
         saver.submit(save_frame, folder / name, frame)
@@ -213,10 +232,17 @@ def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep:
         return answer[0].camera_x, answer[0].camera_y
 
     def fixed_alone() -> None:
-        if at(xs[0], ys[0], FIXED_CLIP) is None or session.send("sky mapsky 0") is None:
+        """The fixed skybox through each lens (it moves with the camera: the same at every position)."""
+        first_x, first_y = grids[0][2][0], grids[0][3][0]
+        if at(first_x, first_y, FIXED_CLIP) is None or session.send("sky mapsky 0") is None:
             raise RuntimeError("the map didn't answer")
         settle(SKY_SETTLE)
         save(session.grab(dark_ok=True), "fixed")
+        for fov in lenses[1:]:
+            if session.send(f"fov {fov:g}") is None:
+                raise RuntimeError("the map didn't answer")
+            settle(SKY_SETTLE)
+            save(session.grab(dark_ok=True), f"fixed-fov{fov:g}")
 
     try:
         step(fixed_alone, "the fixed skybox")
@@ -225,35 +251,33 @@ def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep:
         step(lambda: session.send("sky mapparallax 1"), "putting the map's own parallax back")
         saver.shutdown(wait=True)
         return
-    n = 0
-    with ui.bar(len(xs) * len(ys), "sky positions") as advance:
-        for y in reversed(ys):  # north first, like the tiles
-            for x in xs:
-                name = f"p{n:03d}"
-
-                def one() -> None:
-                    camera = at(x, y, clip)
-                    if camera is None:
+    # Every position, lens by lens, each grid north first like the tiles.
+    positions = [(f"{prefix}{k:03d}", fov, x, y) for prefix, fov, xs, ys in grids
+                 for k, (y, x) in enumerate((y, x) for y in reversed(ys) for x in xs)]
+    with ui.bar(len(positions), "sky positions") as advance:
+        for n, (name, fov, x, y) in enumerate(positions):
+            def one() -> None:
+                camera = at(x, y, clip)
+                if camera is None or (fov != render_fov and session.send(f"fov {fov:g}") is None):
+                    raise RuntimeError("the map didn't answer")
+                for variant in ("bare", "lightbare", "light", "black"):
+                    if session.send(f"sky parallax{variant} 1") is None:
                         raise RuntimeError("the map didn't answer")
-                    for variant in ("bare", "lightbare", "light", "black"):
-                        if session.send(f"sky parallax{variant} 1") is None:
-                            raise RuntimeError("the map didn't answer")
-                        settle(SKY_SETTLE)  # drawn; set anew at speed 1, the haze is at the same frozen moment each time
-                        save(session.grab(dark_ok=True), f"{name}-{variant}")
-                    # The background art over the map's own fixed skybox: where it lets the skybox through.
-                    for command in ("sky mapsky 0", "sky parallaxbare 1"):
-                        if session.send(command) is None:
-                            raise RuntimeError("the map didn't answer")
-                    settle(SKY_SETTLE)
-                    save(session.grab(dark_ok=True), f"{name}-bareoverfixed")
-                    record["positions"][name] = {"camera": list(camera)}
+                    settle(SKY_SETTLE)  # drawn; set anew at speed 1, the haze is at the same frozen moment each time
+                    save(session.grab(dark_ok=True), f"{name}-{variant}")
+                # The background art over the map's own fixed skybox: where it lets the skybox through.
+                for command in ("sky mapsky 0", "sky parallaxbare 1"):
+                    if session.send(command) is None:
+                        raise RuntimeError("the map didn't answer")
+                settle(SKY_SETTLE)
+                save(session.grab(dark_ok=True), f"{name}-bareoverfixed")
+                record["positions"][name] = {"camera": list(camera), "fov": fov}
 
-                try:
-                    step(one, f"sky layer images {n + 1}/{len(xs) * len(ys)}")
-                except RuntimeError as e:
-                    warn(f"sky position {n + 1}: {e}; skipped")
-                n += 1
-                advance()
+            try:
+                step(one, f"sky layer images {n + 1}/{len(positions)}")
+            except RuntimeError as e:
+                warn(f"sky position {n + 1}: {e}; skipped")
+            advance()
     step(lambda: session.send("sky mapparallax 1"), "putting the map's own parallax back")
     saver.shutdown(wait=True)
     (folder / "positions.json").write_text(json.dumps(record, indent=2))

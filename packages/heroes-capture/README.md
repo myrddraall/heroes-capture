@@ -67,7 +67,8 @@ The rest of this page is for working on the tool itself.
   the usual folders).
 
 - In the game's options: **Display Mode: Windowed (Fullscreen)** (screenshots of exclusive
-  fullscreen come out black), your monitor's native resolution, graphics on Ultra.
+  fullscreen come out black), graphics on Ultra. Any resolution does: the render plans for the
+  monitor the game is on, and the status strip is measured as it comes out on the screen.
 
 ## Render a map
 
@@ -76,7 +77,8 @@ The rest of this page is for working on the tool itself.
 tracked: it contains the machine's source path.
 
 `heroes-capture map render` runs all three steps against the installed game, at the primary
-monitor's resolution, into `maps\<map id>\`, with its working files in `tmp\`:
+monitor's resolution (or another monitor's: `--monitor`), into `maps\<map id>\`, with its working
+files in `tmp\`:
 
 ```powershell
 heroes-capture map render "Towers of Doom"                  # structures kept, into maps\towers-of-doom
@@ -127,6 +129,15 @@ Use `--structures hide` for bare terrain; it goes to the map folder's `terrain\`
 Map names are as the game shows them (case and punctuation don't matter), or pass a path to any
 `.stormmap`. The battleground maps are `.s2ma` archives under content-hash names in the game's
 storage; the first run after a game update opens each to index them by name (about 20 s).
+
+### Monitors
+
+`--monitor <which>` puts the game's window on that monitor before launching the map, and plans
+the render for that monitor's resolution: `--monitor 2`, by the number Windows lists the monitors
+in (the run's log starts with the list: `monitors: 1 \\.\DISPLAY1 3440x1440 at (0, 0) primary;
+2 ...`), or its device name, or `primary`. Without it the game stays where it is and the primary
+monitor's resolution is planned for. The capture follows the game's window either way; a window
+that didn't take the monitor's size is warned about.
 
 ### Options (prepare; `map render` passes them on)
 

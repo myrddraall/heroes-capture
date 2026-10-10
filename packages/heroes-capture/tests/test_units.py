@@ -252,23 +252,54 @@ def test_the_haze_is_cut_off_where_the_white_key_isnt_behind_it():
     assert (out[:, 40:, 3] == 0).all()
 
 
-def test_a_layer_cropped_to_its_content_stays_in_place():
-    """The cropped haze keeps each pixel where it was behind the map: its canvas origin moves with
-    the crop."""
+def test_a_shot_through_any_lens_maps_onto_the_centre_view_exactly():
+    """The camera straight down at one height: a point of the tilted sky plane seen at screen
+    position p from a camera, through a lens that sees `lens` times as much across, is where the
+    affine transform puts it in the view from the centre camera (through the render's lens),
+    exactly: checked against the ray from each camera to the plane."""
     import numpy as np
 
-    from heroes_capture.sky_stitch import _crop_to_content
+    from heroes_capture.sky import lens_scale
+    from heroes_capture.sky_stitch import Plane
 
-    image = np.zeros((10, 20, 4), np.uint8)
-    image[2:5, 3:9] = (10, 20, 30, 255)
-    image[4, 8] = (1, 2, 3, 200)  # a marked pixel, at canvas (8, 4)
-    low = np.array([-100.0, -50.0])
-    cropped, moved = _crop_to_content(image, low)
-    assert cropped.shape == (3, 6, 4)
-    assert tuple(cropped[4 - 2, 8 - 3]) == (1, 2, 3, 200)
-    assert tuple(moved + [8 - 3, 4 - 2]) == tuple(low + [8, 4])  # the same place in the centre view
-    empty, same = _crop_to_content(np.zeros((4, 4, 4), np.uint8), low)
-    assert empty.shape == (4, 4, 4) and tuple(same) == tuple(low)
+    focal, centre = 48.0 * 214, np.array([124.0, 103.0])
+    plane = Plane(468.0, (0.01, -0.46), centre, focal)
+    for camera, fov in (((20.0, 28.0), 8.0), ((228.0, 178.0), 16.0), ((124.0, 103.0), 32.0), ((20.0, 178.0), 32.0)):
+        lens = lens_scale(fov, 8.0)
+        matrix, t = plane.to_centre_view(camera, lens)
+        for p in ((0.0, 0.0), (1700.0, -700.0), (-1720.0, 720.0), (900.0, 300.0)):
+            # The ray through p from the camera (its focal: the render's over the lens) to the plane.
+            f = focal / lens
+            under = plane.under(camera)
+            z = under / (1 - (plane.slope[0] * p[0] - plane.slope[1] * p[1]) / f)
+            x, y = camera[0] + p[0] * z / f, camera[1] - p[1] * z / f
+            seen = np.array([focal * (x - centre[0]) / z, focal * (centre[1] - y) / z])
+            assert np.allclose(matrix @ np.array(p) + t, seen, atol=1e-6), (camera, fov, p)
+
+
+def test_a_layer_is_squared_off_to_the_largest_rectangle_inside_its_picture():
+    """The sky pictures are trapezoids, with holes (the background art's gaps onto the fixed skybox)
+    and stray specks around them: the picture is its largest part, holes filled, and the layer's
+    rectangle the largest inside it."""
+    import numpy as np
+
+    from heroes_capture.sky_stitch import largest_rectangle, panel
+
+    defined = np.zeros((40, 100), bool)
+    for y in range(4, 36):
+        defined[y, y // 2 : 100 - y // 2] = True  # narrower towards the bottom
+    defined[15:20, 40:45] = False  # a hole
+    defined[0, 0] = defined[39, 99] = True  # specks
+    picture = panel(defined)
+    assert picture[15:20, 40:45].all() and not picture[0, 0] and not picture[39, 99]
+    x0, y0, x1, y1 = largest_rectangle(picture)
+    assert picture[y0:y1, x0:x1].all()
+    area = (x1 - x0) * (y1 - y0)
+    # No rectangle inside it is bigger: every band of rows, as wide as its narrowest row allows.
+    best = max((min(100 - b // 2 for b in range(top, bottom)) - max(b // 2 for b in range(top, bottom))) * (bottom - top)
+               for top in range(4, 36) for bottom in range(top + 1, 37))
+    assert area == best
+    assert largest_rectangle(np.zeros((3, 3), bool)) is None
 
 
 # ------------------------------------------------------------------------------------------------

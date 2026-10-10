@@ -427,9 +427,10 @@ def main(argv: list[str]) -> Path:
         "hideDoodads": hide_doodads,
         # What the render cuts out of the map (ELEMENTS-PLAN.md): structures, towns, camps.
         "elements": element_data,
-        # The status strip (two columns) sits in the top-left corner; this many pixels of each
-        # screenshot's left edge are blanked by the capture and left out by the stitch.
-        "status": {"cells": STATUS_CELLS, "rows": STATUS_ROWS, "cellUnits": [STATUS_CELL_W, STATUS_CELL_H], "pageLeft": 64, "mapId": map_id},
+        # The status strip (two columns) sits in the top-left corner. The capture measures it as
+        # it comes out on the screen and adds pageLeft here: how many pixels of each screenshot's
+        # left edge it blanks for it, which the stitch leaves out.
+        "status": {"cells": STATUS_CELLS, "rows": STATUS_ROWS, "cellUnits": [STATUS_CELL_W, STATUS_CELL_H], "mapId": map_id},
     }
     manifest_path = (out / f"{id_}.json").resolve()
     manifest_path.write_text(js_json.dumps(manifest, indent=2), encoding="utf-8")

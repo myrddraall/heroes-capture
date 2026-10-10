@@ -18,6 +18,7 @@ map is ready), FAKE_SKY_RATE.
 
 import ctypes
 import json
+import math
 import os
 import subprocess
 import sys
@@ -31,7 +32,13 @@ from PIL import Image
 
 TOOL, WORK = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
 ARGS = sys.argv[3:]
-W, H = 3440, 1440
+W, H = (int(v) for v in os.environ.get("FAKE_SCREEN", "3440x1440").split("x"))
+# The status strip's cells as the game draws them: 25 x 15 interface units, 1200 units to the
+# screen's height (30 x 18 px at 1440 lines), each cell's edges on whole pixels.
+CELL_W, CELL_H = 25 * H / 1200, 15 * H / 1200
+# The frames kept: as many as 64 at 3440x1440 take (a 4K screen's frames are 2.25 times as big, so
+# fewer of them: a simulation stays within conftest's SIM_MEMORY at any screen size).
+CACHE_BYTES = 64 * 3440 * 1440 * 3
 
 # ---------------------------------------------------------------- virtual clock
 _now = [1_000_000.0]
@@ -78,6 +85,7 @@ class Game:
         sky_small = rng.integers(0, 255, size=(64 * 3, 64 * 3, 3)).astype(np.uint8)
         self.sky_world = np.asarray(Image.fromarray(sky_small).resize((64 * 48, 64 * 48), Image.BILINEAR))
         self.clip = 5.0
+        self.lens = 1.0  # how much more the camera's lens sees across than the render's ("fov"; "tile" puts it back)
         self.layer0, self.layer1 = "lightgrey", "mapparallax"
         yy, xx = np.mgrid[0 : 64 * 48 : 8, 0 : 64 * 48 : 8]
         haze = np.clip(0.3 * np.sin(xx / 300.0) * np.cos(yy / 200.0), 0, 0.3).astype(np.float32)
@@ -188,7 +196,11 @@ class Game:
                 self.cam = (min(max(x, l), r), min(max(y, b), t))
                 self.sky = 1
                 self.clip = 5.0
+                self.lens = 1.0
             ack(0.4)
+        elif cmd == "fov":
+            self.lens = math.tan(math.radians(float(words[1])) / 2) / math.tan(math.radians(8.0) / 2)  # the manifest's lens: 8
+            ack(0.05)
         elif cmd in ("move", "look"):
             xs = words[2:4] if cmd == "move" else words[1:3]
             self.cam = (float(xs[0]), float(xs[1]))
@@ -253,23 +265,37 @@ class Game:
         if self.state == "loading" or (self.state == "map" and self.t() < 2 and not self.leaving):
             return np.full((H, W, 3), 25, np.uint8)
         bits = self.bits()
-        key = (self.cam, self.sky, self.clip, self.layer0, self.layer1, tuple(bits))
+        key = (self.cam, self.sky, self.clip, self.layer0, self.layer1, self.lens, tuple(bits))
         if key in self.cache:
             return self.cache[key]
         frame = np.full((H, W, 3), 198 if self.sky == 1 else 0, np.uint8)  # the light sky drawn at about 198
         world = self.world
         cx, cy = self.cam
+        lens = 1.0
         if self.clip > 230:  # the map clipped away: the sky shells, moving at sky_rate of the map
             world = self.sky_world
             cx, cy = 32 + (cx - 32) * self.sky_rate, 32 + (cy - 32) * self.sky_rate
-        # world at 48 px per cell, camera at the screen's centre, y up
-        x0 = int(round(cx * 48 - W / 2))
-        y0 = int(round((64 - cy) * 48 - H / 2))
-        sx0, sy0 = max(0, -x0), max(0, -y0)
-        wx0, wy0 = max(0, x0), max(0, y0)
-        wx1, wy1 = min(self.world.shape[1], x0 + W), min(self.world.shape[0], y0 + H)
-        if wx1 > wx0 and wy1 > wy0:
-            frame[sy0 : sy0 + wy1 - wy0, sx0 : sx0 + wx1 - wx0] = world[wy0:wy1, wx0:wx1]
+            lens = self.lens
+
+        def view(source, fill):
+            """What the camera sees of a 48 px per cell picture (y up): through a wider lens, a
+            patch `lens` times as big, scaled down to the screen."""
+            vw, vh = int(round(W * lens)), int(round(H * lens))
+            x0, y0 = int(round(cx * 48 - vw / 2)), int(round((64 - cy) * 48 - vh / 2))
+            patch = np.full((vh, vw) + source.shape[2:], fill, source.dtype)
+            sx0, sy0, wx0, wy0 = max(0, -x0), max(0, -y0), max(0, x0), max(0, y0)
+            wx1, wy1 = min(source.shape[1], x0 + vw), min(source.shape[0], y0 + vh)
+            inside = np.zeros((vh, vw), bool)
+            if wx1 > wx0 and wy1 > wy0:
+                patch[sy0 : sy0 + wy1 - wy0, sx0 : sx0 + wx1 - wx0] = source[wy0:wy1, wx0:wx1]
+                inside[sy0 : sy0 + wy1 - wy0, sx0 : sx0 + wx1 - wx0] = True
+            if lens != 1.0:
+                patch = np.asarray(Image.fromarray(patch).resize((W, H), Image.BILINEAR))
+                inside = np.asarray(Image.fromarray(inside).resize((W, H), Image.NEAREST))
+            return patch, inside
+
+        seen, inside = view(world, 0)
+        frame[inside] = seen[inside]
         if self.clip >= 600:  # only the fixed skybox survives: a purple gradient, or nothing
             frame[:] = 0
             if self.layer0 == "mapsky":
@@ -279,23 +305,24 @@ class Game:
             v = self.layer1.replace("parallax", "")
             base = frame.astype(np.float32)
             if v in ("light", "lightbare"):
-                base[:] = 198
+                base[inside] = 198  # the art's keyed copy: only where the art is
             elif v == "black":
-                base[:] = 0
+                base[inside] = 0
             if v in ("light", "black"):
-                a = np.zeros((H, W), np.float32)
-                a[sy0 : sy0 + wy1 - wy0, sx0 : sx0 + wx1 - wx0] = self.haze_alpha[wy0:wy1, wx0:wx1]
+                a, _ = view(self.haze_alpha, 0.0)
                 base = base * (1 - a[..., None]) + 200 * a[..., None]
             frame = base.astype(np.uint8)
         if os.environ.get('FAKE_HIDDEN') and self.phase() < 2:
             frame[:] = 0  # an in-game hero selection: the world hidden until the map is ready
-        frame[:, :60] = 0  # the backdrop
+        frame[:, : round(2 * CELL_W)] = 0  # the backdrop
         for k in range(89):
             logical = k if k < 64 else (None if k == 64 else k - 1)
             v = 0 if logical is None else bits[logical]
-            x, y = (k // 64) * 30, (k % 64) * 18
-            frame[y : y + 18, x : x + 30] = 255 if v else 0
-        if len(self.cache) > 64:
+            col, row = k // 64, k % 64
+            x0, x1 = round(col * CELL_W), round((col + 1) * CELL_W)
+            y0, y1 = round(row * CELL_H), round((row + 1) * CELL_H)
+            frame[y0:y1, x0:x1] = 255 if v else 0
+        if len(self.cache) * W * H * 3 > CACHE_BYTES:
             self.cache.clear()
         self.cache[key] = frame
         return frame
@@ -339,6 +366,14 @@ def _send_input(n, events, size):
 def _client_rect(hwnd, rect):
     r = _obj(rect)
     r.left, r.top, r.right, r.bottom = 0, 0, W, H
+    return 1
+
+
+def _monitor_info(hmon, p):
+    info = _obj(p)
+    info.rcMonitor.left, info.rcMonitor.top, info.rcMonitor.right, info.rcMonitor.bottom = 0, 0, W, H
+    info.dwFlags = 1  # primary
+    info.szDevice = "\\\\.\\DISPLAY1"
     return 1
 
 
@@ -404,6 +439,9 @@ class User32:
     ShowWindow = Fn(lambda *a: 1)
     SwitchToThisWindow = Fn(_to_front)
     SetForegroundWindow = Fn(_to_front)
+    EnumDisplayMonitors = Fn(lambda hdc, clip, visit, lp: visit(1, None, None, 0))
+    GetMonitorInfoW = Fn(_monitor_info)
+    SetWindowPos = Fn(lambda *a: 1)
     SetCursorPos = Fn(lambda x, y: 1)
     SetProcessDPIAware = Fn(lambda: 1)
 

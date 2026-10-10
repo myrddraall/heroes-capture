@@ -9,6 +9,7 @@ second clean shot, command "sky <colour>" for probes.
 """
 
 import html
+import math
 import struct
 
 TEXTURES = "Assets\\Textures\\"
@@ -62,6 +63,12 @@ SKIES = {
 # opacity, the solid parts at exactly 255). LIGHT_LEVEL: the level the game draws it at, the stitch's
 # fallback when a pair of shots has too little sky to measure it.
 LIGHT_SKY, LIGHT_LEVEL = "lightgrey", 198.0
+
+
+def lens_scale(fov: float, render_fov: float) -> float:
+    """How much more a lens of `fov` degrees sees across than the render's (the sky shots through
+    wider lenses): the ratio of the tangents of their half angles."""
+    return math.tan(math.radians(fov) / 2) / math.tan(math.radians(render_fov) / 2)
 
 
 def model_id(colour: str) -> str:

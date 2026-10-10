@@ -100,8 +100,8 @@ async function openPack() {
 
 (async () => {
   const { pack, archive, url } = await openPack();
-  if (pack.format !== 1) {
-    statusEl.textContent = `This viewer reads pack format 1; this pack is format ${pack.format}.`;
+  if (pack.format !== 3) {
+    statusEl.textContent = `This viewer reads pack format 3; this pack is format ${pack.format}.`;
     return;
   }
   document.title = pack.map.name;
@@ -197,22 +197,40 @@ async function openPack() {
       // structure standing, a camp spawned), where that picture isn't see-through (a rubble's
       // circle reaches far wider than the structure).
       piece.hit = piece.states[KIND_STATES[piece.kind][0]] || Object.values(piece.states).find(Boolean) || null;
-      for (const cut of Object.values(piece.states)) {
-        if (!cut) continue;  // nothing left of it in that state
-        fetch(url(cut.file)).then((r) => r.blob()).then(createImageBitmap)
-          .then((bitmap) => {
-            cut.bitmap = bitmap;
-            if (cut === piece.hit) cut.alpha = alphaOf(bitmap);
-            redraw();
-          })
-          .catch(() => {});  // a cut-out that can't be read is left out
-        // Where a standing neighbour is in front of it: masks (opaque where hidden).
-        for (const mask of cut.hiddenBy || []) {
-          fetch(url(mask.file)).then((r) => r.blob()).then(createImageBitmap)
-            .then((bitmap) => { mask.bitmap = bitmap; redraw(); })
-            .catch(() => {});
+    }
+    // The cut-outs come packed in atlases (PACK.md, Elements): each is cut out of its atlas at
+    // full size into a picture of its own once the atlas arrives (this reference viewer draws the
+    // full size at every zoom; a viewer can draw the `small` atlas zoomed out instead).
+    const atlasPictures = {};
+    const cutOut = (atlas, [x, y], w, h) => {
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      c.getContext("2d").drawImage(atlas, x, y, w, h, 0, 0, w, h);
+      return c;
+    };
+    const atlasLoaded = (name) => {
+      for (const piece of pieces) {
+        for (const cut of Object.values(piece.states)) {
+          if (!cut) continue;  // nothing left of it in that state
+          const [, , w, h] = cut.rect;
+          if (cut.atlas === name) {
+            cut.bitmap = cutOut(atlasPictures[name], cut.at, w, h);
+            if (cut === piece.hit) cut.alpha = alphaOf(cut.bitmap);
+          }
+          if (name === "masks") {
+            for (const mask of cut.hiddenBy || []) mask.bitmap = cutOut(atlasPictures.masks, mask.at, w, h);
+          }
         }
       }
+      redraw();
+    };
+    for (const name of ["standing", "masks", "rubble"]) {
+      const atlas = elements.atlases[name];
+      if (!atlas) continue;
+      fetch(url(atlas.file)).then((r) => r.blob()).then(createImageBitmap)
+        .then((bitmap) => { atlasPictures[name] = bitmap; atlasLoaded(name); })
+        .catch(() => {});  // an atlas that can't be read leaves its cut-outs out
     }
   }
   // A picture's transparency, one byte a pixel, for finding what the pointer is over.

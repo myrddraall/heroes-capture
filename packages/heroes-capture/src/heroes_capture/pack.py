@@ -28,10 +28,12 @@ from .runlog import log, stage, warn
 from .stormlib import Archive
 from .workers import ordered_map
 
-FORMAT = 1
+FORMAT = 3
 TILE = 512  # tile size in pixels
 QUALITY = 90  # the tiles' WebP quality (their alpha is lossless)
 THUMBNAIL_WIDTH = 512
+OVERVIEW_MAX = 2048  # a tiled layer's overview: its finest pyramid level no longer than this on a side
+ATLAS_WIDTH = 4096  # the elements' atlases are at most this wide
 BACKDROP = [48, 48, 48]  # what the thumbnail's transparency is shown over
 SKY = ("background", "haze")  # the parallax layers, back to front
 COMPOSITES = ("", "-on-black", "-with-fixed")  # the stitch's composites: <id>-composite<suffix>.png
@@ -83,11 +85,19 @@ def write_pyramid(png: Path, dest: Path, name: str) -> dict | None:
     padded = image.embed(0, 0, math.ceil(width / block) * block, math.ceil(height / block) * block,
                          extend="background", background=[0, 0, 0, 0])
     tiles = []
+    overview = None
     for level in range(levels):
         factor = 2 ** (levels - 1 - level)
         scaled = padded if factor == 1 else padded.premultiply().shrink(factor, factor).unpremultiply().cast("uchar")
         scaled = scaled.copy_memory()
         cols, rows = math.ceil(scaled.width / TILE), math.ceil(scaled.height / TILE)
+        # The overview (PACK.md, Overviews): the finest level that fits OVERVIEW_MAX, whole, as one
+        # picture, so a viewer has the level in one request; the same pixels as the level's tiles.
+        level_w, level_h = math.ceil(width / factor), math.ceil(height / factor)
+        if max(level_w, level_h) <= OVERVIEW_MAX:
+            overview_path = dest.with_name(f"{dest.stem}-overview.webp")
+            scaled.crop(0, 0, level_w, level_h).webpsave(str(overview_path), Q=QUALITY, alpha_q=100)
+            overview = {"file": overview_path.name, "level": level, "size": [level_w, level_h]}
 
         def encode(xy, scaled=scaled, level=level):
             x, y = xy
@@ -107,14 +117,39 @@ def write_pyramid(png: Path, dest: Path, name: str) -> dict | None:
     if not tiles:
         return None
     tiles.sort(key=lambda t: t[0])
-    meta = {"size": [width, height], "levels": levels, "tileSize": TILE}
+    meta = {"size": [width, height], "levels": levels, "tileSize": TILE, "overview": overview}
     with open(dest, "wb") as f:
         writer = Writer(f)
         for tile_id, data in tiles:
             writer.write_tile(tile_id, data)
         writer.finalize({"tile_type": TileType.WEBP, "tile_compression": Compression.NONE, "center_zoom": 0},
-                        {"name": name, "format": "webp", **meta})
+                        {"name": name, "format": "webp", "size": meta["size"], "levels": levels, "tileSize": TILE})
     return meta
+
+
+def pack_atlas(pictures: list[tuple[str, pyvips.Image]], max_width: int = ATLAS_WIDTH) -> tuple[pyvips.Image, dict[str, tuple[int, int]]]:
+    """Pictures (RGBA) packed into one atlas, in shelves: the tallest first, each shelf filled left
+    to right up to `max_width`, the next shelf below. Returns the atlas and where each picture's
+    top-left corner is in it, by key."""
+    rows: list[list[tuple[str, pyvips.Image]]] = []
+    for key, picture in sorted(pictures, key=lambda kp: (-kp[1].height, kp[0])):
+        if rows and sum(p.width for _, p in rows[-1]) + picture.width <= max_width:
+            rows[-1].append((key, picture))
+        else:
+            rows.append([(key, picture)])
+    width = max((sum(p.width for _, p in row) for row in rows), default=1)
+    height = max(1, sum(row[0][1].height for row in rows))
+    atlas = pyvips.Image.black(width, height, bands=4)
+    at: dict[str, tuple[int, int]] = {}
+    y = 0
+    for row in rows:
+        x = 0
+        for key, picture in row:
+            atlas = atlas.insert(picture, x, y)
+            at[key] = (x, y)
+            x += picture.width
+        y += row[0][1].height
+    return atlas, at
 
 
 def _png(data: bytes) -> tuple[bytes, list[int]] | None:
@@ -273,11 +308,13 @@ def collect_raw(out: Path, raw: Path, out_id: str, images: list[str]) -> tuple[l
     return layers + maps, arenas or None
 
 
-def collect_elements(out: Path, raw: Path, pack: Path, manifest: dict, layer_id: str) -> dict | None:
+def collect_elements(out: Path, raw: Path, pack: Path, manifest: dict, layer_id: str, small_factor: int) -> dict | None:
     """The elements render's cut-outs (stitch.write_elements: <id>-elements/ and its index) moved
-    into raw/elements/, each saved in the pack as elements/<key>.webp (lossless: small images,
-    their soft edges kept exact), and the pack's data.elements (PACK.md, Elements): every
-    structure and camp the map has, each with its states' files and rectangles in the map layer's
+    into raw/elements/, packed into the pack's atlases (PACK.md, Elements; lossless WebP, their
+    soft edges kept exact): `standing` (the standing structures and the camps), `rubble`, `masks`
+    (where a standing neighbour is in front), and `small`, every state at 1/`small_factor` (the map
+    layer's overview scale) for the zoomed-out view. The pack's data.elements: every structure and
+    camp the map has, each with its states' places in the atlases and rectangles in the map layer's
     pixels. None when the render has no elements."""
     index_path = out / f"{manifest['id']}-elements.json"
     if not index_path.exists():
@@ -286,32 +323,61 @@ def collect_elements(out: Path, raw: Path, pack: Path, manifest: dict, layer_id:
     source = out / f"{manifest['id']}-elements"
     (raw / "elements").mkdir(parents=True, exist_ok=True)
     (pack / "elements").mkdir(parents=True, exist_ok=True)
+    pictures: dict[str, list[tuple[str, pyvips.Image]]] = {"standing": [], "rubble": [], "masks": [], "small": []}
     states: dict[tuple[str, int], dict] = {}
+
+    def small(picture: pyvips.Image) -> pyvips.Image:
+        """A picture at 1/small_factor: box-filtered on premultiplied colour (as the pyramid's levels
+        are), ceil(width / factor) by ceil(height / factor)."""
+        if small_factor == 1:
+            return picture
+        w, h = math.ceil(picture.width / small_factor) * small_factor, math.ceil(picture.height / small_factor) * small_factor
+        padded = picture.embed(0, 0, w, h, extend="background", background=[0, 0, 0, 0])
+        return padded.premultiply().shrink(small_factor, small_factor).unpremultiply().cast("uchar")
+
     for cut in index["cutouts"]:
         if cut["file"] is None:  # the element leaves nothing in this state (a fallen moonwell)
             states.setdefault((cut["kind"], cut["element"]), {})[cut["state"]] = None
             continue
         shutil.move(source / cut["file"], raw / "elements" / cut["file"])
-        pyvips.Image.new_from_file(str(raw / "elements" / cut["file"])).webpsave(str(pack / "elements" / f"{cut['key']}.webp"), lossless=True)
-        state = {"file": f"elements/{cut['key']}.webp", "rect": cut["rect"]}
+        picture = _rgba(pyvips.Image.new_from_file(str(raw / "elements" / cut["file"])))
+        atlas = "rubble" if cut["state"] == "rubble" else "standing"
+        pictures[atlas].append((cut["key"], picture))
+        pictures["small"].append((cut["key"], small(picture)))
+        state = {"rect": cut["rect"], "atlas": atlas, "key": cut["key"]}
         # Where a standing neighbour is in front of it: a mask (white: hidden) over the same rect.
         hidden = []
         for mask in cut.get("hiddenBy") or []:
             shutil.move(source / mask["file"], raw / "elements" / mask["file"])
-            name = mask["file"].removesuffix(".png") + ".webp"
-            pyvips.Image.new_from_file(str(raw / "elements" / mask["file"])).webpsave(str(pack / "elements" / name), lossless=True)
-            hidden.append({"id": mask["id"], "file": f"elements/{name}"})
+            key = mask["file"].removesuffix(".png")
+            pictures["masks"].append((key, _rgba(pyvips.Image.new_from_file(str(raw / "elements" / mask["file"])))))
+            hidden.append({"id": mask["id"], "key": key})
         if hidden:
             state["hiddenBy"] = hidden
         states.setdefault((cut["kind"], cut["element"]), {})[cut["state"]] = state
     shutil.rmtree(source, ignore_errors=True)
     index_path.unlink()
+    # The atlases written, and each state's places in them put in for its keys.
+    atlases, places = {}, {}
+    for name, found in pictures.items():
+        if not found:
+            continue
+        atlas, at = pack_atlas(found)
+        atlas.webpsave(str(pack / "elements" / f"{name}.webp"), lossless=True)
+        atlases[name] = {"file": f"elements/{name}.webp", "size": [atlas.width, atlas.height], "scale": 1 / small_factor if name == "small" else 1}
+        places[name] = at
+    for state in (s for by_state in states.values() for s in by_state.values() if s):
+        key = state.pop("key")
+        state["at"] = list(places[state["atlas"]][key])
+        state["small"] = list(places["small"][key])
+        for mask in state.get("hiddenBy", []):
+            mask["at"] = list(places["masks"][mask.pop("key")])
     found = manifest.get("elements") or {}
     structures = [{"id": u["id"], "type": u["type"], "cell": [u["x"], u["y"]], "owner": u["owner"], "town": u["town"], "core": u["core"],
                    "states": states.get(("structure", u["id"]), {})} for u in found.get("structures", [])]
     camps = [{"camp": c["camp"], "type": c["type"], "cell": [c["x"], c["y"]], "states": states.get(("camp", c["camp"]), {})}
              for c in found.get("camps", [])]
-    return {"layer": layer_id, "structures": structures, "towns": found.get("towns", []), "camps": camps}
+    return {"layer": layer_id, "atlases": atlases, "structures": structures, "towns": found.get("towns", []), "camps": camps}
 
 
 def write(out: Path, manifest: dict, images: list[str]) -> Path:
@@ -349,7 +415,12 @@ def write(out: Path, manifest: dict, images: list[str]) -> Path:
                 entry.update(meta, file=f"{layer['id']}.pmtiles")
             packed.append(entry)
         first_map = next(l for l in layers if l["kind"] == "map")
-        element_data = collect_elements(out, raw, pack, manifest, first_map["id"])
+        # The elements' small atlas is at the map's overview scale (write_pyramid), so the two
+        # levels of detail a viewer shows zoomed out agree.
+        map_packed = next((l for l in packed if l["id"] == first_map["id"]), None)
+        overview = (map_packed or {}).get("overview")
+        small_factor = 2 ** (map_packed["levels"] - 1 - overview["level"]) if map_packed and overview else 1
+        element_data = collect_elements(out, raw, pack, manifest, first_map["id"], small_factor)
         thumbnail = pyvips.Image.thumbnail(str(raw / first_map["file"]), THUMBNAIL_WIDTH)
         thumbnail.flatten(background=BACKDROP).webpsave(str(pack / "thumbnail.webp"), Q=85)
         found_images = {"thumbnail": {"file": "thumbnail.webp", "size": [thumbnail.width, thumbnail.height]}}

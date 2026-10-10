@@ -30,7 +30,7 @@ from rich.table import Table
 from . import ui
 from .game_menus import ScriptBroken
 
-PROBES = ("probe_light", "probe_sky", "probe_depth", "probe_waits", "probe_elements")
+PROBES = ("probe_light", "probe_sky", "probe_sky_reach", "probe_depth", "probe_waits", "probe_elements")
 DISTANCE = "214"  # camera distance: far, so tall objects lean little at the seams
 KEEP = "0.4"  # share of each screenshot used, centred
 VALIDATED = Path(__file__).with_name("validated-maps.json")
@@ -56,17 +56,14 @@ def version() -> str:
         return "0.0.0-dev"
 
 
-def screen_size() -> str | None:
-    """The primary monitor's resolution in real pixels ("3440x1440"), on Windows."""
+def screen_size(monitor: str | None = None) -> str | None:
+    """A monitor's resolution in real pixels ("3440x1440"), on Windows: the one `monitor` names
+    (monitors.choose), or the primary. ValueError when none is named so."""
     if sys.platform != "win32":
         return None
-    import ctypes
+    from .monitors import choose
 
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except (AttributeError, OSError):
-        ctypes.windll.user32.SetProcessDPIAware()
-    return f"{ctypes.windll.user32.GetSystemMetrics(0)}x{ctypes.windll.user32.GetSystemMetrics(1)}"
+    return choose(monitor or "primary").size
 
 
 def run_capture(argv: list[str]) -> None:
@@ -341,8 +338,10 @@ def render(
     force: Annotated[bool, typer.Option("--force", help="Render maps already rendered in the output folder again, from the start.")] = False,
     keep_tmp: Annotated[bool, typer.Option("--keep-tmp", help="Leave the working files (screenshots, the prepared map, diagnostic logs) in tmp\\ for diagnosis.")] = False,
     game: Annotated[Optional[str], typer.Option(hidden=True)] = None,  # the install, when it isn't found by itself
+    monitor: Annotated[Optional[str], typer.Option("--monitor", help="Put the game on this monitor before launching the map, and render at its resolution: its number as Windows lists them (the run's log lists the monitors), its device name, or primary.", show_default=False)] = None,
     probe_light: Annotated[bool, typer.Option(hidden=True)] = False,  # diagnostics instead of the tiles
     probe_sky: Annotated[bool, typer.Option(hidden=True)] = False,
+    probe_sky_reach: Annotated[bool, typer.Option(hidden=True)] = False,
     probe_depth: Annotated[bool, typer.Option(hidden=True)] = False,
     probe_waits: Annotated[bool, typer.Option(hidden=True)] = False,
     probe_elements: Annotated[bool, typer.Option(hidden=True)] = False,
@@ -363,7 +362,7 @@ def render(
     map_spec, extra = split_map(list(ctx.args))
     if (map_spec is None) == (category is None):
         raise typer.BadParameter("name one map, or pick maps with --category")
-    chosen = {"probe_light": probe_light, "probe_sky": probe_sky, "probe_depth": probe_depth, "probe_waits": probe_waits, "probe_elements": probe_elements}
+    chosen = {"probe_light": probe_light, "probe_sky": probe_sky, "probe_sky_reach": probe_sky_reach, "probe_depth": probe_depth, "probe_waits": probe_waits, "probe_elements": probe_elements}
     probe = next((f"--{name.replace('_', '-')}" for name in PROBES if chosen[name]), None)
     if category and (probe or show_ui):
         raise typer.BadParameter("the diagnostics take one map")
@@ -373,13 +372,18 @@ def render(
     options = ["--structures", structures.value, *extra]
     if "--out" not in extra:
         options += ["--out", str(TMP)]
-    if "--screen" not in extra and screen_size():
-        options += ["--screen", screen_size()]
+    if "--screen" not in extra:
+        try:
+            screen = screen_size(monitor)
+        except ValueError as e:
+            raise typer.BadParameter(str(e)) from e
+        if screen:
+            options += ["--screen", screen]
     if not {"--distance", "--fov"} & set(extra):
         options += ["--distance", DISTANCE]
     if "--keep" not in extra:
         options += ["--keep", KEEP]
-    capture_options = ["--game", game] if game else []
+    capture_options = [*(["--game", game] if game else []), *(["--monitor", monitor] if monitor else [])]
     log_to(work)
 
     if probe or show_ui:  # diagnostics: prepared afresh; their files stay in tmp\
@@ -641,7 +645,7 @@ def self_check() -> None:
     from . import __path__ as package_path
 
     # The modules that drive the game need Windows to import at all.
-    windows_only = {"capture", "game_control", "game_state", "game_window", "probes", "screen", "sky_layers"}
+    windows_only = {"capture", "game_control", "game_state", "game_window", "monitors", "probes", "screen", "sky_layers"}
     skip = {"__main__"} | (set() if sys.platform == "win32" else windows_only)
     modules = [f"heroes_capture.{m.name}" for m in pkgutil.iter_modules(package_path) if m.name not in skip]
     modules += ["numpy.fft", "scipy.ndimage", "scipy.optimize", "PIL.Image", "pyvips"]

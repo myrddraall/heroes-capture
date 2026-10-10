@@ -2,16 +2,16 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: the same elements render of Battlefield of Eternity, now with a note at the top
-rem middle of the screen during the waits where nothing is shot (preparing the rubble, the camps
-rem spawning, each rubble wave falling, clearing the remains). The screen is still watched
-rem (HRS_WATCH: a small copy every 2 seconds in tmp\watch-<time>\), to check that the notes show
-rem and that none is in a shot.
+rem Current step: a full elements render of Battlefield of Eternity with all the sky there is: the
+rem sky also shot through 16 and 32 degree lenses (the sky reach probe: the camera can't go past the
+rem camera bounds, a wider lens sees the rest of the shells), each layer squared off to the largest
+rem rectangle inside its picture (pack format 3: a sky picture fills its rectangle). The log's sky
+rem layer images line should list the positions per lens, and "background" and "haze" should each
+rem say "squared off from" a much bigger canvas.
 rem A failed run leaves its working files in tmp\ (pip, when it runs, writes tmp\setup.log).
 setlocal
 pushd "%~dp0"
 set "PYTHONPATH=%~dp0src"
-set "HRS_WATCH=1"
 rem The tool's dependencies, installed quietly when missing (pip's output in tmp\setup.log).
 py -c "import heroes_capture.cli, numpy, PIL, pyvips, scipy, mss, pydirectinput, dxcam, typer, rich, pmtiles" 2>nul || call :install || goto :copy
 py -m heroes_capture map render "Battlefield of Eternity" --structures elements --force
