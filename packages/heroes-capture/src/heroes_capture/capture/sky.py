@@ -4,13 +4,14 @@ A skybox is an ordinary model: `<CModel id=".." parent="Skybox">` pointing at a 
 textures are referenced by path. A file inside the map archive at that same path is used instead
 of the game's, so each colour gets its own stock mesh and a solid-colour DDS at every texture path
 that mesh uses. The map's tileset loses its parallax layer and its fog (which would tint the sky);
-the script sets the camera-fixed skybox with GameSetBackground: white at each tile, black for the
-second clean shot, command "sky <colour>" for probes.
+the script sets the camera-fixed skybox with GameSetBackground: the light grey at each tile, black
+for the second shot, command "sky <colour>".
 """
 
 import html
 import math
-import struct
+
+from heroes_capture.common.dds import clear_dds, solid_dds
 
 TEXTURES = "Assets\\Textures\\"
 SKYBOXES = "Assets\\Skyboxes\\"
@@ -31,18 +32,6 @@ SKIES = {
         "mesh": f"{SKYBOXES}Storm_Skybox_ArenaHeaven_Parallax\\Storm_Skybox_ArenaHeaven_Parallax.m3",
         "textures": {"Storm_Skybox_ArenaHeaven_Parallax": "colour", "Storm_Skybox_ArenaHeaven_Clouds_Diffuse": "clear"},
     },
-    "white": {
-        "rgb": (255, 255, 255),
-        "mesh": f"{SKYBOXES}Storm_Skybox_ArenaHell_Parallax\\Storm_Skybox_ArenaHell_Parallax.m3",
-        "textures": {"Storm_Skybox_ArenaHell_Parallax": "colour", "Storm_Skybox_ArenaHell_Clouds_Hell_Diffuse": "clear"},
-    },
-    # Two greys (the matte probe: a grey sky in place of the white one, which a bright see-through
-    # spark or glow clips at 255). The game draws a texture of 255 at about 230.
-    "grey": {
-        "rgb": (140, 140, 140),
-        "mesh": f"{SKYBOXES}Storm_Skybox_SCBraxis\\Storm_Skybox_SCBraxis.m3",
-        "textures": {"Storm_Doodad_SCBraxis_Skybox_Diff": "colour", "Storm_Doodad_SCBraxis_Skybox_Stars_Diff": "clear"},
-    },
     "lightgrey": {
         "rgb": (200, 200, 200),
         "mesh": f"{SKYBOXES}Storm_Skybox_ArenaHvH_Parallax\\Storm_Skybox_ArenaHvH_Parallax.m3",
@@ -55,12 +44,12 @@ SKIES = {
 }
 
 
-# The light sky the matte shoots over, with black: the light grey. The white sky (drawn at about
-# 230) set off the game's bloom, a soft halo round everything in the void that the matte kept; the
-# greys (drawn at about 155 and 198) don't, and a matte from either predicts a view over the other
-# almost exactly (the matte probe on Battlefield of Eternity: at the Hell side's edge the error
-# against a third sky fell from 2.5 levels on average to 0.05, and the sky came out at exactly 0
-# opacity, the solid parts at exactly 255). LIGHT_LEVEL: the level the game draws it at, the stitch's
+# The light sky the matte shoots over, with black: the light grey. A white sky (drawn at about 230)
+# set off the game's bloom, a soft halo round everything in the void that the matte kept; greys
+# (drawn at about 155 and 198) don't, and a matte from one predicts a view over another almost
+# exactly (probed on Battlefield of Eternity: at the Hell side's edge the error against a third sky
+# fell from 2.5 levels on average to 0.05, the sky came out at exactly 0 opacity, the solid parts
+# at exactly 255). LIGHT_LEVEL: the level the game draws it at, the stitch's
 # fallback when a pair of shots has too little sky to measure it.
 LIGHT_SKY, LIGHT_LEVEL = "lightgrey", 198.0
 
@@ -74,11 +63,6 @@ def lens_scale(fov: float, render_fov: float) -> float:
 def model_id(colour: str) -> str:
     return f"HrsSky{colour[0].upper()}{colour[1:]}"
 
-
-# Our white and black skies again at larger scales (models HrsSkyWhitex3, ...; command "sky whitex3"):
-# a bigger shell sits further out, so it can be a key behind the map's own sky shells (the parallax
-# draws in front of a 4300-unit bowl, behind our 700-unit ones).
-SCALED = {"colours": ["white", "black"], "scales": [3, 10]}
 
 # The map's own parallax sky models we can make keyed copies of: the model file (read from the
 # game's storage) and its background texture.
@@ -126,8 +110,8 @@ def _rename_texture(m3: bytearray, old: str, new: str) -> None:
         raise ValueError(f"{old}.dds not found in the model file")
 
 
-def _model_entry(id_: str, path: str, extra: str = "") -> str:
-    return f'    <CModel id="{id_}" parent="Skybox">\n        <Model value="{path}"/>\n{extra}    </CModel>'
+def _model_entry(id_: str, path: str) -> str:
+    return f'    <CModel id="{id_}" parent="Skybox">\n        <Model value="{path}"/>\n    </CModel>'
 
 
 def parallax_keys(model: str, m3: bytes) -> dict:
@@ -160,52 +144,9 @@ def parallax_keys(model: str, m3: bytes) -> dict:
     return {"models": models, "files": files}
 
 
-def _block_dds(four_cc: str, block: bytes, width: int, height: int) -> bytes:
-    """A DDS of one repeated 4x4 block with a full mip chain, the layout of the game's own skybox
-    textures (1024x512, 11 levels; the streaming `.lvl0` copy is 64x32, 7 levels)."""
-    levels = []
-    w, h = width, height
-    while True:
-        levels.append(block * (-(-w // 4) * -(-h // 4)))
-        if w == 1 and h == 1:
-            break
-        w, h = max(1, w >> 1), max(1, h >> 1)
-    header = bytearray(128)
-    header[0:4] = b"DDS "
-    struct.pack_into("<I", header, 4, 124)  # header size
-    struct.pack_into("<I", header, 8, 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x80000)  # caps, height, width, pixel format, mipmap count, linear size
-    struct.pack_into("<I", header, 12, height)
-    struct.pack_into("<I", header, 16, width)
-    struct.pack_into("<I", header, 20, len(levels[0]))
-    struct.pack_into("<I", header, 28, len(levels))
-    struct.pack_into("<I", header, 76, 32)  # pixel format size
-    struct.pack_into("<I", header, 80, 0x4)  # four-character code follows
-    header[84:88] = four_cc.encode("ascii")
-    struct.pack_into("<I", header, 108, 0x8 | 0x400000 | 0x1000)  # complex, mipmaps, texture
-    return bytes(header) + b"".join(levels)
-
-
-def _js_round(value: float) -> int:
-    """Math.round: halves go up."""
-    return int(value // 1 + (1 if value % 1 >= 0.5 else 0))
-
-
-def solid_dds(rgb, width: int = 1024, height: int = 512) -> bytes:
-    """A DXT1 DDS of one colour."""
-    r, g, b = rgb
-    c565 = ((_js_round(r * 31 / 255) << 11) | (_js_round(g * 63 / 255) << 5) | _js_round(b * 31 / 255)) & 0xFFFF
-    block = struct.pack("<HH", c565, c565) + bytes(4)  # both colours the same, every index 0: the whole block is c565
-    return _block_dds("DXT1", block, width, height)
-
-
-def clear_dds(width: int = 1024, height: int = 512) -> bytes:
-    """A DXT5 DDS that is fully transparent (every texel alpha 0)."""
-    return _block_dds("DXT5", bytes(16), width, height)  # alpha0 = alpha1 = 0, every index 0; colour block all zero
-
-
 def painted_texture_files(paints: dict[str, str]) -> list[tuple[str, bytes]]:
     """Files that paint textures of the map's own sky one solid colour or fully transparent
-    (inject.py --paint-texture, sky probes). A sky model's look comes from several textures:
+    (prepare --paint-texture, sky probes). A sky model's look comes from several textures:
     Battlefield of Eternity's parallax model has its background art
     (Storm_Heaven_SkyParallax_Base_Diffuse) and two smoke layers
     (Storm_Heaven_SkyParallax_Clouds_Diffuse, ..._Clouds_Hell_Diffuse) in one mesh, so the smoke is
@@ -251,11 +192,6 @@ def sky_files(tileset: str, start: str, read, extra: dict | None = None) -> list
     extra = extra or {"models": [], "files": []}
     files = list(extra["files"])
     models = [_model_entry(model_id(colour), sky["mesh"]) for colour, sky in SKIES.items()]
-    for colour in SCALED["colours"]:
-        for s in SCALED["scales"]:
-            scale = (f'        <ScaleMax X="{s}.000000" Y="{s}.000000" Z="{s}.000000"/>\n'
-                     f'        <ScaleMin X="{s}.000000" Y="{s}.000000" Z="{s}.000000"/>\n')
-            models.append(_model_entry(model_id(f"{colour}x{s}"), SKIES[colour]["mesh"], scale))
     models += extra["models"]
     files.append(("Base.StormData\\GameData\\ModelData.xml",
                   append_to_catalog(read("Base.StormData\\GameData\\ModelData.xml"), models).encode("utf-8")))

@@ -9,9 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from heroes_capture import game_data, inject
-from heroes_capture.sky import PARALLAX_KEYS
-from heroes_capture.stormlib import Archive
+from heroes_capture import cli
+from heroes_capture.capture import prepare
+from heroes_capture.common import game_data
+from heroes_capture.map.galaxy import functions
+from heroes_capture.capture.sky import PARALLAX_KEYS
+from heroes_capture.common.stormlib import Archive
 
 # One worker for all of them: CascLib's CDN cache isn't safe for several processes filling it at
 # once (a cold cache came out corrupt when the tests ran on parallel workers).
@@ -124,9 +127,11 @@ def test_tilesets_light_sets_and_sky_models(storage):
     ("Battlefield of Eternity", "matte", 0, []), ("Punisher Arena", "matte", 3, []), ("Dragon Shire", "black", 0, []),
 ])
 def test_prepared_maps(map_name, sky_mode, arenas, extra, tmp_path, blizzard_galaxy):
-    manifest_path = inject.main([map_name, "--screen", "3440x1440", "--distance", "214", "--keep", "0.4", "--out", str(tmp_path), *extra])
+    manifest_path = prepare.main([map_name, "--screen", "3440x1440", "--distance", "214", "--keep", "0.4", "--out", str(tmp_path), *extra],
+                                 cli.specifics_of_map)
     manifest = json.loads(manifest_path.read_text())
     assert manifest["map"] == map_name and manifest["sky"]["mode"] == sky_mode
+    assert manifest["category"] == ("arena" if map_name == "Punisher Arena" else "battleground")
     assert len(manifest["areas"] or []) == arenas and len(manifest["tiles"]) > 50
     if sky_mode == "matte":
         assert manifest["sky"]["keys"] == (map_name == "Battlefield of Eternity" or map_name == "Punisher Arena")
@@ -141,7 +146,7 @@ def test_prepared_maps(map_name, sky_mode, arenas, extra, tmp_path, blizzard_gal
     assert "TownGateDamaged" in frozen and len(frozen) > 1000
     if map_name == "Battlefield of Eternity":
         assert "TownMoonwellHeaven" in frozen
-    capture = script[script.index("// Map capture (injected"): script.index("void InitMap () {")]
+    capture = script[script.index("// heroes-capture's map script"): script.index("void InitMap () {")]
     capture = re.sub(r"//[^\n]*", "", re.sub(r'"[^"\n]*"', '""', capture))
     names = set(re.findall(r"\b([A-Za-z_]\w*)\s*\(", capture)) | set(re.findall(r"\b(c_\w+|lib\w+_g[vf]_\w+)", capture))
     if map_name == "Battlefield of Eternity":
@@ -153,10 +158,13 @@ def test_prepared_maps(map_name, sky_mode, arenas, extra, tmp_path, blizzard_gal
     assert not unknown, f"names Blizzard's code doesn't have: {unknown}"
     # The note at the top middle of the screen: its command, and taken down by every command a
     # shot starts with before anything is drawn for it.
-    assert 'else if ((lv_word == "note")) { lv_t = hrsCap_gt_Note; }' in script
-    assert re.search(r'if \(\(lv_word == "tile"\) \|\| \(\(lv_word == "el"\) && \(StringWord\(lp_text, 2\) == "at"\)\)\) \{\s*hrsCap_NoteHide\(\);', script)
-    # The elements probe's objective: spawned through Battlefield of Eternity's library only.
-    assert ("libMLBD_gf_MMBOESpawnBoss" in capture) == (map_name == "Battlefield of Eternity")
+    bodies = functions(script)
+    assert 'if ((lp_word == "note")) { return hrsCap_gt_Note; }' in script
+    assert "hrsCap_NoteHide();" in bodies["hrsCap_gt_Tile_Func"]
+    element = bodies["hrsCap_gt_Element_Func"]
+    assert "hrsCap_NoteHide();" in element[element.index('(lv_verb == "at")'):element.index('(lv_verb == "fades")')]
+    # A map of rounds: "quit" makes the current round the last (the arenas' part).
+    assert ("libAREN_gv_aRM_RoundScore" in capture) == (map_name == "Punisher Arena")
     # One call with the wrong number or kind of arguments stops the script as surely as an unknown
     # name does (StringReplace(text, find, "", ...): it takes a range, not a replacement). Each
     # call of a function Blizzard defines in Galaxy is held to its parameters; each native's to
@@ -188,44 +196,24 @@ def test_prepared_maps(map_name, sky_mode, arenas, extra, tmp_path, blizzard_gal
     assert not wrong, "calls unlike Blizzard's: " + "; ".join(wrong)
 
 
-def test_the_elements_probe_s_targets_on_battlefield_of_eternity(tmp_path):
-    """The elements probe (--probe-elements) finds what it shoots in the map's placed objects: the
-    Order team's forward town round its town hall, the camp nearest it, the Order core."""
-    from heroes_capture import elements
-
-    manifest = json.loads(inject.main(["Battlefield of Eternity", "--screen", "3440x1440", "--distance", "214", "--out", str(tmp_path)]).read_text())
-    targets = elements.element_targets(manifest)
-    hall, *rest = targets["town"]
-    assert (hall["type"], hall["x"], hall["y"]) == ("TownTownHallL2", 98, 65)
-    assert {u["type"] for u in rest} >= {"TownCannonTowerL2", "TownGateL215BLUR", "TownMoonwellL2", "TownWallRadial5L2"}
-    assert all(u["player"] == elements.ORDER_PLAYER for u in targets["town"]) and len(targets["town"]) <= 8
-    assert "MercCamp" in targets["camp"]["type"] and abs(targets["camp"]["x"] - 98) < 2 and abs(targets["camp"]["y"] - 95.5) < 1
-    assert (targets["core"]["type"], targets["core"]["x"], targets["core"]["y"]) == ("KingsCore", 49, 100)
-    # The element list in the manifest: the map's 72 structures in its 8 towns (the cores and one
-    # standalone tower in none), its 4 camps as the script numbers them.
+def test_battlefield_of_eternity_s_elements(tmp_path):
+    """What a render cuts out of Battlefield of Eternity, read from its files when it is prepared:
+    72 structures in 8 towns, the two lanes' forward pieces as two outposts of five, 4 camps (the
+    numbers its renders have)."""
+    manifest = json.loads(prepare.main(["Battlefield of Eternity", "--screen", "3440x1440", "--distance", "214", "--out", str(tmp_path)],
+                                       cli.specifics_of_map).read_text())
     found = manifest["elements"]
-    assert len(found["structures"]) == 72 and sum(u["core"] for u in found["structures"]) == 2
-    assert [(t["lane"], t["owner"]) for t in found["towns"]] == [(1, "order"), (1, "order"), (2, "order"), (2, "order"),
-                                                                 (1, "chaos"), (1, "chaos"), (2, "chaos"), (2, "chaos")]
-    assert sorted((u["type"], u["x"], u["y"]) for u in found["structures"] if u["town"] is None) == [
-        ("KingsCore", 49, 100), ("KingsCore", 199, 108), ("TownCannonTowerL3Standalone", 85, 131)]
-    assert [(c["camp"], c["type"]) for c in found["camps"]] == [(1, "SiegeCamp1"), (2, "BruiserCamp1"), (3, "SiegeCamp1"), (4, "BruiserCamp1")]
-    assert abs(found["camps"][1]["x"] - 95.9) < 0.1 and abs(found["camps"][1]["y"] - 95.0) < 0.1
-    # The holes the cores stand on (24 and 30 cells) filled in the prepared map, the rest of the
-    # map's holes (the void round the islands) as they were (the script opens the two again).
-    import numpy as np
-
-    with Archive(manifest["stormmap"]) as archive:
-        flags = archive.read("t3CellFlags")
-    holes = (np.frombuffer(flags, np.uint8, 248 * 208, 32).reshape(208, 248) & elements.CELL_HOLE) > 0
-    assert not holes[97:103, 46:52].any() and not holes[105:111, 196:202].any()
-    assert holes.sum() == 6704 - 24 - 30
-
-
+    assert (len(found["structures"]), len(found["towns"]), len(found["camps"])) == (72, 8, 4)
+    assert [(o["town"], o["owner"]) for o in found["outposts"]] == [(1, "order"), (7, "chaos")]
+    assert sum(1 for u in found["structures"] if u["outpost"] is not None) == 10
+    # The doodads in a team's colours (Heaven's lamps, crystal beds, grates, outer walls; Hell's core
+    # range), and with the structures kept in the tiles the 72 structures: the tiles that see one are
+    # shot from Chaos's side too.
+    assert len(manifest["teamColoured"]) == 132 + 72
 def test_a_map_s_own_pictures(storage, tmp_path):
     """The pictures a pack carries from the game (PACK.md, Images), from Dragon Shire's archive and
     the textures its MapInfo names."""
-    from heroes_capture import pack
+    from heroes_capture.capture import pack
 
     name, data = game_data.map_file(storage, "Dragon Shire")
     (tmp_path / "map.stormmap").write_bytes(data)
@@ -240,7 +228,7 @@ def test_a_map_s_own_pictures(storage, tmp_path):
 
 def test_a_custom_minimap_mapinfo_names_as_a_tga(storage, tmp_path):
     """The custom minimap is the file MapInfo names: on Escape From Braxis, a .tga."""
-    from heroes_capture import pack
+    from heroes_capture.capture import pack
 
     name, data = game_data.map_file(storage, "Escape From Braxis")
     (tmp_path / "map.stormmap").write_bytes(data)
@@ -258,7 +246,7 @@ def test_cursed_hollow_s_custom_minimap_as_svg(storage, tmp_path):
     import pyvips
     from PIL import Image
 
-    from heroes_capture import minimap_svg
+    from heroes_capture.capture import minimap_svg
 
     name, data = game_data.map_file(storage, "Cursed Hollow")
     (tmp_path / "map.stormmap").write_bytes(data)

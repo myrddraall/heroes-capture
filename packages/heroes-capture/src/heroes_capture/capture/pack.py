@@ -1,10 +1,12 @@
 """The map pack (PACK.md at the repository root): what a map viewer loads, written from the
 stitch's images at the end of every stitch.
 
-    <output-dir>/<map id>/pack/   pack.json, a tile pyramid per layer (<layer>.pmtiles), the fixed
-                                  skybox (fixed.webp), a thumbnail, the map's own pictures from
-                                  the game (images/), and the reference viewer (index.html)
-    <output-dir>/<map id>/raw/    the layers and composites as full-resolution PNGs, layers.json
+    <output-dir>/<map id>/pack/   pack.json, a tile pyramid and an overview per layer
+                                  (<layer>.pmtiles, <layer>-overview.webp), the fixed skybox
+                                  (fixed.webp), a thumbnail, the custom minimap as SVG (images/)
+    <output-dir>/<map id>/raw/    the layers (and composites) as full-resolution PNGs, layers.json,
+                                  the game's own pictures of the map (images/), the reference viewer
+                                  (index.html)
 
 A render with the structures hidden goes to <map id>/terrain/ the same way. The stitch's own
 files (named by the render's id) are moved into raw/ or removed.
@@ -12,10 +14,10 @@ files (named by the render's id) are moved into raw/ or removed.
 
 import hashlib
 import io
-import json
 import math
 import re
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 import pyvips
@@ -23,21 +25,31 @@ from PIL import Image
 from pmtiles.tile import Compression, TileType, zxy_to_tileid
 from pmtiles.writer import Writer
 
-from . import minimap_svg, ui, viewer
-from .runlog import log, stage, warn
-from .stormlib import Archive
-from .workers import ordered_map
+from heroes_capture.capture import minimap_svg
+from heroes_capture.capture import viewer
+from heroes_capture.capture.team_colour import MASK_SCALE, TEAM_COLOURS
+from heroes_capture.common import ui
+from heroes_capture.common.jsonio import read_json, write_json
+from heroes_capture.common.runlog import log, stage, warn
+from heroes_capture.common.stormlib import Archive
+from heroes_capture.common.workers import ordered_map
+from heroes_capture.map.specifics import Specifics
 
-FORMAT = 3
+FORMAT = 6
 TILE = 512  # tile size in pixels
-QUALITY = 90  # the tiles' WebP quality (their alpha is lossless)
+QUALITY = 90  # the fixed skybox's and the elements' atlases' WebP quality
+# The tiles' and overviews' WebP encoding (chosen from side-by-side crops of a render): the map's
+# and the background art's colour lossy, their transparency exact; the haze, mostly transparency,
+# lossy in that too.
+TILE_WEBP = {"Q": 85, "alpha_q": 100}
+HAZE_WEBP = {"Q": 90, "alpha_q": 50}
 THUMBNAIL_WIDTH = 512
-OVERVIEW_MAX = 2048  # a tiled layer's overview: its finest pyramid level no longer than this on a side
+OVERVIEW_MAP = 2048  # a map layer's overview: its finest pyramid level no longer than this on a side (the opening view)
+OVERVIEW_MAX = 4096  # a sky layer's overview: the level the opening view needs, no longer than this on a side
 ATLAS_WIDTH = 4096  # the elements' atlases are at most this wide
 BACKDROP = [48, 48, 48]  # what the thumbnail's transparency is shown over
 SKY = ("background", "haze")  # the parallax layers, back to front
 COMPOSITES = ("", "-on-black", "-with-fixed")  # the stitch's composites: <id>-composite<suffix>.png
-VALIDATED = Path(__file__).with_name("validated-maps.json")
 
 # The map's pictures in its archive: pack key, file in the archive, file in the pack. The custom
 # minimap's files are the ones MapInfo names (a .tga on some maps); these are the usual names.
@@ -67,46 +79,97 @@ def levels_for(width: int, height: int) -> int:
     return 1 if longest <= TILE else math.ceil(math.log2(longest / TILE)) + 1
 
 
-def _rgba(image: pyvips.Image) -> pyvips.Image:
+def rgba(image: pyvips.Image) -> pyvips.Image:
     if image.bands == 3:
         image = image.bandjoin(255)
     return image.cast("uchar")
 
 
-def write_pyramid(png: Path, dest: Path, name: str) -> dict | None:
+def level_size(width: int, height: int, levels: int, level: int) -> tuple[int, int]:
+    """A pyramid level's size in its own pixels."""
+    factor = 2 ** (levels - 1 - level)
+    return math.ceil(width / factor), math.ceil(height / factor)
+
+
+def overview_level(width: int, height: int, wanted: int, longest: int) -> int:
+    """The level of a layer's overview (PACK.md, Overviews): `wanted`, or the finest coarser level
+    no longer than `longest` on a side; never the finest level (its tiles are the archive's), but
+    on a layer of one level."""
+    levels = levels_for(width, height)
+    wanted = min(wanted, max(0, levels - 2))
+    return max(level for level in range(wanted + 1) if max(level_size(width, height, levels, level)) <= longest or level == 0)
+
+
+def map_overview_level(width: int, height: int) -> int:
+    """A map layer's overview level: its finest level no longer than OVERVIEW_MAP on a side."""
+    return overview_level(width, height, levels_for(width, height) - 1, OVERVIEW_MAP)
+
+
+def sky_overview_level(width: int, height: int, rate: float, opening_zoom: float) -> int:
+    """A parallax layer's overview level: the level a viewer draws it at in the opening view, the
+    zoom at which the map layer's overview is drawn a pixel to a window pixel (further back, the sky
+    is drawn larger than the map: PACK.md, Layers and drawing), within OVERVIEW_MAX."""
+    levels = levels_for(width, height)
+    s = 1 / (1 + rate * (1 / opening_zoom - 1))
+    return overview_level(width, height, levels - 1 - math.floor(math.log2(1 / s)), OVERVIEW_MAX)
+
+
+def tile_webp(layer_id: str) -> dict:
+    """A tiled layer's WebP encoding."""
+    return HAZE_WEBP if layer_id == "haze" else TILE_WEBP
+
+
+def write_pyramid(png: Path, dest: Path, name: str, overview: int, webp: dict, mask: bool = False) -> dict | None:
     """A PNG as a PMTiles tile pyramid (PACK.md, Tile pyramids): the image padded with transparency
     to whole blocks of the coarsest level's pixel, each level a box-filtered downscale of it (on
-    premultiplied colour, so transparent edges don't darken), cut into tiles, the empty ones left
-    out, the rest WebP. The layer's size, level count and tile size; None if it is empty."""
-    image = _rgba(pyvips.Image.new_from_file(str(png)))
+    premultiplied colour, so transparent edges don't darken). Level `overview` whole as one
+    picture, the overview; the levels finer than it cut into tiles, the empty ones left out, the
+    rest WebP (encoded with `webp`). The layer's size, level count, tile size and overview; None if
+    it is empty.
+
+    A team-colour `mask` (team_colour.py: its amounts in red and green, opaque) is averaged as it
+    is, padded with zero amounts, and a tile of it is empty where both amounts are."""
+    image = rgba(pyvips.Image.new_from_file(str(png)))
     width, height = image.width, image.height
+    pad = [0, 0, 0, 255] if mask else [0, 0, 0, 0]
+
+    def empty(picture: pyvips.Image) -> bool:
+        return (picture.extract_band(0, n=2) if mask else picture.extract_band(3)).max() == 0
+
+    if empty(image):
+        return None
     levels = levels_for(width, height)
     block = 2 ** (levels - 1)
     padded = image.embed(0, 0, math.ceil(width / block) * block, math.ceil(height / block) * block,
-                         extend="background", background=[0, 0, 0, 0])
+                         extend="background", background=pad)
     tiles = []
-    overview = None
-    for level in range(levels):
-        factor = 2 ** (levels - 1 - level)
-        scaled = padded if factor == 1 else padded.premultiply().shrink(factor, factor).unpremultiply().cast("uchar")
-        scaled = scaled.copy_memory()
-        cols, rows = math.ceil(scaled.width / TILE), math.ceil(scaled.height / TILE)
-        # The overview (PACK.md, Overviews): the finest level that fits OVERVIEW_MAX, whole, as one
-        # picture, so a viewer has the level in one request; the same pixels as the level's tiles.
-        level_w, level_h = math.ceil(width / factor), math.ceil(height / factor)
-        if max(level_w, level_h) <= OVERVIEW_MAX:
+    premultiplied = padded.premultiply()
+    for level in range(levels - 1, overview - 1, -1):
+        # Each level halves the one finer (the same box filter as shrinking the image by the level's
+        # factor at once, the image read once).
+        if level == levels - 1:
+            scaled = padded.copy_memory()
+        else:
+            premultiplied = premultiplied.shrink(2, 2).copy_memory()
+            scaled = premultiplied.unpremultiply().cast("uchar").copy_memory()
+        if level == overview:
+            # The overview (PACK.md, Overviews): the level whole, as one picture, so a viewer has it
+            # in one request; the same pixels its tiles would have.
+            level_w, level_h = level_size(width, height, levels, level)
             overview_path = dest.with_name(f"{dest.stem}-overview.webp")
-            scaled.crop(0, 0, level_w, level_h).webpsave(str(overview_path), Q=QUALITY, alpha_q=100)
-            overview = {"file": overview_path.name, "level": level, "size": [level_w, level_h]}
+            scaled.crop(0, 0, level_w, level_h).webpsave(str(overview_path), keep="none", **webp)
+            if level < levels - 1:
+                break
+        cols, rows = math.ceil(scaled.width / TILE), math.ceil(scaled.height / TILE)
 
         def encode(xy, scaled=scaled, level=level):
             x, y = xy
             tile = scaled.crop(x * TILE, y * TILE, min(TILE, scaled.width - x * TILE), min(TILE, scaled.height - y * TILE))
-            if tile.extract_band(3).max() == 0:
-                return None  # empty: not stored (a missing tile is transparent)
+            if empty(tile):
+                return None  # empty: not stored (a missing tile is transparent, or no team colour)
             if tile.width < TILE or tile.height < TILE:
-                tile = tile.embed(0, 0, TILE, TILE, extend="background", background=[0, 0, 0, 0])
-            return zxy_to_tileid(level, x, y), tile.webpsave_buffer(Q=QUALITY, alpha_q=100)
+                tile = tile.embed(0, 0, TILE, TILE, extend="background", background=pad)
+            return zxy_to_tileid(level, x, y), tile.webpsave_buffer(keep="none", **webp)
 
         with ui.bar(cols * rows, f"{name}, level {level + 1} of {levels}") as advance:
             for result in ordered_map(encode, [(x, y) for y in range(rows) for x in range(cols)]):
@@ -114,10 +177,9 @@ def write_pyramid(png: Path, dest: Path, name: str) -> dict | None:
                     tiles.append(result)
                 advance()
         del scaled
-    if not tiles:
-        return None
     tiles.sort(key=lambda t: t[0])
-    meta = {"size": [width, height], "levels": levels, "tileSize": TILE, "overview": overview}
+    meta = {"size": [width, height], "levels": levels, "tileSize": TILE,
+            "overview": {"file": f"{dest.stem}-overview.webp", "level": overview, "size": list(level_size(width, height, levels, overview))}}
     with open(dest, "wb") as f:
         writer = Writer(f)
         for tile_id, data in tiles:
@@ -127,18 +189,19 @@ def write_pyramid(png: Path, dest: Path, name: str) -> dict | None:
     return meta
 
 
-def pack_atlas(pictures: list[tuple[str, pyvips.Image]], max_width: int = ATLAS_WIDTH) -> tuple[pyvips.Image, dict[str, tuple[int, int]]]:
+def pack_atlas(pictures: list[tuple[str, pyvips.Image]], max_width: int = ATLAS_WIDTH, gap: int = 0) -> tuple[pyvips.Image, dict[str, tuple[int, int]]]:
     """Pictures (RGBA) packed into one atlas, in shelves: the tallest first, each shelf filled left
-    to right up to `max_width`, the next shelf below. Returns the atlas and where each picture's
-    top-left corner is in it, by key."""
+    to right up to `max_width`, the next shelf below, `gap` transparent pixels between pictures.
+    Returns the atlas and where each picture's top-left corner is in it, by key."""
     rows: list[list[tuple[str, pyvips.Image]]] = []
+    row_width = lambda row: sum(p.width for _, p in row) + gap * (len(row) - 1)  # noqa: E731
     for key, picture in sorted(pictures, key=lambda kp: (-kp[1].height, kp[0])):
-        if rows and sum(p.width for _, p in rows[-1]) + picture.width <= max_width:
+        if rows and row_width(rows[-1]) + gap + picture.width <= max_width:
             rows[-1].append((key, picture))
         else:
             rows.append([(key, picture)])
-    width = max((sum(p.width for _, p in row) for row in rows), default=1)
-    height = max(1, sum(row[0][1].height for row in rows))
+    width = max((row_width(row) for row in rows), default=1)
+    height = max(1, sum(row[0][1].height for row in rows) + gap * (len(rows) - 1))
     atlas = pyvips.Image.black(width, height, bands=4)
     at: dict[str, tuple[int, int]] = {}
     y = 0
@@ -147,8 +210,8 @@ def pack_atlas(pictures: list[tuple[str, pyvips.Image]], max_width: int = ATLAS_
         for key, picture in row:
             atlas = atlas.insert(picture, x, y)
             at[key] = (x, y)
-            x += picture.width
-        y += row[0][1].height
+            x += picture.width + gap
+        y += row[0][1].height + gap
     return atlas, at
 
 
@@ -193,14 +256,14 @@ def map_images(stormmap: Path | None, storage, folder: Path) -> dict:
         warn(f"the map's pictures couldn't be read ({e}); the pack has none")
         return found
     with archive:
-        info = archive.read("MapInfo") if archive.has("MapInfo") else b""
+        info = archive.read_optional("MapInfo") or b""
         named = {bool(m.group(1)): m.group(0).decode() for m in re.finditer(rb"(?i)customminimap(_hover)?\.(?:dds|tga)", info)}
         for key, inside, name in ARCHIVE_IMAGES:
             if key.startswith("customMinimap"):
                 inside = named.get(key.endswith("Hover"), inside)
             if archive.has(inside) and (entry := keep(key, name, archive.read(inside), inside)):
                 found[key] = entry
-        document = (archive.read_text("DocumentInfo") or "") if archive.has("DocumentInfo") else ""
+        document = archive.read_text("DocumentInfo") or ""
         pictures = re.findall(r"<Value>([^<]+\.(?:png|dds|tga))</Value>", document)
         select = next((p for p in pictures if "mapselect" in p.lower()), pictures[0] if pictures else None)
         if select and archive.has(select) and (entry := keep("mapSelect", "map-select.png", archive.read(select), select)):
@@ -222,35 +285,35 @@ def map_images(stormmap: Path | None, storage, folder: Path) -> dict:
 
 
 MINIMAP_BELOW_CAMERA = 2.25  # cells the custom minimap's middle lies below the camera bounds' (measured)
-MINIMAP_PLACEMENT = Path(__file__).with_name("minimap-placement.json")  # per-map corrections
 
 
-def custom_minimap_bounds(picture: Image.Image, map_size: dict, camera: dict, map_name: str | None = None) -> dict:
+def custom_minimap_bounds(picture: Image.Image, map_size: dict, camera: dict, correction: dict | None = None) -> dict:
     """The map cells the custom minimap covers (PACK.md, The custom minimap as SVG). It is drawn at
     the map's scale, a whole number of pixels per cell (the picture's width over the map's), and
     centred on the camera bounds' middle, MINIMAP_BELOW_CAMERA lower (measured over the maps with
-    one, against their renders); then any correction minimap-placement.json has for the map."""
+    one, against their renders); then the map's own correction, cells added to each edge (maps/)."""
     k = picture.width / map_size["width"]
     w, h = picture.width / k, picture.height / k
     left = (camera["left"] + camera["right"]) / 2 - w / 2
     top = (camera["bottom"] + camera["top"]) / 2 - MINIMAP_BELOW_CAMERA + h / 2
     bounds = {"left": left, "bottom": top - h, "right": left + w, "top": top}
-    correction = json.loads(MINIMAP_PLACEMENT.read_text(encoding="utf-8"))["maps"].get(map_name or "", {})
+    correction = correction or {}
     return {edge: round(float(value + correction.get(edge, 0)), 3) for edge, value in bounds.items()}
 
 
-def minimap_svg_image(pack: Path, custom: dict, map_size: dict, camera: dict, map_name: str | None = None) -> dict | None:
-    """The custom minimap redrawn as an SVG (minimap_svg) next to its PNG: its entry (PACK.md,
-    Images), with the map cells it covers; None, with a warning, if it can't be redrawn."""
-    picture = Image.open(pack / custom["file"])
+def minimap_svg_image(raw: Path, pack: Path, custom: dict, map_size: dict, camera: dict, correction: dict | None = None) -> dict | None:
+    """The custom minimap (its PNG in raw/) redrawn as an SVG (minimap_svg) in the pack: its entry
+    (PACK.md, Images), with the map cells it covers; None, with a warning, if it can't be redrawn."""
+    picture = Image.open(raw / custom["file"])
     try:
         svg = minimap_svg.to_svg(picture)
     except Exception as e:  # noqa: BLE001 - the pack is written without it
         warn(f"the custom minimap couldn't be redrawn as an SVG ({e}); the pack has only its PNG")
         return None
+    (pack / "images").mkdir(parents=True, exist_ok=True)
     (pack / "images" / "custom-minimap.svg").write_text(svg, encoding="utf-8")
     return {"file": "images/custom-minimap.svg", "size": custom["size"], "source": custom["source"],
-            "boundsCells": custom_minimap_bounds(picture, map_size, camera, map_name)}
+            "boundsCells": custom_minimap_bounds(picture, map_size, camera, correction)}
 
 
 def _version() -> str:
@@ -261,10 +324,6 @@ def _version() -> str:
         return "0.0.0-dev"
 
 
-def _slug(name: str) -> str:
-    return re.sub(r"^-|-$", "", re.sub(r"[^a-z0-9]+", "-", name.lower()))
-
-
 def collect_raw(out: Path, raw: Path, out_id: str, images: list[str]) -> tuple[list[dict], list[dict] | None]:
     """The stitch's files moved into raw/ under plain names, the ones the pack doesn't keep
     removed. The layers (back to front, as pack.json lists them, `file` naming the raw PNG) and
@@ -272,7 +331,7 @@ def collect_raw(out: Path, raw: Path, out_id: str, images: list[str]) -> tuple[l
     raw.mkdir(parents=True, exist_ok=True)
     layers, arenas, maps = [], [], []
     old_layers = out / f"{out_id}-layers.json"
-    sky = json.loads(old_layers.read_text()) if old_layers.exists() else {}
+    sky = read_json(old_layers, {})
     if sky.get("fixed") and (out / sky["fixed"]["image"]).exists():
         shutil.move(out / sky["fixed"]["image"], raw / "fixed.png")
         size = Image.open(raw / "fixed.png").size
@@ -286,104 +345,51 @@ def collect_raw(out: Path, raw: Path, out_id: str, images: list[str]) -> tuple[l
                        "rate": float(sum(entry["rate"]) / len(entry["rate"])), "centreCell": entry["centreCell"],
                        "centrePixel": entry["centrePixel"], "pxPerCell": float(sum(entry["pxPerMapCell"]) / len(entry["pxPerMapCell"]))})
     for image in images:
-        geo = json.loads((out / f"{image}.geo.json").read_text())
+        geo = read_json(out / f"{image}.geo.json")
         area = geo.get("area")
         layer_id = "map" if len(images) == 1 or not area else f"map-{area.lower()}"
         shutil.move(out / f"{image}.png", raw / f"{layer_id}.png")
         maps.append({"id": layer_id, "kind": "map", "file": f"{layer_id}.png", "size": [geo["width"], geo["height"]], "rate": 1.0,
                      "originCell": [geo["originCell"]["x"], geo["originCell"]["y"]], "pxPerCell": geo["pxPerCell"]})
+        if (out / f"{image}-team.png").exists():  # its team-colour mask (stitch, team_colour.py)
+            shutil.move(out / f"{image}-team.png", raw / f"{layer_id}-team.png")
+            maps[-1]["teamFile"] = f"{layer_id}-team.png"
         if len(images) > 1 and area:
             arenas.append({"id": area.lower(), "label": area, "layer": layer_id})
     for suffix in COMPOSITES:
         made = out / f"{out_id}-composite{suffix}.png"
         if made.exists():
             shutil.move(made, raw / f"composite{suffix}.png")
-    # The rest of the stitch's files (geo files, previews, an earlier render's tiles and viewer),
-    # but its elements' cut-outs and their index: collect_elements takes those.
-    for leftover in out.glob(f"{out_id}*"):
-        if leftover.name.startswith(f"{out_id}-elements"):
-            continue
-        shutil.rmtree(leftover) if leftover.is_dir() else leftover.unlink()
-    (out / "vips-properties.xml").unlink(missing_ok=True)
     return layers + maps, arenas or None
 
 
-def collect_elements(out: Path, raw: Path, pack: Path, manifest: dict, layer_id: str, small_factor: int) -> dict | None:
-    """The elements render's cut-outs (stitch.write_elements: <id>-elements/ and its index) moved
-    into raw/elements/, packed into the pack's atlases (PACK.md, Elements; lossless WebP, their
-    soft edges kept exact): `standing` (the standing structures and the camps), `rubble`, `masks`
-    (where a standing neighbour is in front), and `small`, every state at 1/`small_factor` (the map
-    layer's overview scale) for the zoomed-out view. The pack's data.elements: every structure and
-    camp the map has, each with its states' places in the atlases and rectangles in the map layer's
-    pixels. None when the render has no elements."""
-    index_path = out / f"{manifest['id']}-elements.json"
-    if not index_path.exists():
-        return None
-    index = json.loads(index_path.read_text())
-    source = out / f"{manifest['id']}-elements"
-    (raw / "elements").mkdir(parents=True, exist_ok=True)
-    (pack / "elements").mkdir(parents=True, exist_ok=True)
-    pictures: dict[str, list[tuple[str, pyvips.Image]]] = {"standing": [], "rubble": [], "masks": [], "small": []}
-    states: dict[tuple[str, int], dict] = {}
-
-    def small(picture: pyvips.Image) -> pyvips.Image:
-        """A picture at 1/small_factor: box-filtered on premultiplied colour (as the pyramid's levels
-        are), ceil(width / factor) by ceil(height / factor)."""
-        if small_factor == 1:
-            return picture
-        w, h = math.ceil(picture.width / small_factor) * small_factor, math.ceil(picture.height / small_factor) * small_factor
-        padded = picture.embed(0, 0, w, h, extend="background", background=[0, 0, 0, 0])
-        return padded.premultiply().shrink(small_factor, small_factor).unpremultiply().cast("uchar")
-
-    for cut in index["cutouts"]:
-        if cut["file"] is None:  # the element leaves nothing in this state (a fallen moonwell)
-            states.setdefault((cut["kind"], cut["element"]), {})[cut["state"]] = None
-            continue
-        shutil.move(source / cut["file"], raw / "elements" / cut["file"])
-        picture = _rgba(pyvips.Image.new_from_file(str(raw / "elements" / cut["file"])))
-        atlas = "rubble" if cut["state"] == "rubble" else "standing"
-        pictures[atlas].append((cut["key"], picture))
-        pictures["small"].append((cut["key"], small(picture)))
-        state = {"rect": cut["rect"], "atlas": atlas, "key": cut["key"]}
-        # Where a standing neighbour is in front of it: a mask (white: hidden) over the same rect.
-        hidden = []
-        for mask in cut.get("hiddenBy") or []:
-            shutil.move(source / mask["file"], raw / "elements" / mask["file"])
-            key = mask["file"].removesuffix(".png")
-            pictures["masks"].append((key, _rgba(pyvips.Image.new_from_file(str(raw / "elements" / mask["file"])))))
-            hidden.append({"id": mask["id"], "key": key})
-        if hidden:
-            state["hiddenBy"] = hidden
-        states.setdefault((cut["kind"], cut["element"]), {})[cut["state"]] = state
-    shutil.rmtree(source, ignore_errors=True)
-    index_path.unlink()
-    # The atlases written, and each state's places in them put in for its keys.
-    atlases, places = {}, {}
-    for name, found in pictures.items():
-        if not found:
-            continue
-        atlas, at = pack_atlas(found)
-        atlas.webpsave(str(pack / "elements" / f"{name}.webp"), lossless=True)
-        atlases[name] = {"file": f"elements/{name}.webp", "size": [atlas.width, atlas.height], "scale": 1 / small_factor if name == "small" else 1}
-        places[name] = at
-    for state in (s for by_state in states.values() for s in by_state.values() if s):
-        key = state.pop("key")
-        state["at"] = list(places[state["atlas"]][key])
-        state["small"] = list(places["small"][key])
-        for mask in state.get("hiddenBy", []):
-            mask["at"] = list(places["masks"][mask.pop("key")])
-    found = manifest.get("elements") or {}
-    structures = [{"id": u["id"], "type": u["type"], "cell": [u["x"], u["y"]], "owner": u["owner"], "town": u["town"], "core": u["core"],
-                   "states": states.get(("structure", u["id"]), {})} for u in found.get("structures", [])]
-    camps = [{"camp": c["camp"], "type": c["type"], "cell": [c["x"], c["y"]], "states": states.get(("camp", c["camp"]), {})}
-             for c in found.get("camps", [])]
-    return {"layer": layer_id, "atlases": atlases, "structures": structures, "towns": found.get("towns", []), "camps": camps}
+def remove_leftovers(out: Path, out_id: str) -> None:
+    """The rest of the stitch's files (geo files, previews, an earlier render's tiles and viewer),
+    once the pack has taken what it keeps."""
+    for leftover in out.glob(f"{out_id}*"):
+        shutil.rmtree(leftover) if leftover.is_dir() else leftover.unlink()
+    (out / "vips-properties.xml").unlink(missing_ok=True)
 
 
-def write(out: Path, manifest: dict, images: list[str]) -> Path:
+@dataclass
+class Packing:
+    """A pack being written, for the pack_data hooks (map/specifics.py): the stitch's output
+    folder, the pack's raw/ and pack/ folders, the manifest, the map layer's id and its overview's
+    factor (finest level over overview level)."""
+
+    out: Path
+    raw: Path
+    pack: Path
+    manifest: dict
+    layer_id: str
+    small_factor: int
+
+
+def write(out: Path, manifest: dict, images: list[str], specifics: Specifics) -> Path:
     """The pack and the raw layers for a stitched map in its folder `out` (its stitch's files, named
-    by the render's id, and `images`, the ids of its map images). Returns the pack's folder."""
-    from . import game_data
+    by the render's id, and `images`, the ids of its map images), with what its category and the map
+    itself add (`specifics`). Returns the pack's folder."""
+    from heroes_capture.common import game_data
 
     variant = variant_folder(out, manifest.get("structures", "keep"))
     pack, raw = variant / "pack", variant / "raw"
@@ -399,57 +405,85 @@ def write(out: Path, manifest: dict, images: list[str]) -> Path:
                 if bounds:
                     arena["boundsCells"] = bounds
                     arena["middleCell"] = [(bounds["left"] + bounds["right"]) / 2, (bounds["bottom"] + bounds["top"]) / 2]
-        (raw / "layers.json").write_text(json.dumps({"format": FORMAT, "arenas": arenas, "layers": layers}, indent=2))
+        write_json(raw / "layers.json", {"format": FORMAT, "arenas": arenas, "layers": layers}, indent=2)
         pack.mkdir(parents=True, exist_ok=True)
+        # Each layer's overview level (PACK.md, Overviews): a map layer's within OVERVIEW_MAP, a sky
+        # layer's the level the opening view draws it at (the first map layer's overview a pixel to
+        # a window pixel).
+        first_map = next(l for l in layers if l["kind"] == "map")
+        opening_zoom = 2.0 ** (map_overview_level(*first_map["size"]) - (levels_for(*first_map["size"]) - 1))
         packed = []
         for layer in layers:
             entry = dict(layer)
             if layer["kind"] == "fixed":
-                pyvips.Image.new_from_file(str(raw / layer["file"])).webpsave(str(pack / "fixed.webp"), Q=QUALITY)
+                pyvips.Image.new_from_file(str(raw / layer["file"])).webpsave(str(pack / "fixed.webp"), Q=QUALITY, keep="none")
                 entry["file"] = "fixed.webp"
             else:
-                meta = write_pyramid(raw / layer["file"], pack / f"{layer['id']}.pmtiles", layer["id"])
+                level = (map_overview_level(*layer["size"]) if layer["kind"] == "map"
+                         else sky_overview_level(*layer["size"], layer["rate"], opening_zoom))
+                meta = write_pyramid(raw / layer["file"], pack / f"{layer['id']}.pmtiles", layer["id"], level, tile_webp(layer["id"]))
                 if meta is None:
                     warn(f"the {layer['id']} layer is empty; left out of the pack")
                     continue
                 entry.update(meta, file=f"{layer['id']}.pmtiles")
+                team = entry.pop("teamFile", None)
+                if team:
+                    # Its team-colour mask (PACK.md, Team colour), tiled and levelled as the layer,
+                    # lossless: the amounts are exact.
+                    found = write_pyramid(raw / team, pack / f"{layer['id']}-team.pmtiles", f"{layer['id']}-team", level, {"lossless": True}, mask=True)
+                    if found:
+                        entry["teamMask"] = {"file": f"{layer['id']}-team.pmtiles", "overview": found["overview"]}
             packed.append(entry)
-        first_map = next(l for l in layers if l["kind"] == "map")
         # The elements' small atlas is at the map's overview scale (write_pyramid), so the two
         # levels of detail a viewer shows zoomed out agree.
         map_packed = next((l for l in packed if l["id"] == first_map["id"]), None)
         overview = (map_packed or {}).get("overview")
         small_factor = 2 ** (map_packed["levels"] - 1 - overview["level"]) if map_packed and overview else 1
-        element_data = collect_elements(out, raw, pack, manifest, first_map["id"], small_factor)
+        data = {}
+        for hook in specifics.pack_data:
+            data.update(hook(Packing(out, raw, pack, manifest, first_map["id"], small_factor)))
+        remove_leftovers(out, manifest["id"])
         thumbnail = pyvips.Image.thumbnail(str(raw / first_map["file"]), THUMBNAIL_WIDTH)
-        thumbnail.flatten(background=BACKDROP).webpsave(str(pack / "thumbnail.webp"), Q=85)
+        thumbnail.flatten(background=BACKDROP).webpsave(str(pack / "thumbnail.webp"), Q=85, keep="none")
         found_images = {"thumbnail": {"file": "thumbnail.webp", "size": [thumbnail.width, thumbnail.height]}}
 
         storage, build, category = None, None, None
         try:
-            storage = game_data.open_storage(game_data.find_install())
+            storage = game_data.game_storage()
             build = storage.build()
             category = (game_data.map_index(storage).get(manifest["map"]) or {}).get("category")
         except Exception as e:  # noqa: BLE001 - the pack is written without what the game data would add
             warn(f"the game's data couldn't be read ({e}); the pack has no loading screen, category or build")
+        copy = None
         try:
             stormmap = Path(manifest["stormmap"]) if manifest.get("stormmap") else None
-            found_images.update(map_images(stormmap, storage, pack / "images"))
+            if (stormmap is None or not stormmap.exists()) and storage is not None:
+                # Stitched on another computer than the prepared map's (it stays where it was
+                # prepared): the map's own file from the game's data, by its name.
+                try:
+                    copy = raw / "map.stormmap"
+                    copy.write_bytes(game_data.map_file(storage, manifest["map"])[1])
+                    stormmap = copy
+                except Exception as e:  # noqa: BLE001 - the pack is written without the map's pictures
+                    warn(f"the map's own file isn't here and couldn't be read from the game ({e}); the pack has no minimap")
+            # The game's pictures of the map are kept in raw/; the pack has what a viewer reads.
+            pictures = map_images(stormmap, storage, raw / "images")
         finally:
             if storage is not None:
                 storage.close()
-        if "customMinimap" in found_images and manifest.get("mapSize") and manifest.get("cameraBounds"):
-            if entry := minimap_svg_image(pack, found_images["customMinimap"], manifest["mapSize"], manifest["cameraBounds"], manifest["map"]):
+            if copy is not None:
+                copy.unlink(missing_ok=True)
+        if "customMinimap" in pictures and manifest.get("mapSize") and manifest.get("cameraBounds"):
+            if entry := minimap_svg_image(raw, pack, pictures["customMinimap"], manifest["mapSize"], manifest["cameraBounds"], specifics.minimap_correction):
                 found_images["customMinimapSvg"] = entry
 
-        validated = manifest["map"] in json.loads(VALIDATED.read_text(encoding="utf-8"))["maps"]
         screen = manifest.get("screen") or {}
         description = {
             "format": FORMAT,
             "tool": f"heroes-capture {_version()}",
             "gameBuild": build,
             "map": {
-                "id": _slug(manifest["map"]), "name": manifest["map"], "category": category, "validated": validated,
+                "id": game_data.slug(manifest["map"]), "name": manifest["map"], "category": category, "validated": specifics.validated,
                 "structures": manifest.get("structures", "keep"),
                 "sizeCells": [manifest["mapSize"]["width"], manifest["mapSize"]["height"]] if manifest.get("mapSize") else None,
                 "cameraBounds": manifest.get("cameraBounds"),
@@ -458,14 +492,16 @@ def write(out: Path, manifest: dict, images: list[str]) -> Path:
             "arenas": arenas,
             "layers": packed,
             "images": found_images,
-            "data": {"elements": element_data} if element_data else {},
+            "data": data,
+            # The colours the pictures' team colour was shot in, and a mask byte's worth (PACK.md, Team colour).
+            "teamColours": {"order": list(TEAM_COLOURS["order"]), "chaos": list(TEAM_COLOURS["chaos"]), "maskScale": MASK_SCALE},
         }
-        viewer.write(pack)
+        viewer.write(raw)
         description["files"] = {
             str(f.relative_to(pack)).replace("\\", "/"): {"bytes": f.stat().st_size, "sha256": hashlib.sha256(f.read_bytes()).hexdigest()}
             for f in sorted(pack.rglob("*")) if f.is_file()
         }
-        (pack / "pack.json").write_text(json.dumps(description, indent=2))
+        write_json(pack / "pack.json", description, indent=None)
     total = sum(e["bytes"] for e in description["files"].values())
     log(f"pack -> {pack} ({len(packed)} layers, {len(found_images)} pictures, {total / 1e6:.0f} MB)")
     return pack

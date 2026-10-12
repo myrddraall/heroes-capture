@@ -1,8 +1,10 @@
-"""Diagnostic runs (capture.py --probe-light, --probe-sky, --probe-waits, --probe-elements): instead of the tiles, chosen views and
-command sequences, a shot after each, kept in a probe-<what>-<time> folder next to the tiles.
+"""Diagnostic runs instead of the tiles (`map render <map> --probe-<name>`, PROBES): chosen views
+and command sequences, a shot after each, kept in a probe-<name>-<time> folder next to the tiles.
+The helpers are what the probes so far had in common, kept for the next one: a run's scaffold
+(probe_folder, finish), the camera over a spot (look_at; diagnostics.crop_round the screen round it, diagnostics.change_map what
+changed between two shots), and the frames that follow a command (frames_after).
 """
 
-import json
 import math
 import os
 import time
@@ -11,87 +13,56 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from . import sky_layers
-from .elements import changed, screen_point
-from .game_control import quit_match, send_command, settle, step
-from .game_window import game_region
-from .runlog import done, log, stage, warn
-from .screen import changed_share
-from .status import ROWS, interface_height
+from heroes_capture.capture import sky_layers
+from heroes_capture.common.game_control import settle, step
+from heroes_capture.common.game_state import interface_height
+from heroes_capture.common.game_window import game_region
+from heroes_capture.common.jsonio import write_json
+from heroes_capture.common.runlog import done, log, stage, warn
+from heroes_capture.map.match import quit_match, send_command
+from heroes_capture.map.status import CELL_UNITS, ROWS
 
 
 def _save(frame: np.ndarray, path: Path) -> None:
     Image.fromarray(np.ascontiguousarray(frame)).save(path, compress_level=1)
 
 
-def probe_light(session, manifest: dict, out: Path) -> None:
-    """The render's own commands at chosen spots, to see what each does to the picture.
+def probe_folder(out: Path, name: str) -> Path:
+    """The probe's folder next to the tiles: probe-<name>-<time>."""
+    folder = out.parent / f"probe-{name}-{time.strftime('%H%M%S')}"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
 
-    HRS_PROBE_POINTS="x,y;x,y" (map cells; default the middle tile) and HRS_PROBE_TILE_PATH,
-    entries "cmd,cmd,...:settle" separated by ";": the commands in order, each acknowledged
-    through the strip ("tile" and "move" get the point appended; "tile@x:y" / "move@x:y" that
-    spot instead, to arrive the way the render does from a neighbouring tile; "black",
-    "sky white" etc. as they are), then `clean`, the wait, and two shots 0.5 s apart (how much
-    animates between them is logged; HRS_PROBE_GAP seconds apart instead). An entry without an
-    "@" spot first jumps 100 cells away, so the point is arrived at afresh. An entry may start
-    with "name=", which names its shots. Default "tile:0.5"."""
-    tiles = manifest["tiles"]
-    probe_dir = out.parent / f"probe-light-{time.strftime('%H%M%S')}"
-    probe_dir.mkdir(exist_ok=True)
 
-    gap = float(os.environ.get("HRS_PROBE_GAP", "0.5"))
-
-    def shot(name: str) -> None:
-        frame = session.grab(dark_ok=True)
-        if frame is not None:
-            _save(frame, probe_dir / f"{name}.png")
-            settle(gap)
-            again = session.grab(dark_ok=True)
-            if again is not None:
-                _save(again, probe_dir / f"{name}-b.png")
-                moving = float((np.abs(frame.astype(np.int16) - again.astype(np.int16)).max(axis=2) > 24).mean())
-                st = session.status() if session.strip.located else None
-                clock = f", game clock {st.game_seconds} s" if st else ""
-                log(f"  probe: {name}  moving between two shots {gap:g} s apart: {moving * 100:.2f}% of pixels{clock}")
-                return
-        log(f"  probe: {name} (no frame)")
-
-    def run() -> None:
-        points = [tuple(float(v) for v in p.split(",")) for p in os.environ.get("HRS_PROBE_POINTS", "").split(";") if p.strip()]
-        if not points:
-            middle = min(tiles, key=lambda t: abs(t["row"] - manifest["rows"] // 2) + abs(t["col"] - manifest["cols"] // 2))
-            points = [(middle["x"], middle["y"])]
-        send_command("clean")  # no labels in these shots
-        settle(0.5)
-        for n, (x, y) in enumerate(points, start=1):
-            send_command(f"look {x:.1f} {y:.1f}")
-            settle(1.0)
-            for k, entry in enumerate(os.environ.get("HRS_PROBE_TILE_PATH", "tile:0.5").split(";")):
-                cmds, wait = entry.rsplit(":", 1)
-                given, _, cmds = cmds.rpartition("=")
-                if "@" not in cmds:
-                    send_command(f"look {x + 100:.1f} {y:.1f}")  # arrive afresh
-                    settle(1.0)
-                acked = True
-                for cmd in cmds.split(","):
-                    if cmd.startswith(("tile@", "move@")):
-                        name, spot = cmd.split("@")
-                        full = f"{name} 0 {spot.replace(':', ' ')}"
-                    elif cmd in ("tile", "move"):
-                        full = f"{cmd} 0 {x:.2f} {y:.2f}"
-                    else:
-                        full = cmd
-                    acked = session.send(full, timeout=3.0) is not None and acked
-                if float(wait) > 5:
-                    log(f"  waiting {float(wait):g} s of match time before the next shot ...")
-                settle(float(wait))
-                session.send("clean")
-                label = given or (cmds.replace(",", "+").replace(" ", "-").replace(":", "_") if len(cmds) < 40 else f"{cmds.count(',') + 1}cmds-{cmds.split(',')[0].replace(' ', '')}")
-                shot(f"point{n}-{k:02d}-{label}-s{wait}" + ("" if acked else "-noack"))
-
-    step(run, "the lighting probe")
+def finish(run, what: str, folder: Path) -> None:
+    """The probe's work (redone after a lost focus, as every step), the match left, the folder named."""
+    step(run, what)
     quit_match()
-    done(f"probe screenshots in {probe_dir}")
+    done(f"probe results in {folder}")
+
+
+def look_at(session, spot: dict, wait: float = 0.5) -> dict:
+    """The capture camera straight above a cell ("el at": the lighting refitted there), then where
+    the camera really is (the strip; the spot itself if it can't be read)."""
+    session.command(f"el at {spot['x']:.2f} {spot['y']:.2f}")
+    settle(wait)
+    return session.camera({"x": spot["x"], "y": spot["y"]})
+
+
+def frames_after(session, text: str, seconds: float, crop=lambda frame: frame) -> list[tuple[float, np.ndarray]] | None:
+    """A command, then every frame for `seconds` after the strip acknowledges it, each with its
+    time after the acknowledgement (the first: the frame that showed it). How soon what the command
+    does is on screen (a side switch: 47-212 ms, on one of the game's next simulation ticks).
+    None when the map doesn't answer."""
+    answer = session.send(text, timeout=5.0)
+    if answer is None:
+        warn(f"  no answer to \"{text}\"")
+        return None
+    acked = time.time()
+    frames = [(0.0, crop(answer[1]))]
+    while time.time() < acked + seconds:
+        frames.append((time.time() - acked, crop(session.raw_grab())))
+    return frames
 
 
 def probe_monitor(session, manifest: dict, out: Path) -> None:
@@ -103,7 +74,7 @@ def probe_monitor(session, manifest: dict, out: Path) -> None:
     place; the manifest planned for that size; the strip's cells are the size the height predicts
     (25 x 15 interface units, 1200 units to the screen's height; the second column is directly
     right of the first); the first tile's camera is where it was sent."""
-    from .monitors import monitors
+    from heroes_capture.common.monitors import monitors
 
     region = game_region()
     w, h = region["width"], region["height"]
@@ -128,7 +99,7 @@ def probe_monitor(session, manifest: dict, out: Path) -> None:
     # The cells: 25 x 15 interface units; the interface is 1200 units tall (or 1600 wide on a
     # screen narrower than 4:3: interface_height).
     unit = interface_height(w, h) / 1200
-    expect_w, expect_h = 25 * unit, 15 * unit
+    expect_w, expect_h = CELL_UNITS[0] * unit, CELL_UNITS[1] * unit
     cells_ok = abs(strip.pitch_y - expect_h) <= 1.0 and abs(strip.cell_w - expect_w) <= 1.0
     check("strip cells the size the height predicts", cells_ok,
           f"cells {strip.cell_w}x{strip.cell} px, row pitch {strip.pitch_y:.2f}; expected {expect_w:.2f}x{expect_h:.2f} ({unit:.3f} px per interface unit"
@@ -173,7 +144,7 @@ def probe_monitor(session, manifest: dict, out: Path) -> None:
         "camera": {"middle": {"sent": [middle["x"], middle["y"]], "at": camera}, "corner": {"sent": [corner["x"], corner["y"]], "at": at_corner}},
         "checks": [{"check": n, "ok": ok, "detail": d} for n, ok, d in checks],
     }
-    (probe_dir / "report.json").write_text(json.dumps(report, indent=2))
+    write_json(probe_dir / "report.json", report, indent=2)
     failed = [n for n, ok, _ in checks if not ok]
     (done if not failed else warn)(f"monitor probe at {w}x{h}: {len(checks) - len(failed)} of {len(checks)} checks ok"
                                    + (f"; not ok: {', '.join(failed)}" if failed else "") + f"; report in {probe_dir}")
@@ -189,8 +160,7 @@ def probe_sky(session, manifest: dict, out: Path) -> None:
     1 the terrain-relative parallax layer); the same command twice in a row only waits longer,
     which tells a slow transition from a failed swap."""
     tiles = manifest["tiles"]
-    probe_dir = out.parent / f"probe-sky-{time.strftime('%H%M%S')}"
-    probe_dir.mkdir(exist_ok=True)
+    probe_dir = probe_folder(out, "sky")
     edge = min(tiles, key=lambda t: t["col"] * 1000 + abs(t["y"] - (manifest["area"]["top"] + manifest["area"]["bottom"]) / 2))
 
     def shot(name: str) -> None:
@@ -212,7 +182,7 @@ def probe_sky(session, manifest: dict, out: Path) -> None:
         settle(2.0)
         send_command("clean")
         settle(0.5)
-        sequence = os.environ.get("HRS_SKY_SEQUENCE") or "start:0|black 0:2.5|white 0:2.5|grey 0:2.5|lightgrey 0:2.5|none 0:2.5"
+        sequence = os.environ.get("HRS_SKY_SEQUENCE") or "start:0|black 0:2.5|lightgrey 0:2.5|none 0:2.5"
         previous = None
         for k, item in enumerate(sequence.split("|")):
             command, wait = item.rsplit(":", 1)
@@ -222,9 +192,7 @@ def probe_sky(session, manifest: dict, out: Path) -> None:
             shot(f"{k:02d}-{command.replace(' ', '-layer')}-{wait}s")
             previous = command
 
-    step(run, "the skybox probe")
-    quit_match()
-    done(f"probe screenshots in {probe_dir}")
+    finish(run, "the skybox probe", probe_dir)
 
 
 # The sky reach probe's lenses, in degrees, after the render's own (the camera can't go far past the
@@ -242,8 +210,7 @@ def probe_sky_reach(session, manifest: dict, out: Path) -> None:
     camera went, the share of the screen the art fills and the share the haze reaches (where it
     differs from the light grey alone), and the share of art along each side of the screen (where
     the art ends). The shots kept at a quarter size."""
-    probe_dir = out.parent / f"probe-sky-reach-{time.strftime('%H%M%S')}"
-    probe_dir.mkdir(exist_ok=True)
+    probe_dir = probe_folder(out, "sky-reach")
     left = int(manifest["status"].get("pageLeft", 0))
     area = manifest["area"]
     size = manifest["mapSize"]
@@ -274,11 +241,11 @@ def probe_sky_reach(session, manifest: dict, out: Path) -> None:
         log(f"sky reach probe: bounds {area}, map {size}, near clip {clip}; camera x {xs}, y {ys}; lenses {fovs}")
         for y in reversed(ys):  # north first
             for x in xs:
-                answer = session.send(f"tile 0 {x:.2f} {y:.2f}", timeout=3.0)
-                if answer is None or session.send(f"hidemap {clip}") is None:
+                status = session.move_camera(x, y)
+                if status is None or session.send(f"hidemap {clip}") is None:
                     log(f"  ({x:.0f}, {y:.0f}): the map didn't answer")
                     continue
-                cam = (answer[0].camera_x, answer[0].camera_y)
+                cam = (status.camera_x, status.camera_y)
                 for fov in fovs:
                     session.send(f"fov {fov:g}")
                     name = f"x{x:.0f}-y{y:.0f}-fov{fov:g}"
@@ -295,197 +262,13 @@ def probe_sky_reach(session, manifest: dict, out: Path) -> None:
                         f"(along the sides: {sides(art)}), haze reaches {haze * 100:5.1f}%")
         session.send("sky mapparallax 1")
 
-    step(run, "the sky reach probe")
-    quit_match()
-    done(f"probe screenshots in {probe_dir}")
+    finish(run, "the sky reach probe", probe_dir)
 
 
-def _difference(a: np.ndarray, b: np.ndarray, left: int) -> str:
-    """How two shots of the same view differ: the share of 32-pixel blocks that changed (as the
-    capture's half-drawn check measures), the mean difference, and the 99.9th percentile."""
-    a, b = a[:, left:], b[:, left:]
-    d = np.abs(a.astype(np.int16) - b.astype(np.int16)).max(axis=2)
-    return f"blocks changed {changed_share(a, b) * 100:5.2f}%, mean {d.mean():5.2f}, p99.9 {np.percentile(d, 99.9):5.1f}"
-
-
-def probe_waits(session, manifest: dict, out: Path) -> None:
-    """Can the fixed waits be shorter? Each is tried shorter on the same views and the shot
-    compared with one at the current value (and the current value is shot twice, to show how
-    much two identical shots differ anyway):
-
-    - the lighting-refit look held before each tile (0.1 s in the script), and the settle from
-      the tile's acknowledgement to the kept shot (0.1 s): on sample tiles across the grid
-      (corners, edges, the middle), each arrived at from its neighbour, as in a render
-    - the time a sky swap gets to be drawn before its shot (0.1 s): the haze over white, swapped
-      to from the background art, at one sky position
-    - and the sky pass with sky positions further apart (0.8 of a screen instead of 0.6) into
-      sky-keep08/, to compare its layers with the current ones."""
-    tiles = manifest["tiles"]
-    left = int((manifest.get("status") or {}).get("pageLeft", 0))
-    probe_dir = out.parent / f"probe-waits-{time.strftime('%H%M%S')}"
-    probe_dir.mkdir(exist_ok=True)
-    by_pos = {(t["row"], t["col"]): t for t in tiles}
-    rows, cols = max(t["row"] for t in tiles), max(t["col"] for t in tiles)
-    picks = [(0, 0), (0, cols // 2), (rows // 2, 0), (rows // 2, cols // 2), (rows, cols), (rows // 3, 2 * cols // 3)]
-    samples = []
-    for rc in picks:
-        t = by_pos.get(rc)
-        if t is not None and t not in samples:
-            samples.append(t)
-
-    def save(frame: np.ndarray, name: str) -> None:
-        Image.fromarray(np.ascontiguousarray(frame)).save(probe_dir / f"{name}.png", compress_level=1)
-
-    def tile_shot(t: dict, refit: float, settle_time: float) -> np.ndarray | None:
-        """The tile as a render shoots it, arrived at from its neighbour (left, else right)."""
-        neighbour = by_pos.get((t["row"], t["col"] - 1)) or by_pos.get((t["row"], t["col"] + 1)) or t
-        if session.send(f"refitwait {refit:g}") is None:
-            return None
-        if session.send(f"tile {neighbour['index']} {neighbour['x']:.2f} {neighbour['y']:.2f}", timeout=3.0) is None:
-            return None
-        settle(0.5)
-        answer = session.send(f"tile {t['index']} {t['x']:.2f} {t['y']:.2f}", timeout=3.0)
-        if answer is None:
-            return None
-        moved = time.time()
-        wait = moved + settle_time - time.time()
-        if wait > 0:
-            settle(wait)
-        raw = session.fresh()
-        return None if raw is None else session.blank(raw)
-
-    conditions = [("current", 0.1, 0.1), ("current-again", 0.1, 0.1), ("refit-0.05", 0.05, 0.1),
-                  ("settle-0.05", 0.1, 0.05), ("both-short", 0.05, 0.05)]
-    log(f"waits probe: {len(samples)} sample tiles, {len(conditions)} shots each")
-    for t in samples:
-        def run() -> None:
-            base = None
-            for name, refit, settle_time in conditions:
-                frame = tile_shot(t, refit, settle_time)
-                if frame is None:
-                    log(f"  tile {t['index'] + 1} {name}: no shot")
-                    continue
-                save(frame, f"tile{t['index']:03d}-{name}")
-                if base is None:
-                    base = frame
-                    continue
-                log(f"  tile {t['index'] + 1} (row {t['row']}, col {t['col']}) {name:14s} vs current: {_difference(frame, base, left)}")
-
-        step(run, f"waits probe, tile {t['index'] + 1}")
-    session.send("refitwait 0.1")
-
-    sky = manifest.get("sky") or {}
-    measured = None
-    if sky.get("keys") and (sky.get("mapSky") or {}).get("parallax"):
-        measured = step(lambda: sky_layers.measure(session, manifest, out.parent), "measuring the sky layers")
-    if measured:
-        area = manifest["area"]
-        x, y = (area["left"] + area["right"]) / 2, (area["bottom"] + area["top"]) / 2
-        clip = measured["nearClip"]
-
-        def sky_run() -> None:
-            base = None
-            for name, wait in (("current", 0.1), ("current-again", 0.1), ("settle-0.05", 0.05), ("settle-0", 0.0)):
-                for command in (f"tile 0 {x:.2f} {y:.2f}", f"hidemap {clip}", "sky parallaxbare 1"):
-                    if session.send(command, timeout=3.0) is None:
-                        warn("sky: no answer")
-                        return
-                settle(1.0)
-                if session.send("sky parallaxlight 1") is None:
-                    return
-                settle(wait)
-                frame = session.grab(dark_ok=True)
-                save(frame, f"sky-{name}")
-                if base is None:
-                    base = frame
-                    continue
-                log(f"  sky swap {name:14s} vs current: {_difference(frame, base, left)}")
-
-        step(sky_run, "waits probe, sky swap")
-        session.send("sky mapparallax 1")
-        sky_layers.capture(session, manifest, out.parent, measured, keep=0.8, folder_name="sky-keep08")
-    quit_match()
-    done(f"probe screenshots in {probe_dir}")
-
-
-
-# The matte probe: the same paused view over white, black and two greys at a few spots with light
-# that adds to what is behind it (a core's shield, a tower's orb, a core's lava and fire, the embers
-# in the void by the Hell side), to compare the matte as it is (white and black: the white sky,
-# drawn at about 230, clips a bright see-through spark at 255) with one over grey and black plus a
-# glow layer for the light left over. The shots only: the comparison is worked out from them
-# afterwards. Each spot: a name, its cell (or how to find it), and the radius in cells kept round it.
-MATTE_SKIES = ["white", "black", "grey", "lightgrey"]
-MATTE_RADIUS = 16.0
-
-
-def matte_spots(manifest: dict) -> list[dict]:
-    """The matte probe's spots: Order's core (its shield), an Order level 3 tower (its orb),
-    Chaos's core (its lava and fire), and the void past the Hell side's top and right edges."""
-    found, bounds = manifest["elements"]["structures"], manifest["cameraBounds"]
-    spots = []
-    for name, pick in (("order-core", lambda u: u["core"] and u["owner"] == "order"),
-                       ("order-tower", lambda u: u["type"].startswith("TownCannonTowerL3") and u["owner"] == "order"),
-                       ("chaos-core", lambda u: u["core"] and u["owner"] == "chaos")):
-        u = next((u for u in found if pick(u)), None)
-        if u is not None:
-            spots.append({"name": name, "x": u["x"], "y": u["y"], "radius": 24.0 if u["core"] else MATTE_RADIUS})
-    mid_y = (bounds["bottom"] + bounds["top"]) / 2
-    spots.append({"name": "hell-top-edge", "x": bounds["left"] + (bounds["right"] - bounds["left"]) * 0.65, "y": bounds["top"], "radius": MATTE_RADIUS})
-    spots.append({"name": "hell-right-edge", "x": bounds["right"], "y": mid_y, "radius": MATTE_RADIUS})
-    return spots
-
-
-def probe_elements(session, manifest: dict, out: Path) -> None:
-    """The matte probe (matte_spots, MATTE_SKIES): the map as the tiles shoot it (paused, the
-    structures standing), the camera over each spot ("el at": the lighting refitted there, the
-    capture camera), shot over each sky in turn ("sky <colour>"), the part MATTE_RADIUS cells (a
-    core's: 24) round the spot kept, lossless: probe-matte-<time>/<spot>-<sky>.png, and spots.json
-    (each spot's cell, camera, and where its crop lies in the screen)."""
-    left = int((manifest.get("status") or {}).get("pageLeft", 0))
-    probe_dir = out.parent / f"probe-matte-{time.strftime('%H%M%S')}"
-    probe_dir.mkdir(exist_ok=True)
-    ppc, screen = manifest["pxPerCell"], manifest["screen"]
-    spots = matte_spots(manifest)
-    log(f"matte probe: {len(spots)} spots over {', '.join(MATTE_SKIES)}: {', '.join(s['name'] for s in spots)}")
-
-    def command(text: str, timeout: float = 3.0) -> bool:
-        if session.send(text, timeout=timeout) is None:
-            warn(f"  no answer to \"{text}\"")
-            return False
-        return True
-
-    def run() -> None:
-        for spot in spots:
-            command(f"el at {spot['x']:.2f} {spot['y']:.2f}")
-            settle(0.5)
-            status = session.status()
-            camera = {"x": status.camera_x, "y": status.camera_y} if status else spot
-            cx, cy = screen_point(spot, camera, screen, ppc)
-            r = int(spot["radius"] * ppc)
-            box = (max(0, int(cy) - r), int(cy) + r, max(left, int(cx) - r), int(cx) + r)
-            spot.update(camera=camera, box=box)
-            for sky in MATTE_SKIES:
-                command(f"sky {sky} 0")
-                settle(1.0)  # the sky swap drawn (a frame or two), the scene paused
-                frame = session.grab(dark_ok=True)
-                if frame is None:
-                    warn(f"  {spot['name']} over {sky}: no frame")
-                    continue
-                crop = frame[box[0]:box[1], box[2]:box[3], :3]
-                Image.fromarray(np.ascontiguousarray(crop)).save(probe_dir / f"{spot['name']}-{sky}.png")
-            log(f"  {spot['name']} at ({spot['x']:g}, {spot['y']:g}): {len(MATTE_SKIES)} skies")
-        command("sky white 0")
-        (probe_dir / "spots.json").write_text(json.dumps(spots, indent=1))
-
-    step(run, "matte probe, each spot over each sky")
-    quit_match()
-    done(f"probe screenshots in {probe_dir}")
-
-
-def elements_town(manifest: dict) -> dict:
-    """The Order team's forward town's hall (the busiest view: its gate, towers, orbs and walls)."""
-    found = manifest["elements"]["structures"]
-    halls = [u for u in found if u["type"].startswith("TownTownHall") and u["owner"] == "order"]
-    core = next(u for u in found if u["core"] and u["owner"] == "order")
-    return max(halls, key=lambda u: math.dist((u["x"], u["y"]), (core["x"], core["y"])))
+# Every probe, declared once: its name (`--probe-<name>`) -> what it runs, and what it does (the
+# capture's help and the line it logs before it starts).
+PROBES = {
+    "monitor": (probe_monitor, "the start-up at this monitor's resolution (with --monitor), then a report on the window, the strip's cells and the first tile; run once per monitor"),
+    "sky": (probe_sky, "one edge tile over each solid-colour skybox, to check the colour shows and is flat"),
+    "sky-reach": (probe_sky_reach, "the camera as far past the camera bounds as it goes, the sky shot there with the render's lens and wider ones: how much parallax sky there is"),
+}

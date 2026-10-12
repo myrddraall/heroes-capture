@@ -45,8 +45,8 @@
 <div id="bar"><strong id="title">Loading…</strong><span id="arenas"></span><span id="layers" role="group" aria-label="Layers"></span><span id="kinds" role="group" aria-label="Elements"></span><span id="status" aria-live="polite"></span></div>
 <div id="open" hidden>
   <div>
-    <p>This page was opened from disk, and a browser won't let a page read the files next to it by itself.
-       Choose this pack's folder (the one with this <code>index.html</code>) to show the map.</p>
+    <p>This page was opened from disk, and a browser won't let a page read the files near it by itself.
+       Choose the pack's folder (<code>pack</code>, beside the <code>raw</code> folder this page is in) to show the map.</p>
     <input type="file" id="folder" webkitdirectory multiple>
     <label for="folder">Choose the pack folder</label>
     <small>The files stay on your computer: the browser only reads them. Or run
@@ -57,8 +57,8 @@
 "use strict";
 // The pack's reference viewer (heroes-capture). It draws a pack as PACK.md says: each layer scaled
 // by the zoom and its rate, placed by the pixel at the window's middle; every visible tile at the
-// level whose pixels are about one screen pixel, drawn from the finest level loaded so far until
-// its own arrives, which then fades in. The custom minimap (its SVG) lies on the map while the
+// level whose pixels are about one screen pixel (never coarser than the layer's overview, the first
+// thing fetched), drawn from the finest level loaded so far until its own arrives, which then fades in. The custom minimap (its SVG) lies on the map while the
 // first view loads, then fades away; each layer can be shown or hidden. The elements render's
 // structures and camps are drawn over the terrain, each in the state chosen for it. A check that the
 // pack works, not the map viewer itself.
@@ -68,14 +68,14 @@ const MAX_TILES = 900;  // decoded tiles kept (least recently drawn dropped firs
 
 const statusEl = document.getElementById("status");
 
-// The pack: fetched next to the page when it is served over HTTP (heroes-capture map view, a web
-// host); opened from disk, read from the folder the user chooses, each archive through the
-// pmtiles reader's FileSource.
+// The pack: fetched from ../pack/ when the render's folder is served over HTTP (heroes-capture map
+// view); opened from disk, read from the folder the user chooses, each archive through the pmtiles
+// reader's FileSource.
 async function openPack() {
   if (location.protocol !== "file:") {
-    const answer = await fetch("pack.json");
+    const answer = await fetch("../pack/pack.json");
     if (!answer.ok) throw new Error(`pack.json: ${answer.status} ${answer.statusText}`);
-    return { pack: await answer.json(), archive: (name) => name, url: (name) => name };
+    return { pack: await answer.json(), archive: (name) => `../pack/${name}`, url: (name) => `../pack/${name}` };
   }
   const panel = document.getElementById("open");
   panel.hidden = false;
@@ -100,9 +100,36 @@ async function openPack() {
 
 (async () => {
   const { pack, archive, url } = await openPack();
-  if (pack.format !== 3) {
-    statusEl.textContent = `This viewer reads pack format 3; this pack is format ${pack.format}.`;
+  if (pack.format !== 6) {
+    statusEl.textContent = `This viewer reads pack format 6; this pack is format ${pack.format}.`;
     return;
+  }
+
+  // Team colour (PACK.md, Team colour): the pack is drawn in Order's side's colours; the button
+  // swaps them, each picture with team colour recoloured from its mask once, then kept.
+  const team = pack.teamColours;
+  let swapped = false;
+  function recolour(picture, mask, mx, my) {
+    const w = picture.width, h = picture.height;
+    const canvas = (source, sx, sy) => {
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      const g = c.getContext("2d", { willReadFrequently: true });
+      g.drawImage(source, sx, sy, w, h, 0, 0, w, h);
+      return [c, g, g.getImageData(0, 0, w, h)];
+    };
+    const [out, g, image] = canvas(picture, 0, 0);
+    const amounts = canvas(mask, mx, my)[2].data, rgba = image.data;
+    const k = team.maskScale / 255;
+    const toOrder = team.chaos.map((v, i) => (v - team.order[i]) * k), toChaos = team.order.map((v, i) => (v - team.chaos[i]) * k);
+    for (let p = 0; p < rgba.length; p += 4) {
+      const a = amounts[p], b = amounts[p + 1];
+      if (!a && !b) continue;
+      for (let i = 0; i < 3; i++) rgba[p + i] += a * toOrder[i] + b * toChaos[i];  // clamped by the array
+    }
+    g.putImageData(image, 0, 0);
+    return out;
   }
   document.title = pack.map.name;
   document.getElementById("title").textContent = pack.map.name;
@@ -118,7 +145,19 @@ async function openPack() {
       fixedEl.style.backgroundImage = `url("${url(meta.file)}")`;
       continue;
     }
-    layers.push({ meta, archive: new pmtiles.PMTiles(archive(meta.file)), tiles: new Map() });
+    // The overview first (PACK.md, Overviews): the whole layer at its level, which the archive
+    // doesn't hold, nor any coarser.
+    const layer = { meta, archive: new pmtiles.PMTiles(archive(meta.file)), tiles: new Map(), overview: null };
+    fetch(url(meta.overview.file)).then((r) => r.blob()).then(createImageBitmap)
+      .then((bitmap) => { layer.overview = bitmap; redraw(); })
+      .catch(() => { statusEl.textContent = `The ${meta.id} layer's overview failed to load.`; });
+    if (meta.teamMask) {  // its team-colour mask: the overview's fetched now, the tiles' when swapped
+      layer.teamArchive = new pmtiles.PMTiles(archive(meta.teamMask.file));
+      fetch(url(meta.teamMask.overview.file)).then((r) => r.blob()).then(createImageBitmap)
+        .then((bitmap) => { layer.teamOverview = bitmap; redraw(); })
+        .catch(() => {});  // without it the overview keeps the colours as shot
+    }
+    layers.push(layer);
   }
   // The custom minimap as SVG, stretched over the map cells it covers (PACK.md, Images). It is put
   // in the page itself (as an <img> its strokes would grow with it; in the page they keep their
@@ -221,11 +260,12 @@ async function openPack() {
           if (name === "masks") {
             for (const mask of cut.hiddenBy || []) mask.bitmap = cutOut(atlasPictures.masks, mask.at, w, h);
           }
+          if (name === "team" && cut.teamMask) cut.mask = cutOut(atlasPictures.team, cut.teamMask.at, w, h);
         }
       }
       redraw();
     };
-    for (const name of ["standing", "masks", "rubble"]) {
+    for (const name of ["standing", "masks", "rubble", "team"]) {
       const atlas = elements.atlases[name];
       if (!atlas) continue;
       fetch(url(atlas.file)).then((r) => r.blob()).then(createImageBitmap)
@@ -255,16 +295,22 @@ async function openPack() {
 
   // A cut-out as it is drawn: with the parts erased where a neighbour that is standing too stands
   // in front of it (PACK.md, Elements: hiddenBy); the result kept until the neighbours change.
+  // A cut-out in the colours shown (team colour).
+  function cutPicture(cut) {
+    if (!swapped || !cut.mask) return cut.bitmap;
+    return (cut.swapped ??= recolour(cut.bitmap, cut.mask, 0, 0));
+  }
   function drawnCut(piece, cut) {
     const masks = (cut.hiddenBy || []).filter((m) => m.bitmap && structureById.has(m.id) && stateOf(structureById.get(m.id)) === "standing");
-    if (!masks.length) return cut.bitmap;
-    const key = masks.map((m) => m.id).join(",");
+    const picture = cutPicture(cut);
+    if (!masks.length) return picture;
+    const key = masks.map((m) => m.id).join(",") + (swapped ? " swapped" : "");
     if (cut.composed && cut.composedKey === key) return cut.composed;
     const c = document.createElement("canvas");
     c.width = cut.bitmap.width;
     c.height = cut.bitmap.height;
     const g = c.getContext("2d");
-    g.drawImage(cut.bitmap, 0, 0);
+    g.drawImage(picture, 0, 0);
     g.globalCompositeOperation = "destination-out";
     for (const m of masks) g.drawImage(m.bitmap, 0, 0, c.width, c.height);
     cut.composed = c;
@@ -356,22 +402,50 @@ async function openPack() {
   // Edges rounded to device pixels, so neighbouring tiles meet without hairline gaps.
   const snap = (v) => Math.round(v * dpr) / dpr;
 
-  // A tile's area from the finest coarser level loaded: true if covered (or known empty).
+  // A layer's overview, and a tile, in the colours shown (team colour; a tile's mask fetched once
+  // it is needed: undefined not yet asked, null none).
+  function overviewPicture(layer) {
+    if (!swapped || !layer.teamOverview) return layer.overview;
+    return (layer.swappedOverview ??= recolour(layer.overview, layer.teamOverview, 0, 0));
+  }
+  function tilePicture(layer, level, x, y, t) {
+    if (!swapped || !layer.teamArchive) return t.bitmap;
+    if (t.mask === undefined) {
+      t.mask = "loading";
+      layer.teamArchive.getZxy(level, x, y)
+        .then(async (found) => { t.mask = found && found.data ? await createImageBitmap(new Blob([found.data], { type: "image/webp" })) : null; })
+        .catch(() => { t.mask = null; })
+        .finally(redraw);
+    }
+    if (!t.mask || t.mask === "loading") return t.bitmap;
+    return (t.swapped ??= recolour(t.bitmap, t.mask, 0, 0));
+  }
+
+  // Tile (x, y)'s area at a level from the overview, once it has arrived: true if drawn.
+  function drawFromOverview(layer, level, x, y, box) {
+    if (!layer.overview) return false;
+    const part = layer.meta.tileSize / 2 ** (level - layer.meta.overview.level);  // the tile, in overview pixels
+    ctx.drawImage(overviewPicture(layer), x * part, y * part, part, part, box.x, box.y, box.w, box.h);
+    return true;
+  }
+
+  // A tile's area from the finest coarser level loaded, down to the overview: true if covered (or
+  // known empty).
   function drawFromAbove(layer, level, x, y, box, priority) {
-    const size = layer.meta.tileSize;
-    for (let above = level - 1; above >= 0; above--) {
+    const size = layer.meta.tileSize, floor = layer.meta.overview.level;
+    for (let above = level - 1; above > floor; above--) {
       const f = 2 ** (level - above);
       const ax = Math.floor(x / f), ay = Math.floor(y / f);
       const t = tileAt(layer, above, ax, ay);
       if (t.state === "empty") return true;
       if (t.state === "loaded") {
         const part = size / f;
-        ctx.drawImage(t.bitmap, (x - ax * f) * part, (y - ay * f) * part, part, part, box.x, box.y, box.w, box.h);
+        ctx.drawImage(tilePicture(layer, above, ax, ay, t), (x - ax * f) * part, (y - ay * f) * part, part, part, box.x, box.y, box.w, box.h);
         return true;
       }
-      if (above === 0 || above === level - 2) request(layer, above, ax, ay, t, priority - 1e6 * (level - above));
+      if (above === level - 2) request(layer, above, ax, ay, t, priority - 1e6 * (level - above));
     }
-    return false;
+    return drawFromOverview(layer, level, x, y, box);
   }
 
   // The minimap's element over the map cells it covers: the camera's cell at the window's
@@ -406,7 +480,8 @@ async function openPack() {
       if (!shown[groupOf(meta)]) continue;
       const s = 1 / (1 + meta.rate * (1 / zoom - 1));
       const [u, v] = middlePixel(meta);
-      const level = Math.max(0, Math.min(meta.levels - 1, meta.levels - 1 - Math.floor(Math.log2(1 / (s * dpr)))));
+      const floor = meta.overview.level;  // never coarser than the overview: zoomed further out, it is drawn smaller
+      const level = Math.max(floor, Math.min(meta.levels - 1, meta.levels - 1 - Math.floor(Math.log2(1 / (s * dpr)))));
       if (meta.kind === "map") mapLevel = level;
       const span = meta.tileSize * 2 ** (meta.levels - 1 - level);  // a tile, in full-size layer pixels
       const cols = Math.ceil(meta.size[0] / span), rows = Math.ceil(meta.size[1] / span);
@@ -417,6 +492,10 @@ async function openPack() {
           const left = snap(width / 2 + (x * span - u) * s), top = snap(height / 2 + (y * span - v) * s);
           const box = { x: left, y: top, w: snap(width / 2 + ((x + 1) * span - u) * s) - left, h: snap(height / 2 + ((y + 1) * span - v) * s) - top };
           const priority = level * 1e6 + Math.hypot(box.x + box.w / 2 - width / 2, box.y + box.h / 2 - height / 2);
+          if (level === floor && floor < meta.levels - 1) {  // the overview's level: not in the archive
+            if (!drawFromOverview(layer, level, x, y, box)) complete = false;
+            continue;
+          }
           const t = tileAt(layer, level, x, y);
           request(layer, level, x, y, t, priority);
           if (t.state !== "loaded" && t.state !== "empty") complete = false;
@@ -428,7 +507,7 @@ async function openPack() {
               ctx.globalAlpha = age / FADE_MS;
               fading = true;
             }
-            ctx.drawImage(t.bitmap, box.x, box.y, box.w, box.h);
+            ctx.drawImage(tilePicture(layer, level, x, y, t), box.x, box.y, box.w, box.h);
             ctx.globalAlpha = 1;
           } else {
             drawFromAbove(layer, level, x, y, box, priority);
@@ -464,7 +543,7 @@ async function openPack() {
     for (const piece of drawOrder()) {
       const cut = piece.states[stateOf(piece)];
       if (!cut || !cut.bitmap) continue;
-      drawn.push({ piece, image: stateOf(piece) === "standing" ? drawnCut(piece, cut) : cut.bitmap, at: placed(cut.rect) });
+      drawn.push({ piece, image: stateOf(piece) === "standing" ? drawnCut(piece, cut) : cutPicture(cut), at: placed(cut.rect) });
     }
     // The hovered one's glow under everything (drawn with it, the neighbours drawn after it covered
     // the glow except where their masks let it show, in the masks' jagged shapes). One turned off
@@ -587,6 +666,19 @@ async function openPack() {
       });
       kinds.appendChild(button);
     }
+  }
+
+  if (layers.some((l) => l.meta.teamMask) || (elements && elements.atlases.team)) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "Swap colours";
+    button.setAttribute("aria-pressed", "false");
+    button.addEventListener("click", () => {
+      swapped = !swapped;
+      button.setAttribute("aria-pressed", String(swapped));
+      redraw();
+    });
+    document.getElementById("kinds").appendChild(button);
   }
 
   function redraw() {

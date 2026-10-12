@@ -1,4 +1,4 @@
-# The map pack (format 3)
+# The map pack (format 6)
 
 What heroes-capture writes for each map so that a map viewer, built in another project, can show
 it: quickly at first, then sharper as the user zooms in, down to full detail. This document is the
@@ -7,13 +7,19 @@ a viewer would notice bumps the format number. Format 2: the sky layers' picture
 each filling its whole rectangle (see [Sky layers fill their rectangles](#sky-layers-fill-their-rectangles)).
 Format 3: each tiled layer has an [overview](#overviews), and the elements' cut-outs are in
 [atlases](#elements), at two scales, instead of a file each: a map's opening view takes a handful
-of requests however many structures it has.
+of requests however many structures it has. Format 4: each structure has an `outpost` beside its
+`town`, and the pack lists the [outposts](#elements). Format 5: a layer's PMTiles archive holds
+only the levels finer than its [overview](#overviews), each layer's overview is at the level the
+opening view needs (the sky layers' a level finer than the map's), and the pack has only what a
+viewer reads (the game's other pictures of the map and the reference viewer are in `raw/`).
+Format 6: [team colour](#team-colour), a mask of where the map and its structures are drawn in a
+team's colour, so a viewer can show the teams in any colours.
 
 A pack is plain static files, made to be hosted as they are (GitHub Pages for now) and read by a
 browser with no server code.
 
-**Status:** heroes-capture writes packs at the end of every render (`pack.py`), with a reference
-viewer in each (`index.html`; `heroes-capture map view <map>` opens it).
+**Status:** heroes-capture writes packs at the end of every render (`capture/pack.py`), with a
+reference viewer beside each (`raw/index.html`; `heroes-capture map view <map>` opens it).
 
 ## Contents
 
@@ -23,6 +29,7 @@ viewer in each (`index.html`; `heroes-capture map view <map>` opens it).
 - [Layers and drawing](#layers-and-drawing)
 - [Tile pyramids](#tile-pyramids)
 - [Images](#images)
+- [Team colour](#team-colour)
 - [Raw layers](#raw-layers)
 - [Hosting](#hosting)
 - [Later](#later)
@@ -37,13 +44,15 @@ maps/battlefield-of-eternity/
   pack/                       the pack: what a viewer loads; host this folder as it is
     pack.json                 what's in the pack and how to draw it (below)
     map.pmtiles               the map: a tile pyramid (one per arena on a map of several)
-    background.pmtiles        the sky's background art, a tile pyramid
-    haze.pmtiles              the sky's haze, a tile pyramid
+    map-overview.webp         its overview: the coarsest level drawn, whole
+    background.pmtiles        the sky's background art, a tile pyramid, and its overview
+    haze.pmtiles              the sky's haze, a tile pyramid, and its overview
     fixed.webp                the fixed skybox: one screen-sized backdrop, not tiled
     thumbnail.webp            the map, small, for a map picker
-    images/                   the game's own pictures of the map (see Images)
-    index.html                the reference viewer (heroes-capture's check that the pack works)
-  raw/                        full-resolution PNGs of the layers and composites; not part of the pack
+    images/                   the custom minimap as SVG (see Images)
+    elements/                 the elements render's atlases (see Elements)
+  raw/                        not part of the pack: full-resolution PNGs of the layers, the game's
+                              own pictures of the map, and the reference viewer (index.html)
 ```
 
 The pack is for the map with its structures (forts, towers, cores, gates) kept. A render with
@@ -60,7 +69,7 @@ illustrative):
 
 ```json
 {
-  "format": 3,
+  "format": 6,
   "tool": "heroes-capture 0.2.0",
   "gameBuild": 98025,
   "map": {
@@ -81,26 +90,31 @@ illustrative):
     {
       "id": "background", "kind": "parallax", "file": "background.pmtiles",
       "size": [8508, 4788], "levels": 6, "tileSize": 512, "rate": 0.4573,
-      "overview": { "file": "background-overview.webp", "level": 2, "size": [1064, 599] },
+      "overview": { "file": "background-overview.webp", "level": 3, "size": [2127, 1197] },
       "centreCell": [124.0, 103.0], "centrePixel": [4222.0, 2571.0], "pxPerCell": 22.1409
     },
     {
       "id": "haze", "kind": "parallax", "file": "haze.pmtiles",
       "size": [8757, 4940], "levels": 6, "tileSize": 512, "rate": 0.4777,
+      "overview": { "file": "haze-overview.webp", "level": 3, "size": [2190, 1235] },
       "centreCell": [124.0, 103.0], "centrePixel": [4346.0, 2660.0], "pxPerCell": 23.1298
     },
     {
       "id": "map", "kind": "map", "file": "map.pmtiles",
       "size": [12866, 9260], "levels": 6, "tileSize": 512, "rate": 1.0,
       "overview": { "file": "map-overview.webp", "level": 2, "size": [1609, 1158] },
+      "teamMask": { "file": "map-team.pmtiles",
+                    "overview": { "file": "map-team-overview.webp", "level": 2, "size": [1609, 1158] } },
       "originCell": [-2.2519, 204.4259], "pxPerCell": 48.4038
     }
   ],
   "images": {
     "thumbnail": { "file": "thumbnail.webp", "size": [512, 369] },
-    "minimap": { "file": "images/minimap.png", "size": [256, 256], "source": "Minimap.tga" }
+    "customMinimapSvg": { "file": "images/custom-minimap.svg", "size": [496, 416], "source": "CustomMiniMap.dds",
+                          "boundsCells": { "left": 0.0, "bottom": -1.25, "right": 248.0, "top": 206.75 } }
   },
   "data": {},
+  "teamColours": { "order": [101, 159, 255], "chaos": [255, 57, 48], "maskScale": 2.0 },
   "files": {
     "map.pmtiles": { "bytes": 61234567, "sha256": "…" }
   }
@@ -122,8 +136,12 @@ illustrative):
 | `arenas` | `null`, or the arenas of a map of several (see [Several arenas](#several-arenas)). |
 | `layers` | The layers, back to front: draw them in this order (see [Layers and drawing](#layers-and-drawing)). |
 | `images` | The map's other pictures, each with its file and size in pixels (see [Images](#images)). Any may be missing. |
+| `teamColours` | The colours the pictures' team colour was shot in, and a mask byte's worth (see [Team colour](#team-colour)). |
 | `data` | Information about the map, to grow. `elements` in the elements render (see [Elements](#elements)); otherwise empty. |
 | `files` | Every file in the pack (`pack.json` aside), its size and SHA-256. A viewer can cache by hash (GitHub Pages caches for only ten minutes). |
+
+`pack.json` is written compact (no spaces or line breaks; the example is spread out to be read),
+and the pack's WebP files carry no metadata.
 
 ## Coordinates
 
@@ -202,51 +220,61 @@ no tile server.
   which fits in one tile. A level's pixel `(i, j)` covers full-resolution pixels
   `[i·2^k, (i+1)·2^k) × [j·2^k, (j+1)·2^k)`, where `k = levels − 1 − level`. Pixels and tiles
   line up exactly at every level, so a viewer can blend two levels for smooth zooming.
+- **Which levels are stored.** The archive holds the levels finer than the layer's
+  [overview](#overviews)'s (`overview.level + 1` to `levels − 1`); the overview is its own level,
+  whole, and nothing coarser is kept. A layer of one level (it fits in one tile) is the exception:
+  its archive holds that level too.
 - **Tiles.** 512 × 512 pixels. Tile `(x, y)` at a level holds that level's pixels
   `[512x, 512x + 512) × [512y, 512y + 512)`. A tile at the right or bottom edge is padded with
   transparency to the full 512.
 - **Addresses.** PMTiles' `z/x/y` is `level/x/y`, with y counting rows down from the top.
-- **Encoding.** WebP, lossy at high quality (90), with transparency kept exact (WebP stores
-  alpha losslessly). Each level is a filtered downscale of the full image, not of the level above.
+- **Encoding.** WebP. The map's and the background art's tiles: colour lossy at quality 85,
+  transparency exact (WebP stores it losslessly). The haze's, which are mostly transparency:
+  colour at quality 90, transparency lossy at quality 50. The overviews as their layer's tiles. Each level is the full image box-filtered down (on premultiplied colour, so
+  transparent edges don't darken): every pixel the average of the full-resolution pixels it covers.
 - **Empty tiles.** A tile with nothing in it (fully transparent) isn't stored. A tile missing
   from the archive is transparent.
 - **Which level to draw.** At scale `s` (window pixels per layer pixel), the level whose pixels
-  are about one window pixel: `levels − 1 − floor(log2(1/s))`, clamped to the levels there are.
-  For smooth zooming, draw the next coarser level under it and fade between the two.
-- **PMTiles' own header.** Its minimum and maximum zoom are `0` and `levels − 1`; its bounds and
-  centre (made for maps of the Earth) mean nothing here. `pack.json` has everything a viewer
-  needs.
+  are about one window pixel: `levels − 1 − floor(log2(1/s))`, clamped to `overview.level` ..
+  `levels − 1`. Zoomed out past the overview's level, draw the overview smaller. For smooth
+  zooming, draw the next coarser level under it (down to the overview) and fade between the two.
+- **PMTiles' own header.** Its minimum and maximum zoom are the first level stored and
+  `levels − 1`; its bounds and centre (made for maps of the Earth) mean nothing here. `pack.json`
+  has everything a viewer needs.
 
 ### Overviews
 
-Each tiled layer's `overview` is one of its pyramid's levels whole, as a single WebP: the finest
-level no longer than 2048 px on a side (`level`, counted as the pyramid's levels are, 0 the
-coarsest; `size` in that level's pixels). Its pixels are the level's tiles' pixels. A viewer
-fetches it first and cuts it into that level's tiles (`tileSize` apart), so the whole layer is on
-screen after one request, and reads the pyramid only for the finer levels, as the camera zooms
-in; the fade from a coarser level to a finer one is then the same whether the coarser tiles came
-from the overview or the pyramid.
+Each tiled layer's `overview` is one of its pyramid's levels whole, as a single WebP (`level`,
+counted as the pyramid's levels are, 0 the coarsest; `size` in that level's pixels, the image's
+size at that level rounded up). It is the coarsest level a viewer draws, and the archive doesn't
+hold it (see [Tile pyramids](#tile-pyramids)). A viewer fetches it first and cuts it into that
+level's tiles (`tileSize` apart, the ones past its right or bottom edge padded with transparency),
+so the whole layer is on screen after one request, and reads the archive only for the finer
+levels, as the camera zooms in.
+
+Its level is the one the map's opening view needs:
+
+- **`map`**: the finest level no longer than 2048 px on a side (but never the full image, which
+  is the archive's).
+- **`parallax`**: the level drawn at the zoom where the map's overview is a pixel to a window
+  pixel (`z = 2^(overview.level − (levels − 1))` of the first map layer): there a layer further
+  back is drawn larger than the map (see [Layers and drawing](#layers-and-drawing)), so its
+  overview is usually a level finer, up to 4096 px on a side.
 
 ## Images
 
-The map's own pictures from the game, converted to PNG (the thumbnail is WebP). Each is in
-`images` only if the game has it for this map.
+Each is in `images` only if the map has what it is made from.
 
-| Key | File | From the game |
+| Key | File | What |
 |---|---|---|
-| `thumbnail` | `thumbnail.webp` | none: the map layer, 512 px wide, over the dark backdrop |
-| `minimap` | `images/minimap.png` | `Minimap.tga`, in the map |
-| `customMinimap` | `images/custom-minimap.png` | the custom minimap `MapInfo` names (`CustomMiniMap.dds`, `.tga` on some maps), in the map: the drawn minimap the game shows |
-| `customMinimapSvg` | `images/custom-minimap.svg` | none: `customMinimap` redrawn as vector shapes (below) |
-| `customMinimapHover` | `images/custom-minimap-hover.png` | `CustomMiniMap_Hover.dds` (or the `.tga` `MapInfo` names), in the map |
-| `replayPreview` | `images/replay-preview.png` | `ReplaysPreviewImage.tga`, in the map |
-| `mapSelect` | `images/map-select.png` | the map-select picture `DocumentInfo` names (`Storm_UI_Gamemode_MapSelect_<Map>.png`), in the map |
-| `loadingScreen` | `images/loading-screen.png` | the loading screen `MapInfo` names (`ui_ingame_mapmechanic_loadscreen_<map>.dds`), in the game's textures |
-| `loadingScreenIcons` | `images/loading-screen-icon-<n>.png` | the icons the loading screen's layout places, in the game's textures (a list) |
+| `thumbnail` | `thumbnail.webp` | the map layer, 512 px wide, over the dark backdrop |
+| `customMinimapSvg` | `images/custom-minimap.svg` | the custom minimap `MapInfo` names (`CustomMiniMap.dds`, `.tga` on some maps: the drawn minimap the game shows) redrawn as vector shapes (below) |
 
-Each entry is `{"file", "size", "source"}`, `source` being the game file it came from;
-`loadingScreenIcons` is a list of them. The loading screen is the background picture only. The
-layout's text and the icons' positions on it aren't composed into it.
+Each entry is `{"file", "size"}`, the SVG's with `source`, the game file it came from. The game's
+other pictures of the map are kept in `raw/images/` as PNG, not in the pack: `minimap.png`
+(`Minimap.tga`), `custom-minimap.png` and `custom-minimap-hover.png`, `replay-preview.png`
+(`ReplaysPreviewImage.tga`), `map-select.png` (the picture `DocumentInfo` names) and
+`loading-screen.png` with its icons (from the game's textures; the background picture only).
 
 ### The custom minimap as SVG
 
@@ -259,8 +287,8 @@ The rectangle is the picture at the map's scale: a whole number of pixels per ce
 width over the map's, 2 on most maps, 4 on Trial Grounds). It isn't centred on the map: it's centred
 on the middle of the map's camera bounds, 2.25 cells lower (measured over the maps that have one,
 against their renders). A few maps' minimaps don't follow that exactly; their corrections, set by
-looking at the minimap over the render, are in `minimap-placement.json` (Volskaya Foundry's is
-drawn 2 cells shorter).
+looking at the minimap over the render, are in each map's own module (`maps/`: Volskaya Foundry's
+is drawn 2 cells shorter).
 
 Its parts, by id, back to front, with their classes:
 
@@ -286,6 +314,31 @@ the whole picture, strokes and all.
 Maps whose custom minimap isn't in their archive have neither image (Alterac Pass, Hanamura
 Temple and Pull Party name one in `MapInfo` that the game's data doesn't have).
 
+## Team colour
+
+The game draws everything that has a team in the colour of our player's ally (blue) or enemy (red):
+the structures, and on some maps doodads in the terrain (Battlefield of Eternity's Heaven lamps and
+crystal beds, Hell's core range). The pack is drawn from Order's side, so Order's team is blue and
+Chaos's red. heroes-capture shoots those pictures from both sides, and the pack carries a
+**team-colour mask** for them: how much of each pixel is its team's colour. A viewer adds that
+amount of a different colour to show the teams in any colours: swapped, or its own.
+
+- **The mask** has two amounts per pixel: red, Order's team's; green, Chaos's (a pixel belongs to
+  one team; blue is unused). A byte `v` is `v / 255 · maskScale` of the team's colour. Lossless WebP.
+- **Drawing a pixel in other colours:** `rgb' = rgb + R/255 · maskScale · (order' − order) + G/255
+  · maskScale · (chaos' − chaos)`, each channel clamped to 0..255, where `order` and `chaos` are
+  `teamColours`' and `order'`, `chaos'` the colours wanted; alpha unchanged. With the colours as
+  shot this is the picture itself; with them swapped it is the picture from Chaos's side, within a
+  few levels (about 8 on average where team colour is, more in the brightest glows).
+- **The map layer's mask** (`teamMask` on a `map` layer, only where the map has team colour) is
+  tiled and levelled exactly as the layer (same `levels`, `tileSize`, overview level, stored
+  levels), its tile `(x, y)` at a level over the same pixels; a tile missing from its archive has no
+  team colour. Its own overview, as the layer's.
+- **The elements' masks:** a standing state with team colour has `teamMask`, `{"at", "small"}`:
+  its mask's top-left corner in the `team` atlas (the cut-out's size, over the same `rect`) and in
+  `teamSmall` (at the `small` atlas's scale, over its `small` picture).
+- The sky layers and rubble have no team colour; neither do the camps.
+
 ## Elements
 
 The elements render's map layer is the bare terrain: every structure was destroyed and its remains
@@ -303,12 +356,13 @@ one, or show the map as it stood at a moment of a replay.
     "small": {"file": "elements/small.webp", "size": [1024, 410], "scale": 0.125}
   },
   "structures": [
-    {"id": 1013, "type": "TownCannonTowerL2", "cell": [108, 60], "owner": "order", "town": 3, "core": false,
+    {"id": 1013, "type": "TownCannonTowerL2", "cell": [108, 60], "owner": "order", "town": 3, "outpost": null, "core": false,
      "states": {"standing": {"rect": [5120, 3410, 140, 132], "atlas": "standing", "at": [860, 0], "small": [108, 0],
                              "hiddenBy": [{"id": 1014, "at": [860, 0]}]},
                 "rubble": {"rect": [5126, 3418, 128, 118], "atlas": "rubble", "at": [0, 140], "small": [0, 18]}}}
   ],
   "towns": [{"town": 3, "lane": 2, "owner": "order", "region": 12, "name": "Lane 2 - Order - Town 1"}],
+  "outposts": [{"outpost": 1, "town": 1, "lane": 1, "owner": "order", "cell": [75.9, 100.3]}],
   "camps": [
     {"camp": 2, "type": "BruiserCamp1", "cell": [95.86, 94.95],
      "states": {"spawned": {"rect": [4200, 4980, 180, 330], "atlas": "standing", "at": [1000, 0], "small": [125, 0]}}}
@@ -319,9 +373,10 @@ one, or show the map as it stood at a moment of a replay.
 | Field | Meaning |
 | --- | --- |
 | `layer` | The map layer the cut-outs belong to (their rectangles are in its pixels). |
-| `atlases` | The cut-outs' pictures, packed: `standing` (the standing structures and the camps), `rubble`, `masks` (see `hiddenBy`), each at the map layer's scale (`scale` 1), and `small`, every state's cut-out at the map layer's overview scale (`scale`: 1/8 for a six-level pyramid). Lossless WebP with transparency; `size` in pixels. |
-| `structures` | Every structure the map places: its placed unit's `id`, its unit `type`, its `cell`, its `owner` (`order`, `chaos`), the `town` it belongs to (`null`: the cores and anything outside the towns) and whether it's a `core`. |
-| `towns` | The map's towns as its script numbers them: lane, owner, and the map's region for it. |
+| `atlases` | The cut-outs' pictures, packed: `standing` (the standing structures and the camps), `rubble`, `masks` (see `hiddenBy`), each at the map layer's scale (`scale` 1), `small`, every state's cut-out at the map layer's overview scale (`scale`: 1/8 for a six-level pyramid), and `team` and `teamSmall`, the standing states' [team-colour masks](#team-colour) at those two scales. WebP: the cut-outs' colour lossy at quality 90 with their transparency exact, 4 transparent pixels apart (lossy colour is coarser than the pixels); the masks lossless. `size` in pixels. |
+| `structures` | Every structure the map places: its placed unit's `id`, its unit `type`, its `cell`, its `owner` (`order`, `chaos`), the `town` it belongs to (`null`: the cores and anything outside the towns), the `outpost` it belongs to (`null`: the town hall's ring and whatever belongs to no outpost) and whether it's a `core`. |
+| `towns` | The map's towns as its script numbers them: lane, owner, and the map's region for it. A town is the game's: the region whose structures its town hall's fall affects (the hall's fountains fall with it). A region can reach far down the lane, so the towers, gate and fountain the map adds there are in the town too. |
+| `outposts` | A town's structures beyond its hall's ring (15 cells: hall, fountain, gate, towers, walls, and the standalone tower a fort takes with it), joined when within 14 cells of one another: the lane's forward towers, gate and fountain as a group of their own. Numbered in town order, nearest the hall first; each with its `town`, `lane`, `owner` and the `cell` in the middle of its structures. |
 | `camps` | The mercenary camps as the script numbers them (the game's own camp numbers), their defender `type` and the `cell` they gather round. |
 | `states` | Each state the element was shot in: `standing` and `rubble` for a structure (a tower's rubble as the game shows a fallen one), `spawned` for a camp's defenders. `null`: nothing is left of it in that state (a fallen moonwell). A state that couldn't be shot is missing. |
 | `rect` | Where the state's cut-out goes on the map layer: left, top, width, height in its pixels. |
@@ -333,16 +388,19 @@ Draw the cut-outs over the map layer: every one shown as rubble first, then the 
 structures, camps), each further north first (by `cell` y, larger first), so nearer ones overlap
 further ones as in the game and rubble, which lies on the ground, never covers a standing building; where two standing structures overlap, their `hiddenBy`
 masks settle which is in front, whichever is drawn first. They carry no shadows: each was shot with nothing round
-it. The colours are an observer's (the left team blue).
+it. The colours are Order's side's (Order blue); a standing state's `teamMask` recolours it (see
+[Team colour](#team-colour)).
 
 ## Raw layers
 
 Next to the pack, `raw/` holds each layer at full resolution as PNG (lossless): `map.png` (or
-`map-<arena>.png`), `background.png`, `haze.png` and `fixed.png`, and the composites
-(`composite.png`, `composite-on-black.png`, `composite-with-fixed.png`). Its `layers.json`
-places the layers the same way as `pack.json` does. They're for keeping and for further work, not for a viewer: the
-pack's tiles come from them. The elements render's cut-outs are in `raw/elements/` as PNG, one
-file each, as they were before being packed into the atlases.
+`map-<arena>.png`), `background.png`, `haze.png` and `fixed.png`, and with `stitch --composites`
+the composites (`composite.png`, `composite-on-black.png`, `composite-with-fixed.png`). Its
+`layers.json` places the layers the same way as `pack.json` does. They're for keeping and for
+further work, not for a viewer: the pack's tiles come from them. The elements render's cut-outs are
+in `raw/elements/` as PNG, one file each, as they were before being packed into the atlases; the
+game's pictures of the map in `raw/images/` (see [Images](#images)); and the reference viewer,
+`index.html`, which reads `../pack/`.
 
 ## Hosting
 

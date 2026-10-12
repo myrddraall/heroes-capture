@@ -8,9 +8,7 @@ import ctypes.wintypes as wt
 import time
 from pathlib import Path
 
-import pydirectinput
-
-pydirectinput.PAUSE = 0.02  # between synthetic key events
+import pydirectinput  # its key table (KEYBOARD_MAPPING); the input itself goes through SendInput
 
 # Real pixel coordinates on every monitor, whatever the Windows display scaling.
 try:

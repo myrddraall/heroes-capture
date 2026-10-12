@@ -24,10 +24,10 @@ def test_version_and_help():
 
 
 def test_prepare_passes_its_options_through(monkeypatch, tmp_path):
-    from heroes_capture import inject
+    from heroes_capture.capture import prepare
 
     seen = []
-    monkeypatch.setattr(inject, "main", lambda argv: seen.append(argv) or tmp_path / "x.json")
+    monkeypatch.setattr(prepare, "main", lambda argv, specifics_for: seen.append(argv) or tmp_path / "x.json")
     result = runner.invoke(cli.app, ["prepare", "Dragon Shire", "--screen", "3440x1440", "--keep-intro"])
     assert result.exit_code == 0 and seen == [["Dragon Shire", "--screen", "3440x1440", "--keep-intro"]]
 
@@ -35,12 +35,12 @@ def test_prepare_passes_its_options_through(monkeypatch, tmp_path):
 def test_the_steps_on_their_own_show_as_steps(monkeypatch, tmp_path):
     """capture and stitch run in a step (the live view): a capture restarted after a lost match runs
     as `capture` in its own process, and showed no progress without one."""
-    from heroes_capture import stitch
+    from heroes_capture.capture import stitch
 
     (tmp_path / "tmp").mkdir()
     (tmp_path / "tmp" / "m.json").write_text(json.dumps({"map": "Punisher Arena"}))
     monkeypatch.setattr(cli, "run_capture", lambda argv: None)
-    monkeypatch.setattr(stitch, "main", lambda argv: None)
+    monkeypatch.setattr(stitch, "main", lambda argv, specifics_of: None)
     monkeypatch.setenv("HRS_RECOVERIES", "1")
     result = runner.invoke(cli.app, ["--log", "capture", "tmp/m.json", "--start", "86"])
     assert result.exit_code == 0 and "\nCapturing Punisher Arena in the game (restart 1 of 3)\n" in result.output
@@ -58,7 +58,7 @@ def test_prepare_help_lists_its_options(tmp_path):
 def ui_state():
     """The output module's state put back after a test that changes it by hand (a log file left
     closed, or the live view's mode, would break the next test that prints)."""
-    from heroes_capture import ui
+    from heroes_capture.common import ui
 
     saved = dict(vars(ui._s))
     yield
@@ -87,7 +87,9 @@ def render_steps(monkeypatch, tmp_path, fail_stitch=(), fail_capture=None):
     stitch the map's folder with its viewer (failing for the maps in fail_stitch)."""
     from contextlib import nullcontext
 
-    from heroes_capture import game_data, inject, stitch
+    from heroes_capture.common import game_data
+    from heroes_capture.capture import prepare
+    from heroes_capture.capture import stitch
 
     calls = []
     monkeypatch.setattr(game_data, "find_install", lambda: None)
@@ -95,10 +97,11 @@ def render_steps(monkeypatch, tmp_path, fail_stitch=(), fail_capture=None):
     monkeypatch.setattr(game_data, "map_index", lambda storage: {n: {"file": n, "category": c} for n, c in GAME_MAPS.items()})
     monkeypatch.setattr(game_data, "folder_maps", lambda storage: ["Try Me Mode"])
 
-    def prepare(argv):
+    def preparing(argv, specifics_for):
+        assert specifics_for is cli.specifics_of_map
         calls.append(("prepare", argv))
         work = tmp_path / argv[argv.index("--out") + 1]
-        map_id = inject.render_id(argv[0], argv[argv.index("--structures") + 1])
+        map_id = prepare.render_id(argv[0], argv[argv.index("--structures") + 1])
         (work / map_id).mkdir(parents=True, exist_ok=True)
         (work / f"{map_id}.stormmap").write_text("map")
         manifest = work / f"{map_id}.json"
@@ -116,16 +119,17 @@ def render_steps(monkeypatch, tmp_path, fail_stitch=(), fail_capture=None):
                 raise RuntimeError(f"the match was lost at tile {i + 1}")
             (tiles / f"tile_{i:04d}.npy").write_bytes(b"shot")
 
-    def stitching(argv):
+    def stitching(argv, specifics_of):
+        assert specifics_of is cli.specifics_of
         calls.append(("stitch", argv))
         manifest = json.loads(Path(argv[0]).read_text())
         if manifest["map"] in fail_stitch:
             raise RuntimeError("stitch failed")
-        out = tmp_path / argv[argv.index("--output-dir") + 1] / inject.slug(manifest["map"])
+        out = tmp_path / argv[argv.index("--output-dir") + 1] / game_data.slug(manifest["map"])
         (out / "pack").mkdir(parents=True, exist_ok=True)
         (out / "pack" / "pack.json").write_text("{}")
 
-    monkeypatch.setattr(inject, "main", prepare)
+    monkeypatch.setattr(prepare, "main", preparing)
     monkeypatch.setattr(cli, "run_capture", capture)
     monkeypatch.setattr(stitch, "main", stitching)
     return calls
@@ -149,12 +153,12 @@ def test_map_render_runs_the_three_steps_with_the_defaults(monkeypatch, tmp_path
     assert "\x1b[" not in plain
 
 
-def test_the_elements_probe_prepares_the_map_and_runs_the_capture_as_the_probe(monkeypatch, tmp_path):
+def test_a_probe_prepares_the_map_and_runs_the_capture_as_the_probe(monkeypatch, tmp_path):
     calls = render_steps(monkeypatch, tmp_path)
-    result = runner.invoke(cli.app, ["map", "render", "dragon shire", "--probe-elements"])
+    result = runner.invoke(cli.app, ["map", "render", "dragon shire", "--probe-sky"])
     assert result.exit_code == 0, result.output
     assert [c[0] for c in calls] == ["prepare", "capture"]  # no stitch
-    assert calls[1][1][1:] == ["--probe-elements"]
+    assert calls[1][1][1:] == ["--probe-sky"]
     assert (tmp_path / "tmp").exists()  # a diagnostic's files stay
 
 
@@ -275,7 +279,7 @@ def test_an_unsupported_brawl_renders_when_named_with_a_warning(monkeypatch, tmp
 
 
 def test_a_restarted_capture_carries_on_in_its_runs_logs(monkeypatch, tmp_path):
-    from heroes_capture import ui
+    from heroes_capture.common import ui
 
     monkeypatch.setenv("HRS_DIAG_LOG", str(tmp_path / "tmp" / "heroes-capture-run.log"))
     (tmp_path / "logs").mkdir()
@@ -342,15 +346,40 @@ def test_map_rows():
     (["Mods/HeroesData.StormMod"], "Other"),
 ])
 def test_map_category(dependencies, category):
-    from heroes_capture.game_data import map_category
+    from heroes_capture.common.game_data import map_category
 
     assert map_category(dependencies) == category
 
 
 def test_validated_maps_file():
-    maps = json.loads(cli.VALIDATED.read_text(encoding="utf-8"))["maps"]
+    from heroes_capture import maps as map_modules
+
+    maps = json.loads(map_modules.VALIDATED.read_text(encoding="utf-8"))["maps"]
     assert {"Battlefield of Eternity", "Dragon Shire", "Punisher Arena"} <= set(maps)
     assert all(set(entry) == {"version", "note"} for entry in maps.values())
+
+
+def test_a_map_s_specifics_are_its_category_s_then_its_own():
+    """cli.specifics_for: the category's hooks and script parts (an arena's are a battleground's and
+    its own), then the map's own (maps/), and whether it is validated."""
+    from heroes_capture.categories.arena import specifics as arena
+    from heroes_capture.categories.battleground import script as battleground_script
+    from heroes_capture.categories.battleground import specifics as battleground
+
+    plain = cli.specifics_for("Cursed Hollow", "battleground")
+    assert plain.category == "battleground" and plain.script_parts == [battleground_script.PART]
+    assert plain.prepare == [battleground.prepare] and plain.before_tiles == [battleground.before_tiles]
+    assert plain.after_stitch == [battleground.after_stitch] and plain.pack_data == [battleground.pack_data]
+    assert not plain.opening_timers and not plain.minimap_correction and not plain.validated
+    punisher = cli.specifics_for("Punisher Arena", "arena")
+    assert punisher.script_parts == [battleground_script.PART, arena.PART] and punisher.prepare == [battleground.prepare, arena.prepare]
+    assert punisher.validated
+    assert cli.specifics_for("Hanamura Temple", "battleground").opening_timers[0] == "libMHmu_gv_hanamura.lv_mapMechanic_ObjectivePreviewTimer"
+    assert cli.specifics_for("Volskaya Foundry", "battleground").minimap_correction == {"top": -2}
+    # A map being prepared: an arena when its script includes LibAREN.
+    assert cli.specifics_of_map("Punisher Arena", 'include "TriggerLibs/NativeLib"\ninclude "LibAREN"\n').category == "arena"
+    assert cli.specifics_of_map("Dragon Shire", 'include "TriggerLibs/NativeLib"\n').category == "battleground"
+    assert cli.specifics_of({"map": "Punisher Arena", "category": "arena"}).script_parts == punisher.script_parts
 
 
 @pytest.mark.game_data
@@ -368,7 +397,7 @@ def test_map_list_against_the_game():
 
 def test_the_plain_log_is_what_log_mode_prints_in_either_mode(tmp_path, ui_state):
     """logs/heroes-capture.log reads the same whether the screen showed the live view or log lines."""
-    from heroes_capture import ui
+    from heroes_capture.common import ui
 
     def run(mode: str) -> list[str]:
         ui.configure(log=True)
@@ -390,7 +419,7 @@ def test_the_plain_log_is_what_log_mode_prints_in_either_mode(tmp_path, ui_state
 def test_library_warnings_show_once_however_often_the_output_is_configured(ui_state, capsys):
     import logging
 
-    from heroes_capture import ui
+    from heroes_capture.common import ui
 
     ui.configure(log=True)
     ui.configure(log=True)
@@ -402,7 +431,7 @@ def test_library_warnings_show_once_however_often_the_output_is_configured(ui_st
 def test_map_list_shows_names_as_written_and_no_validation_details(monkeypatch):
     from contextlib import nullcontext
 
-    from heroes_capture import game_data
+    from heroes_capture.common import game_data
 
     monkeypatch.setattr(game_data, "find_install", lambda: None)
     monkeypatch.setattr(game_data, "open_storage", lambda install: nullcontext())
@@ -416,7 +445,7 @@ def test_map_list_shows_names_as_written_and_no_validation_details(monkeypatch):
 
 
 def test_a_resumed_runs_progress_bar_counts_the_whole_run(ui_state):
-    from heroes_capture import ui
+    from heroes_capture.common import ui
 
     ui.configure()
     ui._s.mode = "pretty"
@@ -430,7 +459,7 @@ def test_a_resumed_runs_progress_bar_counts_the_whole_run(ui_state):
 def test_a_pause_shows_while_it_lasts_and_is_gone_after(tmp_path, ui_state):
     """Focus lost or a menu open: a passing line in the live view, not a warning piling up above it;
     the plain log keeps both ends."""
-    from heroes_capture import ui
+    from heroes_capture.common import ui
 
     ui.configure(log=True)
     ui._s.mode = "pretty"
@@ -444,10 +473,12 @@ def test_a_pause_shows_while_it_lasts_and_is_gone_after(tmp_path, ui_state):
 
 
 def test_map_view_serves_a_rendered_pack_until_stopped(monkeypatch, tmp_path):
-    from heroes_capture import serve as serving
+    from heroes_capture.capture import serve as serving
 
-    (tmp_path / "maps" / "dragon-shire" / "pack").mkdir(parents=True)
+    for folder in ("pack", "raw"):
+        (tmp_path / "maps" / "dragon-shire" / folder).mkdir(parents=True)
     (tmp_path / "maps" / "dragon-shire" / "pack" / "pack.json").write_text("{}")
+    (tmp_path / "maps" / "dragon-shire" / "raw" / "index.html").write_text("<!doctype html>")
     served = []
 
     class Server:
@@ -456,10 +487,10 @@ def test_map_view_serves_a_rendered_pack_until_stopped(monkeypatch, tmp_path):
         def shutdown(self):
             served.append("stopped")
 
-    monkeypatch.setattr(serving, "serve", lambda folder: served.append(folder) or Server())
+    monkeypatch.setattr(serving, "serve", lambda folder, page: served.append((folder, page)) or Server())
     monkeypatch.setattr(cli.time, "sleep", lambda s: (_ for _ in ()).throw(KeyboardInterrupt))
     result = runner.invoke(cli.app, ["--log", "map", "view", "Dragon Shire"])
     assert result.exit_code == 0, result.output
-    assert served == [Path("maps/dragon-shire/pack"), "stopped"] and "http://127.0.0.1:8123/index.html" in result.output
+    assert served == [(Path("maps/dragon-shire"), "raw/index.html"), "stopped"] and "http://127.0.0.1:8123/raw/index.html" in result.output
     result = runner.invoke(cli.app, ["map", "view", "dragon shire", "--structures", "hide"])
     assert result.exit_code != 0 and "no pack in" in result.output

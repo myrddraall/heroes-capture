@@ -2,14 +2,13 @@
 map, leaving the match, or showing the "Unable to open map" dialog.
 """
 
-import json
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
-from .status import interface_height
-from .runlog import warn
+from heroes_capture.common.jsonio import read_json
+from heroes_capture.common.runlog import warn
 
 NOT_RUNNING = "not running"
 MENU = "menu"
@@ -30,6 +29,14 @@ _MENU_REFERENCE = None  # the main menu's fixed interface: templates shipped in 
 NARROW_MENU_BELOW = 1.5
 
 
+
+def interface_height(width: int, height: int) -> float:
+    """The height the game lays its interface out for, in pixels: the screen's, unless the screen
+    is narrower than 4:3, when the interface (1600 x 1200 units at 4:3) is scaled to the width
+    instead (1680 x 1344 gave cells 1.05 times their unit size, not 1.12). Everything measured
+    "relative to the screen's height" means this height."""
+    return min(height, width * 1200 / 1600)
+
 def _load_menu_reference(narrow: bool = False) -> list:
     """Templates of the main menu's fixed parts (the top bar, the chat box, the buttons at the
     bottom right), from a screenshot of the menu, with their positions relative to the
@@ -42,7 +49,7 @@ def _load_menu_reference(narrow: bool = False) -> list:
         _MENU_REFERENCE = {False: [], True: []}
         for key, file, prefix in ((False, "patches.json", ""), (True, "patches-narrow.json", "narrow-")):
             try:
-                for p in json.loads((folder / file).read_text())["patches"]:
+                for p in read_json(folder / file)["patches"]:
                     p["template"] = np.asarray(Image.open(folder / f"{prefix}{p['name']}.png").convert("L"), dtype=np.float32)
                     _MENU_REFERENCE[key].append(p)
             except (OSError, KeyError, ValueError) as e:
@@ -98,7 +105,7 @@ def game_state(frame: np.ndarray | None, strip=None) -> str:
     """Which of the game's states the screen shows, cheapest test first: the game's process,
     our map's status strip (only our map draws it), the main menu's fixed interface, the error
     dialog; anything else (the loading screen, a transition, an intro) counts as loading."""
-    from .game_window import game_process_seen  # Windows only; the rest of this module runs anywhere (tests)
+    from heroes_capture.common.game_window import game_process_seen  # Windows only; the rest of this module runs anywhere (tests)
 
     if not game_process_seen():
         return NOT_RUNNING

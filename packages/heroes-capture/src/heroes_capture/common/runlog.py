@@ -6,7 +6,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import ui
+from heroes_capture.common import ui
 
 _path: Path | None = None
 _timings: list[tuple[str, float]] = []

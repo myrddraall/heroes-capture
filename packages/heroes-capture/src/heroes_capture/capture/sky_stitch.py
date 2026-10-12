@@ -1,4 +1,4 @@
-"""The map's own sky layers as images, and composites with the map (from capture.py's sky/ shots).
+"""The map's own sky layers as images, and composites with the map (from the capture's sky/ shots: sky_layers.py).
 
 Layers, written next to the map image:
   <id>-layer-fixed.png       the fixed skybox: it moves with the camera, so it is one screen-sized
@@ -6,7 +6,8 @@ Layers, written next to the map image:
   <id>-layer-background.png  the parallax model's background art, with transparency where it lets
                              the fixed skybox through
   <id>-layer-haze.png        the parallax model's haze, matted (colour and transparency)
-  <id>-composite.png         background, haze and map together, transparent where none of them is
+  <id>-composite.png         (stitch --composites: a reference nothing in the pack reads)
+                             background, haze and map together, transparent where none of them is
   <id>-composite-on-black.png  the haze and the map over black (no background art, no fixed skybox)
   <id>-composite-with-fixed.png  the same over the fixed skybox, stretched behind everything like a
                              backdrop (opaque, as the skybox is)
@@ -45,7 +46,6 @@ when the camera is centred on it: the sky layers stretched by 1/rate about the m
 position.
 """
 
-import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -55,11 +55,14 @@ from PIL import Image
 from scipy import ndimage
 from scipy.optimize import least_squares
 
-from .frames import PNG_COMPRESSION, frame_exists, load_frame
-from .matching import phase_correlate
-from .runlog import log, warn, stage
-from .sky import LIGHT_LEVEL, lens_scale
-from .workers import ordered_map
+from heroes_capture.capture.matting import difference_alpha
+from heroes_capture.capture.sky import LIGHT_LEVEL, lens_scale
+from heroes_capture.common.frames import PNG_COMPRESSION, frame_exists, load_frame
+from heroes_capture.common.imaging import mean3, unpremultiply
+from heroes_capture.common.jsonio import read_json, write_json
+from heroes_capture.common.matching import phase_correlate
+from heroes_capture.common.runlog import log, warn, stage
+from heroes_capture.common.workers import ordered_map
 
 MATCH_PATCH = 128  # the side of a matched patch, in half-size pixels (256 screen pixels)
 MATCH_STRENGTH = 0.12  # a patch match weaker than this is left out (soft haze matches falsely below it)
@@ -78,11 +81,7 @@ def _load(stem: Path) -> np.ndarray:
     return load_frame(stem).astype(np.float32)
 
 
-def _mean3(a: np.ndarray) -> np.ndarray:
-    return (a[:, :, 0] + a[:, :, 1] + a[:, :, 2]) / 3.0
-
-
-def _haze(white: np.ndarray, black: np.ndarray, level: np.ndarray, left: int) -> np.ndarray:
+def _haze(white: np.ndarray, black: np.ndarray, level: np.ndarray) -> np.ndarray:
     """RGBA (float, 0..1 alpha) of the haze: alpha from how much the background shows through,
     the difference between the shots over the light grey and over black against the key's level.
 
@@ -90,25 +89,19 @@ def _haze(white: np.ndarray, black: np.ndarray, level: np.ndarray, left: int) ->
     of Punisher Arena, whose haze reaches further than its background art: a misalignment in the
     map) that difference says nothing, and the haze is cut off there, transparent, so the layer
     shows it over the art only."""
-    key_level = _mean3(level)
-    alpha = np.clip(1.0 - _mean3(white - black) / np.maximum(key_level, 1.0), 0.0, 1.0)
+    key_level = mean3(level)
+    alpha = difference_alpha(white, black, key_level)
     alpha[key_level < KEY_FULL] = 0.0
     alpha[alpha < 1 / 255] = 0.0
-    colour = np.where(alpha[..., None] > 0, np.clip(black / np.maximum(alpha, 1 / 255)[..., None], 0, 255), 0)
-    return np.dstack([colour, alpha])
+    return np.dstack([unpremultiply(black, alpha), alpha])
 
 
 def _background(over_black: np.ndarray, over_fixed: np.ndarray, fixed: np.ndarray) -> np.ndarray:
     """RGBA of the background art: where the fixed skybox behind it is bright enough to tell,
     alpha from how much of it shows through; elsewhere opaque unless black over black."""
-    shows = _mean3(fixed)
-    alpha = np.where(
-        shows >= 12,
-        1.0 - np.clip(_mean3(over_fixed - over_black) / np.maximum(shows, 1.0), 0.0, 1.0),
-        (over_black.max(axis=2) > 3).astype(np.float32),
-    )
-    colour = np.where(alpha[..., None] > 1 / 255, np.clip(over_black / np.maximum(alpha, 1 / 255)[..., None], 0, 255), 0)
-    return np.dstack([colour, alpha])
+    shows = mean3(fixed)
+    alpha = np.where(shows >= 12, difference_alpha(over_fixed, over_black, shows), (over_black.max(axis=2) > 3).astype(np.float32))
+    return np.dstack([unpremultiply(over_black, alpha), alpha])
 
 
 def largest_rectangle(mask: np.ndarray) -> tuple[int, int, int, int] | None:
@@ -278,16 +271,16 @@ def _warp(stacked: pyvips.Image, matrix: np.ndarray, offset: np.ndarray, box: tu
     return out[..., :3], out[..., 3], out[..., 4]
 
 
-def build(manifest: dict, base: Path, out: Path, images: list[str]) -> None:
-    """The layer images and composites, into `out`, when capture.py left sky shots in <id>/sky/.
-    `images`: the ids of the map images the stitch wrote (several on a map of several arenas: the
-    layers, but no composites)."""
+def build(manifest: dict, base: Path, out: Path, images: list[str], composites: bool = False) -> None:
+    """The layer images, and with `composites` the composites, into `out`, when the capture left
+    sky shots in <id>/sky/. `images`: the ids of the map images the stitch wrote (several on a map
+    of several arenas: the layers, but no composites)."""
     folder = base / "sky"
     record_path, measured_path = folder / "positions.json", base / "sky-layers.json"
     if not record_path.exists() or not measured_path.exists():
         return
-    record = json.loads(record_path.read_text())
-    measured = json.loads(measured_path.read_text())
+    record = read_json(record_path)
+    measured = read_json(measured_path)
     names = sorted(record["positions"])
     if not names or not frame_exists(folder / "fixed"):
         warn("sky layers: no shots; skipped")
@@ -299,7 +292,7 @@ def build(manifest: dict, base: Path, out: Path, images: list[str]) -> None:
     height, width = fixed.shape[:2]
     cameras = np.array([record["positions"][n]["camera"] for n in names])
     # Each shot's lens: how much more it sees across than the render's (1 for the render's own).
-    render_fov = record.get("fov") or manifest.get("fov")
+    render_fov = record["fov"]
     fovs = [record["positions"][n].get("fov") or render_fov for n in names]
     lenses = np.array([lens_scale(f, render_fov) if f and render_fov else 1.0 for f in fovs])
     fixed_by_fov = {f: fixed if f == render_fov else _load(folder / f"fixed-fov{f:g}") for f in set(fovs)}
@@ -310,7 +303,7 @@ def build(manifest: dict, base: Path, out: Path, images: list[str]) -> None:
     def rate_of(layer: str) -> tuple[float, float]:
         known = (measured["layers"].get(layer) or measured["layers"]["parallax"])["rate"]
         used = record["rateUsedForSteps"]
-        fallback = [r for r in known if r] or [r for r in (used if isinstance(used, list) else [used]) if r]
+        fallback = [r for r in known if r] or [r for r in used if r]
         return tuple(float(r) if r else float(np.mean(fallback)) for r in known)
 
     distance = float(measured.get("cameraDistance") or manifest["distance"])
@@ -321,8 +314,8 @@ def build(manifest: dict, base: Path, out: Path, images: list[str]) -> None:
 
     def grey(n: str) -> dict:
         """Shot n at half size, for matching: the background art's brightness; the haze's matte."""
-        bare = _mean3(load_frame(folder / f"{n}-bare")[::2, ::2].astype(np.float32))
-        white, black, level = (_mean3(load_frame(folder / f"{n}-{v}")[::2, ::2].astype(np.float32)) for v in ("light", "black", "lightbare"))
+        bare = mean3(load_frame(folder / f"{n}-bare")[::2, ::2].astype(np.float32))
+        white, black, level = (mean3(load_frame(folder / f"{n}-{v}")[::2, ::2].astype(np.float32)) for v in ("light", "black", "lightbare"))
         return {"background": bare, "haze": np.clip(1.0 - (white - black) / np.maximum(level, 1.0), 0.0, 1.0) * 255}
 
     # The shot's weights: falling off towards its edges, none over the status strip's column (the
@@ -339,15 +332,15 @@ def build(manifest: dict, base: Path, out: Path, images: list[str]) -> None:
         """Shot n of a layer, matted (RGBA float), at full size or every `reduce`th pixel; a fifth
         channel, where the layer's picture is defined: the background art (what isn't black over
         black), or for the haze the light key behind it."""
-        load = (lambda v: _load(folder / f"{n}-{v}")[::reduce, ::reduce]) if reduce > 1 else (lambda v: _load(folder / f"{n}-{v}"))
+        load = lambda v: load_frame(folder / f"{n}-{v}")[::reduce, ::reduce].astype(np.float32)  # noqa: E731 - subsampled before the float copy
         if layer == "background":
             over_black = load("bare")
             rgba = _background(over_black, load("bareoverfixed"), fixed_by_fov[fovs[k]][::reduce, ::reduce])
             defined = over_black.max(axis=2) > 3
         else:
             level = load("lightbare")
-            rgba = _haze(load("light"), load("black"), level, left // reduce)
-            defined = _mean3(level) >= KEY_FULL
+            rgba = _haze(load("light"), load("black"), level)
+            defined = mean3(level) >= KEY_FULL
         return np.dstack([rgba, defined.astype(np.float32)])
 
     placements = {}
@@ -444,12 +437,12 @@ def build(manifest: dict, base: Path, out: Path, images: list[str]) -> None:
     Image.fromarray(fixed[:, left:].astype(np.uint8)).save(out / f"{out_id}-layer-fixed.png", compress_level=PNG_COMPRESSION)
 
     def write_layers(map_entry: dict) -> None:
-        (out / f"{out_id}-layers.json").write_text(json.dumps({
+        write_json(out / f"{out_id}-layers.json", {
             "map": map_entry,
             "fixed": {"image": f"{out_id}-layer-fixed.png", "rate": [0.0, 0.0], "note": "moves with the camera: a screen backdrop"},
             **placements,
             "howTo": "A layer pixel for map cell (x, y) seen with the camera there: centrePixel + pxPerMapCell * ((x, y) - centreCell), y flipped (image y grows south). A viewer panning by d map cells moves a layer by rate * d.",
-        }, indent=2))
+        })
 
     map_png = out / f"{out_id}.png"
     geo_path = out / f"{out_id}.geo.json"
@@ -458,7 +451,10 @@ def build(manifest: dict, base: Path, out: Path, images: list[str]) -> None:
         write_layers({"rate": [1.0, 1.0], "areas": [{"image": f"{i}.png", "geo": f"{i}.geo.json"} for i in images]})
         log(f"  sky layers: {len(images)} map images; no composites")
         return
-    geo = json.loads(geo_path.read_text())
+    write_layers({"image": map_png.name, "rate": [1.0, 1.0], "geo": geo_path.name})
+    if not composites:
+        return
+    geo = read_json(geo_path)
     s, origin = geo["pxPerCell"], geo["originCell"]
     mw, mh = geo["width"], geo["height"]
 
@@ -494,5 +490,4 @@ def build(manifest: dict, base: Path, out: Path, images: list[str]) -> None:
         with ThreadPoolExecutor(max_workers=len(writes)) as pool:
             for done in [pool.submit(w) for w in writes]:
                 done.result()
-    write_layers({"image": map_png.name, "rate": [1.0, 1.0], "geo": geo_path.name})
     log(f"  composites: {out_id}-composite.png, -composite-on-black.png, -composite-with-fixed.png ({mw}x{mh} px)")

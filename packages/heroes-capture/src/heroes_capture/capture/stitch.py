@@ -1,28 +1,27 @@
 """Stitch captured screenshots into one top-down image of the battleground.
 
-    heroes-capture stitch tmp/towers-of-doom-structures.json [--output-dir maps]   (heroes-capture map render runs it last)
+    heroes-capture stitch tmp/towers-of-doom-structures.json [--output-dir maps] [--composites]   (heroes-capture map render runs it last)
 
 Each screenshot is anchored where the map script reported its camera (positions.json, written
-by capture.py), and every screenshot is also matched against its right and lower neighbours,
+by tiles.py), and every screenshot is also matched against its right and lower neighbours,
 like panorama software, to measure their real offsets; the scale (pixels per map cell) comes
 from those matches, and all positions are solved together (least squares, with matches that
 disagree dropped). Black and featureless screenshots are skipped. Neighbours meet along a seam
 routed through their overlap where they agree best, near the halfway line, blended over a few
-pixels. Without positions.json, the screenshots are placed by the matches alone and the
-map-to-pixel conversion is fitted from the middle of the map outward.
+pixels.
 
 Writes into <output-dir>/<map id> (maps/towers-of-doom; the map id is the map's name in
 lower case, words joined by hyphens) the map's pack and raw layers (pack.py, PACK.md): the map
 image (with transparency where the map lets the void through: matted from each tile's shots
 over a white and a black skybox, or the black-painted void made transparent; on a map of
-several arenas, Punisher Arena, one per arena) with its scale and origin in map cells, the sky
-layers and composites (sky_stitch.py), as full-resolution PNGs in raw/ and as tile pyramids in
-pack/.
+several arenas, Punisher Arena, one per arena) with its scale and origin in map cells and the sky
+layers (sky_stitch.py), as full-resolution PNGs in raw/ and as tile pyramids in pack/; with
+--composites also the map over its sky layers, in raw/.
 """
 
 import argparse
-import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -30,29 +29,25 @@ import numpy as np
 import pyvips
 from PIL import Image
 
-from . import sky_stitch
-from . import ui
-from . import pack
-from .inject import slug
-from .frames import PNG_COMPRESSION, frame_exists, load_frame
-from .matching import phase_correlate
-from .workers import ordered_map
-from .runlog import log, warn, log_timings, set_log_file, stage
-from .sky import LIGHT_LEVEL
+from heroes_capture.capture import pack
+from heroes_capture.capture import sky_stitch
+from heroes_capture.capture.matting import light_level, matte, moved_pixels
+from heroes_capture.capture.sky import LIGHT_LEVEL
+from heroes_capture.capture.team_colour import team_mask
+from heroes_capture.common.frames import PNG_COMPRESSION, frame_exists, load_frame, tile_stem
+from heroes_capture.common.game_data import slug
+from heroes_capture.common.imaging import max3, nonzero_box
+from heroes_capture.common.jsonio import read_json, write_json
+from heroes_capture.common.matching import phase_correlate
+from heroes_capture.common.runlog import log, warn, log_timings, set_log_file, stage
+from heroes_capture.common.workers import ordered_map
+from heroes_capture.map.specifics import Specifics
 
 MATCH_SCALE = 2  # screenshots are matched at half size: fast, and still ~0.2 px precise
 FEATHER = 16  # pixels blended either side of each seam: enough to hide lighting steps, narrow enough not to double leaning objects
 SEAM_STEP = 2  # a seam may move this many (reduced) pixels sideways per pixel along
 ANCHOR_WEIGHT = 5.0  # an anchor's weight in the solve, against a match's (its strength, up to 1)
 ANCHOR = -1  # a virtual node in the solve: every anchored screenshot is connected to it
-MATTE_BAND = 32  # rows matted at a time (see matte)
-# A standing structure's masks of where a neighbour is in front of it (write_elements): a pixel
-# changed by more than MASK_CHANGE when the neighbour is shown beside it, where the neighbour's own
-# cut-out is at least MASK_SOLID opaque; a mask of fewer than MASK_LEAST pixels left out.
-MASK_CHANGE, MASK_SOLID, MASK_LEAST = 24, 160, 20
-# Structures whose remains outlive the clearing between the elements' rubble waves (a town hall's
-# own actor, a moonwell's ring), so may lie in a neighbour's rubble shot (write_elements).
-LINGERING_REMAINS = ("TownTownHall", "TownMoonwell")
 
 
 # ------------------------------------------------------------------------------------------------
@@ -65,103 +60,16 @@ def unwrap(shift: float, size: float, expected: float) -> float:
     return min((shift - size, shift, shift + size), key=lambda s: abs(s - expected))
 
 
-def _max3(a: np.ndarray) -> np.ndarray:
-    """a.max(axis=2) for three channels, without numpy's slow reduction over a short last axis."""
-    return np.maximum(np.maximum(a[:, :, 0], a[:, :, 1]), a[:, :, 2])
-
-
-def _min3(a: np.ndarray) -> np.ndarray:
-    return np.minimum(np.minimum(a[:, :, 0], a[:, :, 1]), a[:, :, 2])
-
-
-def _mean3(a: np.ndarray) -> np.ndarray:
-    """a.mean(axis=2) for three float channels, to the bit: the same sum in the same order and
-    the same division (by a count, as numpy's mean does)."""
-    total = a[:, :, 0] + a[:, :, 1]
-    total += a[:, :, 2]
-    return np.true_divide(total, np.intp(3), out=total, casting="unsafe")
-
-
-def light_level(white: np.ndarray, black: np.ndarray) -> float | None:
-    """The level the game renders the matte's light sky at (sky.LIGHT_SKY, about LIGHT_LEVEL), from
-    a pair of shots over it and over black (`white`: the light one): the median of the pixels that
-    are sky (black in the black shot, flat and bright in the light one); None when fewer than 2000
-    are."""
-    w, b = white.astype(np.float32), black.astype(np.float32)
-    w_min = _min3(w)
-    sky = (_max3(b) <= 4) & (w_min >= 120) & (_max3(w) - w_min <= 8)
-    return float(np.median(w[sky].mean(axis=1))) if sky.sum() >= 2000 else None
-
-
-# Pixels whose difference between the two shots isn't grey by more than this (the largest channel
-# less the smallest) differ by something other than the sky showing through.
-MOVED_SPREAD = 24
-
-
-def moved_pixels(white: np.ndarray, black: np.ndarray) -> np.ndarray:
-    """The pixels taken for something that moved between a tile's two shots: whose difference isn't
-    grey (MOVED_SPREAD), in patches at least 3 pixels across (an opening). Anything that really
-    moves (a unit walking in, a pulsing effect) is a patch; once the map's effects were frozen and
-    the light sky a grey, what was left was one- and two-pixel specks along the floating pieces'
-    edges, which differ by a hair between the shots: left to the matte, they keep their soft edge
-    instead of turning opaque in the black shot's colour (dark dots along the rim)."""
-    spread = np.empty(white.shape[:2], bool)
-    for r0 in range(0, white.shape[0], MATTE_BAND):
-        d = white[r0:r0 + MATTE_BAND].astype(np.int16) - black[r0:r0 + MATTE_BAND].astype(np.int16)
-        spread[r0:r0 + MATTE_BAND] = (_max3(d) - _min3(d)) > MOVED_SPREAD
-    if not spread.any():
-        return spread
-    from scipy import ndimage
-
-    return ndimage.binary_opening(spread, structure=np.ones((3, 3), bool))
-
-
-def matte(white: np.ndarray, black: np.ndarray, level: float, animated: bool = True, moved: list | None = None) -> np.ndarray:
-    """Difference matting: RGBA from the shots over the light sky and over black (`white`: the light
-    one). A pixel that is sky in both differs by the whole light level; one that is all map is the
-    same in both; in between (soft edges, glass, glow) the difference is exactly the see-through
-    share. Colour from the black shot (the map's own light, nothing of the sky in it),
-    un-premultiplied. The light level is measured, not assumed (the game renders the light grey of
-    sky.LIGHT_SKY at about 198): see light_level. `animated`: a pixel taken for something that moved
-    between the shots (moved_pixels) left opaque (off for the elements' cut-outs: nothing moves in
-    them, and a tinted see-through glow, a core's shield, has a difference that isn't grey).
-    `moved`: given, the number of pixels taken for moving is appended to it."""
-    # In bands of rows small enough to stay in the processor's cache: every pixel is worked
-    # out on its own, and with whole tiles the threads spent their time waiting on memory.
-    out = np.empty((*white.shape[:2], 4), dtype=np.uint8)
-    changed_all = moved_pixels(white, black) if animated else None
-    if moved is not None:
-        moved.append(int(changed_all.sum()) if changed_all is not None else 0)
-    for r0 in range(0, white.shape[0], MATTE_BAND):
-        r1 = r0 + MATTE_BAND
-        w = white[r0:r1].astype(np.float32)
-        b = black[r0:r1].astype(np.float32)
-        d = w - b
-        d_mean = _mean3(d)
-        see_through = np.clip(d_mean / level, 0, 1)
-        # Something that moved between the shots (moved_pixels): no matte there.
-        changed = changed_all[r0:r1] if changed_all is not None else np.zeros(d.shape[:2], bool)
-        alpha = np.where(changed, 1.0, 1.0 - see_through)
-        alpha = np.where(d_mean < -8, 1.0, alpha)
-        # Un-premultiplied colour: the black shot over alpha. Only where it is see-through:
-        # elsewhere (most pixels) alpha is exactly 1 and the colour is the black shot as it is.
-        rgb = b
-        part = alpha < 1.0
-        a_part = alpha[part]
-        rgb[part] = np.where(a_part[:, None] > 1 / 255, np.clip(b[part] / np.maximum(a_part, 1 / 255)[:, None], 0, 255), 0)
-        out[r0:r1, :, :3] = rgb.round()
-        out[r0:r1, :, 3] = (alpha * 255).round()
-    return out
-
-
-
 class Shots:
     """The run's screenshots: half-size greyscale copies for matching (cached), and each tile as
     RGBA for composing (matted from its pair of shots when the map was shot over white and
     black)."""
 
-    def __init__(self, manifest: dict, base: Path):
+    def __init__(self, manifest: dict, base: Path, chaos: bool = False):
         self.dir = base / "tiles"
+        # Each tile from Chaos's side where it was shot from there too (its team-colour pair), else
+        # as shot: the canvas the team-colour mask is taken against (team_colour.py).
+        self.chaos = chaos
         # Only when this map is shot over white and black (manifest sky mode): a results folder
         # can hold -black shots left from an earlier run of a map since shot once per tile.
         self.matting = (manifest.get("sky") or {}).get("mode") == "matte"
@@ -171,11 +79,14 @@ class Shots:
         # logged, to tell whether anything still moves now that the map's effects are frozen.
         self.moved: dict[int, tuple[int, int]] = {}
 
+    def has_chaos(self, index: int) -> bool:
+        return frame_exists(tile_stem(self.dir, index, chaos=True))
+
     def stem(self, index: int) -> Path:
-        return self.dir / f"tile_{index:04d}"
+        return tile_stem(self.dir, index, chaos=self.chaos and self.has_chaos(index))
 
     def black_stem(self, index: int) -> Path:
-        return self.dir / f"tile_{index:04d}-black"
+        return tile_stem(self.dir, index, black=True, chaos=self.chaos and self.has_chaos(index))
 
     def exists(self, index: int) -> bool:
         return frame_exists(self.stem(index))
@@ -221,20 +132,22 @@ class Shots:
         return rgba
 
 
-def read_anchors(base: Path, by_index: dict, shots: Shots, present: list) -> tuple[dict[int, tuple[float, float]], bool]:
+def read_anchors(base: Path, by_index: dict, shots: Shots, present: list) -> dict[int, tuple[float, float]]:
     """Where each screenshot's centre really was, in map cells: the camera target the map script
-    reported through its status strip for every tile (positions.json). Tiles without one are
-    placed relative to their neighbours by image matching. Also whether positions.json exists."""
+    reported through its status strip for every tile (positions.json, which every capture
+    writes)."""
     anchored: dict[int, tuple[float, float]] = {}
     positions_path = base / "positions.json"
     if not positions_path.exists():
-        return anchored, False
-    for key, pos in json.loads(positions_path.read_text()).items():
+        raise SystemExit(f"{positions_path} is missing: capture the map again (a capture records where the camera was for each tile)")
+    for key, pos in read_json(positions_path).items():
         i = int(key)
         if i in by_index and shots.exists(i):
             anchored[i] = (pos["x"], pos["y"])
     log(f"camera positions: {len(anchored)} of {len(present)} screenshots anchored")
-    return anchored, True
+    if not anchored:
+        raise SystemExit(f"{positions_path} has no position for any screenshot there is")
+    return anchored
 
 
 def measure_matches(tiles: list, by_pos: dict, usable: set, shots: Shots, centre, planned: float) -> list:
@@ -345,45 +258,6 @@ def solve_positions(edges: list, anchors: dict, anchored: dict) -> tuple[dict[in
     return {i: pos[col_of[i]] for i in solved_ids if i in reach}, kept
 
 
-def fit_frame(manifest: dict, by_index: dict, placed: dict, screen_w: int, screen_h: int) -> tuple[float, float, float, int]:
-    """Without anchors: map cells -> pixels (scale, ax, ay), fitted on screenshots whose camera
-    went where it was sent (outliers are the ones the game held back at the edges). Many edge
-    screenshots can be off, too many to outvote, so the fit starts from the middle of the map,
-    where the camera can't have been held back, and then takes in every screenshot that agrees
-    with it to within a few pixels. Also how many screenshots were off."""
-    ids = list(placed)
-    area = manifest["area"]
-    mx, my = (area["left"] + area["right"]) / 2, (area["bottom"] + area["top"]) / 2
-    hx, hy = (area["right"] - area["left"]) / 2, (area["top"] - area["bottom"]) / 2
-
-    def fit(sel: list[int]) -> tuple[float, float, float]:
-        wx = np.array([by_index[i]["x"] for i in sel])
-        wy = np.array([by_index[i]["y"] for i in sel])
-        cx = np.array([placed[i][0] + screen_w / 2 for i in sel])
-        cy = np.array([placed[i][1] + screen_h / 2 for i in sel])
-        # cx = s·x + ax, cy = −s·y + ay, one shared scale.
-        design = np.zeros((2 * len(sel), 3))
-        design[: len(sel), 0], design[: len(sel), 1] = wx, 1
-        design[len(sel) :, 0], design[len(sel) :, 2] = -wy, 1
-        return tuple(np.linalg.lstsq(design, np.concatenate([cx, cy]), rcond=None)[0])
-
-    def error(i: int, s: float, ax: float, ay: float) -> float:
-        t = by_index[i]
-        return float(np.hypot(s * t["x"] + ax - placed[i][0] - screen_w / 2, -s * t["y"] + ay - placed[i][1] - screen_h / 2))
-
-    fit_ids = [i for i in ids if abs(by_index[i]["x"] - mx) <= hx / 2 and abs(by_index[i]["y"] - my) <= hy / 2]
-    if len(fit_ids) < 3:
-        fit_ids = ids
-    for _ in range(3):
-        scale, ax, ay = fit(fit_ids)
-        agreeing = [i for i in ids if error(i, scale, ax, ay) <= 4.0]
-        if len(agreeing) < 3 or agreeing == fit_ids:
-            break
-        fit_ids = agreeing
-    scale, ax, ay = fit(fit_ids)
-    return scale, ax, ay, len(ids) - len(fit_ids)
-
-
 # ------------------------------------------------------------------------------------------------
 # Composing
 # ------------------------------------------------------------------------------------------------
@@ -395,7 +269,6 @@ class Layout:
     may be used (the page: the status strip's column along the left edge is left out)."""
 
     placed: dict[int, np.ndarray]
-    matched: set[int]  # placed by matches or anchors; the rest only estimated
     by_pos: dict
     by_index: dict
     screen_w: int
@@ -412,6 +285,22 @@ class Layout:
         self.height = int(np.ceil(max(p[1] for p in self.placed.values()) + self.screen_h))
         self.centres = {i: self.placed[i] + (self.screen_w / 2, self.screen_h / 2) for i in self.placed}
         self.mid = np.mean(list(self.centres.values()), axis=0)
+
+
+@dataclass
+class Stitched:
+    """A stitched map, for the after_stitch hooks (map/specifics.py): the manifest, the run's
+    folder, the output folder, where each screenshot was placed, the scale and origin (map cells to
+    the canvas's pixels: x = ax + cx * scale, y = ay - cy * scale) and the map images written."""
+
+    manifest: dict
+    base: Path
+    out: Path
+    layout: Layout
+    scale: float
+    ax: float
+    ay: float
+    written: list[str]
 
 
 def route_seam(cost: np.ndarray) -> np.ndarray:
@@ -478,11 +367,11 @@ def route_seams(shots: Shots, layout: Layout, px_per_cell: float) -> dict:
     seam); between i and its lower neighbour j, the seam y for each canvas column ('h')."""
     band = int(4 * px_per_cell)  # how far from the halfway line a seam may go, in pixels
     jobs = []  # (i, j, kind, ox0, oy0, ox1, oy1), in the order the seams were always routed
-    for i in layout.matched:
+    for i in layout.placed:
         t = layout.by_index[i]
         for (dr, dc), kind in (((0, 1), "v"), ((1, 0), "h")):
             n = layout.by_pos.get((t["row"] + dr, t["col"] + dc))
-            if n is None or n["index"] not in layout.matched:
+            if n is None or n["index"] not in layout.placed:
                 continue
             j = n["index"]
             xi, yi = layout.placed[i]
@@ -549,8 +438,8 @@ def supply_region(layout: Layout, seams: dict, i: int) -> tuple[np.ndarray, tupl
             continue
         seam = seams.get((i, n["index"]) if mine else (n["index"], i))
         if seam is None:
-            if n["index"] in L.matched:
-                # Matched neighbour, no seam routed (overlap too small): the halfway line.
+            if n["index"] in L.placed:
+                # Placed neighbour, no seam routed (overlap too small): the halfway line.
                 m = (L.centres[i] + L.centres[n["index"]]) / 2
                 alpha *= ramp(m[0], gx, dc > 0) if dc else ramp(m[1], gy, dr > 0)
             continue
@@ -591,22 +480,21 @@ def seam_blend(under: np.ndarray, over: np.ndarray, weight: np.ndarray) -> np.nd
 
 
 def compose(shots: Shots, layout: Layout, seams: dict, subset: set[int]) -> np.ndarray:
-    """The canvas painted from these screenshots only. Full frames go down first (estimated ones,
-    then matched ones outermost first), so there are no gaps; then each matched screenshot's own
+    """The canvas painted from these screenshots only. Full frames go down first (outermost
+    first), so there are no gaps; then each screenshot's own
     region, bounded by its seams, goes on top, blended over FEATHER pixels either side of each
     seam so small lighting differences don't show as steps. Each screenshot is loaded (and
     matted) once: its region is kept from the first pass for the second."""
     L = layout
     canvas = np.zeros((L.height, L.width, 4), dtype=np.uint8)
 
-    estimated = [i for i in L.placed if i not in L.matched and i in subset]
-    chosen = [i for i in L.matched if i in subset]
+    chosen = [i for i in L.placed if i in subset]
     boxes = {}
     for i, region in zip(chosen, ordered_map(lambda i: supply_region(L, seams, i), chosen)):
         if region is not None:
             boxes[i] = region[1]
     kept: dict[int, np.ndarray] = {}
-    order = estimated + sorted(chosen, key=lambda i: -np.hypot(*(L.centres[i] - L.mid)))
+    order = sorted(chosen, key=lambda i: -np.hypot(*(L.centres[i] - L.mid)))
     levels = shots.levels_for(order)
     for i, full in zip(order, ordered_map(lambda i: shots.load(i, levels.get(i)), order)):
         x, y = int(round(L.placed[i][0])) + L.page_x0, int(round(L.placed[i][1])) + L.page_y0
@@ -628,7 +516,8 @@ def compose(shots: Shots, layout: Layout, seams: dict, subset: set[int]) -> np.n
         log(f"  taken for moving between the shots (left opaque): {sum(c for c, _ in counts.values())} pixels in "
             f"{sum(1 for c, _ in counts.values() if c)} of {len(counts)} tiles; most in tile {worst + 1} "
             f"({counts[worst][0] / counts[worst][1] * 100:.3f}% of it)")
-        show_moving(shots, sorted((i for i in counts if counts[i][0]), key=lambda i: -counts[i][0])[:MOVING_SHOWN])
+        if os.environ.get("HRS_STITCH_DEBUG"):
+            show_moving(shots, sorted((i for i in counts if counts[i][0]), key=lambda i: -counts[i][0])[:MOVING_SHOWN])
     return canvas
 
 
@@ -636,13 +525,8 @@ def compose(shots: Shots, layout: Layout, seams: dict, subset: set[int]) -> np.n
 MOVING_SHOWN = 3
 
 
-def moving_mask(white: np.ndarray, black: np.ndarray) -> np.ndarray:
-    """The pixels matte takes for something that moved between a tile's two shots (moved_pixels)."""
-    return moved_pixels(white, black)
-
-
 def show_moving(shots: Shots, tiles: list[int]) -> None:
-    """A diagnosis: for each of these tiles, its shot over white at half size with the pixels taken
+    """A diagnosis (HRS_STITCH_DEBUG): for each of these tiles, its shot over white at half size with the pixels taken
     for moving marked in magenta, and the densest 256-pixel square of them full size, over white
     and over black side by side; in moving-<time>/ next to the run's folder (it outlives the
     run's working files). What still changes between the shots now that the map's animations,
@@ -655,7 +539,7 @@ def show_moving(shots: Shots, tiles: list[int]) -> None:
     folder.mkdir(exist_ok=True)
     for i in tiles:
         white, black = load_frame(shots.stem(i)), load_frame(shots.black_stem(i))
-        mask = moving_mask(white, black)
+        mask = moved_pixels(white, black)
         marked = white[..., :3].copy()
         grown = np.zeros_like(mask)
         for dy in (-1, 0, 1):
@@ -691,7 +575,7 @@ def void_terrain_transparent(rgba: np.ndarray, px_per_cell: float) -> np.ndarray
     from scipy import ndimage
 
     rgb, alpha = rgba[:, :, :3], rgba[:, :, 3]
-    peak = _max3(rgb)
+    peak = max3(rgb)
     sky = alpha < 8  # what the matte made transparent
     dark = (peak <= 20) & ~sky
     labels, count = ndimage.label(dark)
@@ -805,7 +689,21 @@ def other_areas_removed(rgba: np.ndarray, areas: list, own: int, scale: float, a
     return rgba, int(others.sum())
 
 
-def write_outputs(manifest: dict, base: Path, out: Path, shots: Shots, layout: Layout, seams: dict, scale: float, ax: float, ay: float) -> list[str]:
+def canvas_team_mask(order: np.ndarray, chaos: np.ndarray, rows: int = 512) -> np.ndarray:
+    """The team-colour mask of the composed canvas (team_mask), a strip of rows at a time (the
+    whole canvas in floating point would take several GB); the canvas's own transparency for both
+    sides (the void's, made transparent after composing)."""
+    mask = np.zeros(order.shape[:2] + (2,), np.uint8)
+    for y in range(0, order.shape[0], rows):
+        o = order[y:y + rows]
+        c = np.dstack([chaos[y:y + rows, :, :3], o[..., 3:4]])
+        found = team_mask(o, c)
+        if found is not None:
+            mask[y:y + rows] = found
+    return mask
+
+
+def write_outputs(manifest: dict, out: Path, shots: Shots, layout: Layout, seams: dict, scale: float, ax: float, ay: float) -> list[str]:
     """The image cropped to the camera bounds plus a margin, or further where the map runs on
     past them, and its geo file (scale and origin, for the pack). Several arenas: one image
     each, <id>-<area>.png, without the edges of the arenas next to it (other_areas_removed), so
@@ -832,6 +730,13 @@ def write_outputs(manifest: dict, base: Path, out: Path, shots: Shots, layout: L
             composed = compose(shots, layout, seams, subset)
         with stage("void transparency"):
             composed = void_terrain_transparent(composed, manifest["pxPerCell"])
+        # The team colour: the same canvas from Chaos's side, where tiles were shot from there.
+        mask = None
+        if any(shots.has_chaos(i) for i in subset):
+            with stage("team colour"):
+                chaos = compose(Shots(manifest, shots.dir.parent, chaos=True), layout, seams, subset)
+                mask = canvas_team_mask(composed, chaos)
+                del chaos
         if name is not None:
             with stage("other arenas removed"):
                 composed, removed = other_areas_removed(composed, manifest["areas"], area_no, scale, ax, ay)
@@ -841,18 +746,22 @@ def write_outputs(manifest: dict, base: Path, out: Path, shots: Shots, layout: L
         # output takes in everything that isn't void. (Faint pixels don't count, so a blurred
         # rim or a stray speck can't set the edge.) The same margin of transparency on every
         # side, as far as the canvas allows.
-        opaque = composed[::4, ::4, 3] >= 32
-        rows_on, cols_on = np.nonzero(opaque.any(axis=1))[0], np.nonzero(opaque.any(axis=0))[0]
-        if len(rows_on) and len(cols_on):
+        found = nonzero_box(composed[::4, ::4, 3] >= 32)
+        if found:
             pad = int(round(margin * scale))
-            x0 = min(x0, max(0, int(cols_on[0] * 4) - pad))
-            x1 = max(x1, min(width, int((cols_on[-1] + 1) * 4) + pad))
-            y0 = min(y0, max(0, int(rows_on[0] * 4) - pad))
-            y1 = max(y1, min(height, int((rows_on[-1] + 1) * 4) + pad))
+            r0, r1, c0, c1 = found
+            x0 = min(x0, max(0, c0 * 4 - pad))
+            x1 = max(x1, min(width, c1 * 4 + pad))
+            y0 = min(y0, max(0, r0 * 4 - pad))
+            y1 = max(y1, min(height, r1 * 4 + pad))
         image = pyvips.Image.new_from_array(composed, interpretation="srgb").crop(x0, y0, x1 - x0, y1 - y0)
         out_png = out / f"{out_id}.png"
         with stage("writing the map image"):
             image.write_to_file(str(out_png), compression=PNG_COMPRESSION)
+            if mask is not None:
+                rgb = np.dstack([mask[y0:y1, x0:x1], np.zeros((y1 - y0, x1 - x0), np.uint8)])
+                pyvips.Image.new_from_array(rgb, interpretation="srgb").write_to_file(str(out / f"{out_id}-team.png"), compression=PNG_COMPRESSION)
+                log(f"  team colour on {float((rgb[..., :2].max(axis=2) > 0).mean()) * 100:.2f}% of it -> {out_id}-team.png")
         geo = {
             "map": manifest["map"],
             "area": name,
@@ -863,168 +772,10 @@ def write_outputs(manifest: dict, base: Path, out: Path, shots: Shots, layout: L
             "originCell": {"x": -(ax - x0) / scale, "y": (ay - y0) / scale},
             "toPixel": "px = (x - originCell.x) * pxPerCell; py = (originCell.y - y) * pxPerCell",
         }
-        (out / f"{out_id}.geo.json").write_text(json.dumps(geo, indent=2))
+        write_json(out / f"{out_id}.geo.json", geo, indent=2)
         log(f"{x1 - x0}x{y1 - y0} px -> {out_png}")
         written.append(out_id)
     return written
-
-
-def write_elements(manifest: dict, base: Path, out: Path, layout: Layout, scale: float, ax: float, ay: float, image_id: str) -> int:
-    """The elements the capture shot alone over the sky (element_capture.py: elements/), each cut out
-    (elements.cut_out: its colour and exact transparency, cropped to its circle and then to what
-    shows) and placed in the map image's pixels: where its source tile sits on the canvas, moved by
-    the difference between the camera's position for its shot and for the tile's, less the
-    image's crop. Writes <id>-elements/<key>.png and <id>-elements.json (each one's element, state
-    and rectangle in the map image; no file where nothing is left of it in that state). Returns how
-    many states were placed."""
-    from .elements import circle_box, cut_out, screen_point
-
-    folder = base / "elements"
-    record_path = folder / "elements.json"
-    if not record_path.exists():
-        return 0
-    records = json.loads(record_path.read_text())
-    positions_path = base / "positions.json"
-    positions = json.loads(positions_path.read_text()) if positions_path.exists() else {}
-    geo = json.loads((out / f"{image_id}.geo.json").read_text())
-    crop_x0, crop_y0 = ax + geo["originCell"]["x"] * scale, ay - geo["originCell"]["y"] * scale
-    screen = {"w": layout.screen_w, "h": layout.screen_h}
-    target = out / f"{manifest['id']}-elements"
-    target.mkdir(exist_ok=True)
-    # What the scene couldn't hide, as each source tile's shot with nothing shown has it (the
-    # cliff doodads, unless switching the terrain off took them).
-    residue = []
-    for key, record in records.items():
-        if record["kind"] == "empty" and frame_exists(folder / key):
-            empty_shot = load_frame(folder / key)
-            residue.append(float((empty_shot[:, layout.page_x0:].min(axis=2) < 200).mean()))
-    if residue:
-        log(f"elements: what couldn't be hidden: {max(residue) * 100:.2f}% of the pixels at most of {len(residue)} tiles' empty shots"
-            f" ({sum(r > 0.0005 for r in residue)} with anything there)")
-
-    by_id = {u["id"]: u for u in (manifest.get("elements") or {}).get("structures", [])}
-
-    def place(key: str, record: dict) -> tuple[dict | None, dict | None, list[tuple[str, str]]]:
-        """One element's state cut out and saved (a worker's part): its entry (no file: nothing
-        there) or None, what masks() needs of it, and what to log (in order, by the caller). Only
-        the part of the shots round its circle is matted (circle_box), the white level measured on
-        the whole shot."""
-        notes: list[tuple[str, str]] = []
-        tile, shot = record["tile"], record.get("shot", key)
-        if tile not in layout.placed or not frame_exists(folder / shot) or not frame_exists(folder / f"{shot}-black"):
-            notes.append(("warn", f"  element {key}: its tile ({tile + 1}) isn't in the map, or its shots are missing; left out"))
-            return None, None, notes
-        planned = layout.by_index[tile]
-        tile_camera = positions.get(str(tile)) or {"x": planned["x"], "y": planned["y"]}
-        camera = record.get("camera") or tile_camera
-        centre = screen_point(record, camera, screen, scale)
-        radius = record["radius"] * scale
-        white, black = load_frame(folder / shot), load_frame(folder / f"{shot}-black")
-        level = light_level(white, black) or LIGHT_LEVEL
-        cv0, cv1, cu0, cu1 = circle_box(centre, radius, white.shape)
-        part = (slice(cv0, cv1), slice(cu0, cu1))
-
-        def local(p: tuple[float, float]) -> tuple[float, float]:
-            return p[0] - cu0, p[1] - cv0
-
-        # What can't be hidden, as its tile's shot with everything hidden shows it (taken from the
-        # same camera position, or it wouldn't line up).
-        empty_record = records.get(f"empty-{tile}")
-        empty = None
-        if empty_record and frame_exists(folder / f"empty-{tile}"):
-            empty_camera = empty_record.get("camera") or tile_camera
-            if np.hypot(empty_camera["x"] - camera["x"], empty_camera["y"] - camera["y"]) * scale < 1:
-                empty = load_frame(folder / f"empty-{tile}")[part]
-        # A town structure's rubble: its town's moonwells' and hall's remains kept out (a hall's
-        # fall brings its town's moonwells down too, and both their remains outlive the clearing
-        # between waves: a moonwell's ring lay in its keep's shot), only what is nearer this one
-        # than them its own.
-        others = []
-        this = by_id.get(record.get("element")) if record["kind"] == "structure" and record["state"] == "rubble" else None
-        if this is not None and this.get("town") is not None:
-            others = [local(screen_point(m, camera, screen, scale)) for m in by_id.values()
-                      if m is not this and m.get("town") == this["town"] and m["type"].startswith(LINGERING_REMAINS)]
-        rgba = cut_out(white[part], black[part], local(centre), radius, empty, others, level=level)
-        alpha = rgba[..., 3]
-        rows, cols = np.nonzero(alpha.any(axis=1))[0], np.nonzero(alpha.any(axis=0))[0]
-        entry = {"key": key, "kind": record["kind"], "element": record["element"], "state": record["state"]}
-        if not len(rows):
-            # Nothing left of it (a moonwell leaves no rubble): the state is "nothing".
-            notes.append(("log", f"  element {key}: nothing there"))
-            return {**entry, "file": None, "rect": None}, None, notes
-        # In the whole shot's pixels.
-        v0, v1, u0, u1 = cv0 + int(rows[0]), cv0 + int(rows[-1]) + 1, cu0 + int(cols[0]), cu0 + int(cols[-1]) + 1
-        # Reaching the circle's edge: the circle may have cut it short (a radius to widen).
-        yy, xx = np.nonzero(alpha)
-        if np.hypot(xx + cu0 - centre[0], yy + cv0 - centre[1]).max() > radius - 2:
-            notes.append(("warn", f"  element {key}: its cut-out reaches the edge of its circle ({record['radius']:g} cells); it may be cut short"))
-        x = layout.placed[tile][0] + u0 + (camera["x"] - tile_camera["x"]) * scale - crop_x0
-        y = layout.placed[tile][1] + v0 - (camera["y"] - tile_camera["y"]) * scale - crop_y0
-        mine = rgba[v0 - cv0:v1 - cv0, u0 - cu0:u1 - cu0]
-        Image.fromarray(np.ascontiguousarray(mine), "RGBA").save(target / f"{key}.png", compress_level=PNG_COMPRESSION)
-        kept = {"box": (v0, v1, u0, u1), "alpha": mine[..., 3].copy(), "shot": shot}
-        return {**entry, "file": f"{key}.png", "rect": [int(round(x)), int(round(y)), u1 - u0, v1 - v0]}, kept, notes
-
-    def masks(entry: dict, record: dict) -> list[dict]:
-        """A standing structure's masks, one for each neighbour that stands in front of it
-        somewhere (element_capture.stand: its shot over black with that neighbour faded in beside
-        it): its pixels the neighbour covers there, where the neighbour's own cut-out is solid
-        (MASK_SOLID: a glow passing over it isn't in front of it). <key>-under-<id>.png, opaque
-        where hidden, see-through elsewhere (the viewer erases with it)."""
-        key, mine = entry["key"], cropped[entry["key"]]
-        v0, v1, u0, u1 = mine["box"]
-        alone = load_frame(folder / f"{mine['shot']}-black")[v0:v1, u0:u1].astype(np.int16)
-        x, y, w, h = entry["rect"]
-        found = []
-        for n in record.get("neighbours") or []:
-            other = by_key.get(f"structure-{n}-standing")
-            if other is None or other.get("file") is None or not frame_exists(folder / f"{mine['shot']}-with-{n}"):
-                continue
-            beside = load_frame(folder / f"{mine['shot']}-with-{n}")[v0:v1, u0:u1].astype(np.int16)
-            covered = (np.abs(beside - alone).max(axis=2) > MASK_CHANGE) & (mine["alpha"] > 8)
-            # Where the neighbour's own cut-out lies over this one, in the map image's pixels.
-            solid = np.zeros_like(covered)
-            nx, ny, nw, nh = other["rect"]
-            ox0, oy0, ox1, oy1 = max(x, nx), max(y, ny), min(x + w, nx + nw), min(y + h, ny + nh)
-            if ox0 < ox1 and oy0 < oy1:
-                theirs = cropped[other["key"]]["alpha"]
-                solid[oy0 - y:oy1 - y, ox0 - x:ox1 - x] = theirs[oy0 - ny:oy1 - ny, ox0 - nx:ox1 - nx] >= MASK_SOLID
-            hidden = covered & solid
-            if hidden.sum() < MASK_LEAST:
-                continue
-            name = f"{key}-under-{n}.png"
-            rgba = np.zeros((*hidden.shape, 4), np.uint8)
-            rgba[..., 3] = hidden * 255
-            Image.fromarray(rgba, "RGBA").save(target / name, compress_level=PNG_COMPRESSION)
-            found.append({"id": n, "file": name})
-        return found
-
-    shots = [(key, record) for key, record in sorted(records.items()) if record["kind"] != "empty"]
-    placed = []
-    cropped: dict[str, dict] = {}
-    # On every core (workers.ordered_map: in order, so the log reads as it did one at a time).
-    with ui.bar(len(shots), "elements cut out") as advance:
-        for (key, _), (entry, kept, notes) in zip(shots, ordered_map(lambda item: place(*item), shots)):
-            for level, text in notes:
-                (warn if level == "warn" else log)(text)
-            if entry is not None:
-                placed.append(entry)
-            if kept is not None:
-                cropped[key] = kept
-            advance()
-    # Where standing neighbours overlap: which is in front of which, pixel by pixel.
-    by_key = {entry["key"]: entry for entry in placed}
-    masked = 0
-    to_mask = [entry for entry in placed if entry.get("file") and records[entry["key"]].get("neighbours")]
-    for entry, found in zip(to_mask, ordered_map(lambda entry: masks(entry, records[entry["key"]]), to_mask)):
-        entry["hiddenBy"] = found
-        masked += len(found)
-    if masked:
-        log(f"elements: {masked} masks of where a standing neighbour is in front")
-    (out / f"{manifest['id']}-elements.json").write_text(json.dumps({"image": image_id, "cutouts": placed}, indent=1))
-    nothing = sum(1 for p in placed if p["file"] is None)
-    log(f"elements: {len(placed) - nothing} cut-outs placed in {image_id}, {nothing} states with nothing there, {len(shots) - len(placed)} left out")
-    return len(placed)
 
 
 def output_folder(output_dir: Path, manifest: dict) -> Path:
@@ -1032,14 +783,19 @@ def output_folder(output_dir: Path, manifest: dict) -> Path:
     return output_dir / slug(manifest["map"])
 
 
-def main(argv: list[str]) -> None:
+def main(argv: list[str], specifics_of: Callable[[dict], Specifics]) -> None:
+    """Stitch a captured map; specifics_of(manifest) gives what its category and the map itself
+    add (cli.specifics_of)."""
     ap = argparse.ArgumentParser(prog="heroes-capture stitch", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("manifest", type=Path)
     ap.add_argument("--output-dir", type=Path, default=Path("maps"), help="where the map's folder of images goes (default: maps)")
+    ap.add_argument("--composites", action="store_true",
+                    help="also write the map over its sky layers as three full-size PNGs in raw/ (a reference: nothing in the pack reads them)")
     args = ap.parse_args(argv)
 
-    manifest = json.loads(args.manifest.read_text())
+    manifest = read_json(args.manifest)
     base = args.manifest.parent / manifest["id"]
+    specifics = specifics_of(manifest)
     out = output_folder(args.output_dir, manifest)
     out.mkdir(parents=True, exist_ok=True)
     set_log_file(base / "log.txt")
@@ -1050,7 +806,7 @@ def main(argv: list[str]) -> None:
     # 1. The screenshots: present, not a failed (all-black) grab, not featureless void.
     present = [t for t in tiles if shots.exists(t["index"])]
     if not present:
-        raise SystemExit(f"no screenshots in {shots.dir}; run capture.py first")
+        raise SystemExit(f"no screenshots in {shots.dir}; run the capture first")
     for _ in ordered_map(shots.small, [t["index"] for t in present]):
         pass  # the half-size copies decoded in parallel (they are cached)
     # A screenshot that is entirely black is a failed grab; it would be pasted as a black box.
@@ -1066,10 +822,10 @@ def main(argv: list[str]) -> None:
 
     # 2. Anchors, matches, the scale, the solve.
     planned = manifest["pxPerCell"]
-    anchored, echoed = read_anchors(base, by_index, shots, present)
+    anchored = read_anchors(base, by_index, shots, present)
     with stage("matching neighbours"):
         edges = measure_matches(tiles, by_pos, usable, shots, lambda t: anchored.get(t["index"], (t["x"], t["y"])), planned)
-    anchor_scale = scale_from_matches(edges, anchored, planned) if echoed else None
+    anchor_scale = scale_from_matches(edges, anchored, planned)
     # Anchor positions: the tile's top-left in a frame of anchor_scale px per cell, x east and y
     # south, with the map origin at (0, 0). The centre is the measured point; the half-screen
     # offset uses the shared scale, so any difference from the tile's own scale is spread evenly
@@ -1082,23 +838,11 @@ def main(argv: list[str]) -> None:
     if unplaced:
         warn(f"not placed (no position, no match): {len(unplaced)} screenshots: {unplaced[:20]}{' ...' if len(unplaced) > 20 else ''}")
 
-    # 3. Map cells -> pixels.
-    if anchors:
-        # The anchors put the frame at anchor_scale px per cell with the map origin at (0, 0).
-        scale, ax, ay = anchor_scale, 0.0, 0.0
-        held_back = sum(1 for i, (cx, cy) in anchored.items() if np.hypot(cx - by_index[i]["x"], cy - by_index[i]["y"]) > 0.5)
-        log(f"scale {scale:.3f} px/cell from the camera positions (planned {planned}); {held_back} screenshots had the camera held back")
-    else:
-        scale, ax, ay, off = fit_frame(manifest, by_index, placed, screen_w, screen_h)
-        log(f"scale {scale:.3f} px/cell (planned {planned}); {off} screenshots were off their planned spot")
-    matched = set(placed)
-    if not anchors:
-        # Screenshots that couldn't be matched (mostly void) go where the fit says, if not
-        # black. That is only an estimate (the camera may have been held back), so they are
-        # painted underneath, showing only where no matched screenshot reaches.
-        for t in present:
-            if t["index"] not in placed and shots.small(t["index"]) is not None and shots.small(t["index"]).max() >= 12:
-                placed[t["index"]] = np.array([scale * t["x"] + ax - screen_w / 2, -scale * t["y"] + ay - screen_h / 2])
+    # 3. Map cells -> pixels: the anchors put the frame at anchor_scale px per cell with the map
+    # origin at (0, 0).
+    scale, ax, ay = anchor_scale, 0.0, 0.0
+    held_back = sum(1 for i, (cx, cy) in anchored.items() if np.hypot(cx - by_index[i]["x"], cy - by_index[i]["y"]) > 0.5)
+    log(f"scale {scale:.3f} px/cell from the camera positions (planned {planned}); {held_back} screenshots had the camera held back")
 
     # 4. The canvas covers every placed screenshot.
     shift = -np.floor(np.min([p for p in placed.values()], axis=0))
@@ -1107,24 +851,20 @@ def main(argv: list[str]) -> None:
     ax, ay = ax + shift[0], ay + shift[1]
     # The status strip (blanked by the capture) sits along the left edge: left out of the page.
     page_x0 = int((manifest.get("status") or {}).get("pageLeft", 0))
-    layout = Layout(placed, matched, by_pos, by_index, screen_w, screen_h, page_x0)
+    layout = Layout(placed, by_pos, by_index, screen_w, screen_h, page_x0)
 
     # 5. Seams, then each output.
     with stage("routing seams"):
         seams = route_seams(shots, layout, manifest["pxPerCell"])
     log(f"  seams routed between {len(seams)} pairs of neighbours")
     if os.environ.get("HRS_STITCH_DEBUG"):
-        (base / "seams.json").write_text(json.dumps(
-            {f"{i}-{j}": {"kind": k, "start": st, "path": p.tolist(), "placed": [placed[i].tolist(), placed[j].tolist()]}
-             for (i, j), (k, st, p) in seams.items()}))
-    written = write_outputs(manifest, base, out, shots, layout, seams, scale, ax, ay)
-    if (base / "elements" / "elements.json").exists():
-        with stage("elements"):
-            if len(written) == 1:
-                write_elements(manifest, base, out, layout, scale, ax, ay, written[0])
-            else:
-                warn("elements: a map of several arenas isn't supported yet; its elements are left out")
-    # The map's own sky layers and the composites, when the capture shot them.
-    sky_stitch.build(manifest, base, out, written)
-    pack.write(out, manifest, written)
+        write_json(base / "seams.json", {f"{i}-{j}": {"kind": k, "start": st, "path": p.tolist(), "placed": [placed[i].tolist(), placed[j].tolist()]}
+                                         for (i, j), (k, st, p) in seams.items()}, indent=None)
+    written = write_outputs(manifest, out, shots, layout, seams, scale, ax, ay)
+    stitched = Stitched(manifest, base, out, layout, scale, ax, ay, written)
+    for hook in specifics.after_stitch:
+        hook(stitched)
+    # The map's own sky layers (and with --composites the composites), when the capture shot them.
+    sky_stitch.build(manifest, base, out, written, args.composites)
+    pack.write(out, manifest, written, specifics)
     log_timings("stitch")

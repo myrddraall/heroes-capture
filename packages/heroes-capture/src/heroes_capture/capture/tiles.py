@@ -2,98 +2,82 @@
 
     heroes-capture capture tmp/towers-of-doom-structures.json [options]   (heroes-capture map render runs it)
 
-The injected map script (capture_script.galaxy) takes commands typed into its command box and
-reports through its status strip (status.py) when each is done and where the camera really is.
+The injected map script (map/script.py, assembled from its parts) takes commands typed into its
+command box and reports through its status strip (map/status.py) when each is done and where the
+camera really is.
 The capture:
 
-  1. starts Heroes if needed and launches the map (game_control.py);
+  1. starts Heroes if needed and launches the map (common/game_control.py, map/match.py);
   2. waits for the strip and checks it is the map prepared for this run; while the map gets ready
      (gates open, opening timers cut short, animations paused) it measures and shoots the map's
      own sky layers, where there are any (sky_layers.py);
   3. measures the camera bounds the game applies and re-plans the grid from them;
-  4. for each tile: `tile <n> <x> <y>` and the kept shot, and with matting `black` and the same
+  4. runs what the map's category adds before the tiles (map/specifics.py: a battleground's
+     elements capture, with --structures elements);
+  5. for each tile: `tile <n> <x> <y>` and the kept shot, and with matting `black` and the same
      view over the black skybox; the camera positions go to positions.json;
-  5. leaves the match without waiting for the menu (the stitch runs meanwhile; the next launch
+  6. leaves the match without waiting for the menu (the stitch runs meanwhile; the next launch
      waits for it).
 
 When the match is lost (the game closes, the map fails to load, another map is running) the run
 is launched again and resumes from the first missing tile, three times at most.
 
 Captures the game window itself, on whichever monitor it is. Run the game in
-"Windowed (Fullscreen)" at the resolution given to inject.py, and leave the mouse and keyboard
+"Windowed (Fullscreen)" at the resolution given to prepare, and leave the mouse and keyboard
 alone while it captures.
 """
 
 import argparse
-import json
-import math
 import os
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
-from . import element_capture
-from . import probes
-from . import sky_layers
-from . import ui
-from .frames import frame_exists, load_frame, save_frame
-from .game_control import (
+from heroes_capture.capture import sky_layers
+from heroes_capture.capture.diagnostics import probes
+from heroes_capture.capture.grid import plan_tiles
+from heroes_capture.capture.shots import SWITCH_CAP, recoloured_frame, shot_over_black, tile_command
+from heroes_capture.capture.sky import LIGHT_LEVEL
+from heroes_capture.common import ui
+from heroes_capture.common.frames import frame_exists, load_frame, save_frame, tile_stem
+from heroes_capture.common.game_control import (
     FocusLost,
     GamePaused,
     Recoverable,
     dismiss_failed_dialog,
     keep_game_on_monitor,
-    launch_map,
-    quit_match,
     require_focus,
-    send_chat,
-    send_command,
     settle,
     step,
-    wait_for_map_load,
 )
-from .game_data import find_install
-from .game_menus import ScriptBroken, game_menu_open, interface_all_shown
-from .game_state import IN_MAP, LOADING, MAP_FAILED, MENU, NOT_RUNNING, PHASES, game_state
-from .game_window import game_region, hold_key
-from .runlog import detail, done, log, log_timings, set_log_file, stage, warn
-from .sky import LIGHT_LEVEL
-from .screen import ScreenGrabber, disagree, looks_black, same_view, view_shift
-from .status import Status, StatusStrip
-from .watch import start_watch
+from heroes_capture.common.game_data import find_install
+from heroes_capture.common.geometry import circle_box, screen_point
+from heroes_capture.common.game_menus import ScriptBroken, game_menu_open, interface_all_shown
+from heroes_capture.common.game_state import IN_MAP, LOADING, MAP_FAILED, MENU, NOT_RUNNING, PHASES, game_state
+from heroes_capture.common.game_window import game_region, hold_key
+from heroes_capture.common.jsonio import read_json, write_json, write_manifest
+from heroes_capture.common.runlog import detail, done, log, log_timings, set_log_file, stage, warn
+from heroes_capture.common.screen import ScreenGrabber, disagree, looks_black, same_view, view_shift
+from heroes_capture.common.watch import start_watch
+from heroes_capture.map.match import launch_map, quit_match, send_chat, send_command, wait_for_map_load
+from heroes_capture.map.specifics import Specifics
+from heroes_capture.map.status import Status, StatusStrip
 
-
-
-def tile_command(tile: dict) -> str:
-    """`tile <n> <x> <y>`: the map script takes the position from the command, so the grid can
-    be planned here, from the camera bounds measured in the game (see plan_grid)."""
-    return f"tile {tile['index']} {tile['x']:.2f} {tile['y']:.2f}"
 
 
 def plan_grid(manifest: dict, bounds: dict) -> None:
-    """Re-plan the capture grid for other camera bounds (inject.py's plan_grid), in
+    """Re-plan the capture grid for other camera bounds (capture/prepare.py's plan_grid), in
     place: tiles, area, cameraBounds, cols, rows, step. Camera targets stay inside the bounds
     (the game clamps any beyond them), first and last on the bounds, the rest spread evenly,
     at most `keep` of a screen apart."""
-    view_w = manifest["screen"]["w"] / manifest["pxPerCell"]
-    view_h = manifest["screen"]["h"] / manifest["pxPerCell"]
-
-    def spread(span: float, max_step: float) -> tuple[int, float]:
-        count = max(1, math.ceil(span / max_step) + 1)
-        return count, (span / (count - 1) if count > 1 else max_step)
-
-    cols, step_x = spread(bounds["right"] - bounds["left"], view_w * manifest["keep"])
-    rows, step_y = spread(bounds["top"] - bounds["bottom"], view_h * manifest["keep"])
-    tiles = []
-    for row in range(rows):
-        for col in range(cols):
-            tiles.append({"index": len(tiles), "row": row, "col": col, "x": bounds["left"] + col * step_x, "y": bounds["top"] - row * step_y})
-    manifest.update(tiles=tiles, area=dict(bounds), cameraBounds=dict(bounds), cols=cols, rows=rows, step={"x": step_x, "y": step_y})
+    grid = plan_tiles(bounds, manifest["screen"]["w"] / manifest["pxPerCell"], manifest["screen"]["h"] / manifest["pxPerCell"], manifest["keep"])
+    manifest.update(grid, area=dict(bounds), cameraBounds=dict(bounds))
 
 
 class Session:
@@ -107,6 +91,7 @@ class Session:
         self.strip_width = strip_width
         self._seq = 0
         self._menu_checked = 0.0
+        self.team = 1  # our player's side (1 Order, 2 Chaos): "side" switches it, for the team-colour pairs
 
     def raw_grab(self) -> np.ndarray:
         """The screen as it is. The grab copies whatever is on screen there, so the game must be
@@ -145,59 +130,72 @@ class Session:
     def status(self) -> Status | None:
         return self.read(self.raw_grab())
 
-    @property
-    def last_seq(self) -> int:
-        return self._seq
+    def camera(self, default: dict | None = None) -> dict:
+        """Where the camera is ({x, y} in cells), from the strip; `default` (or {}) when it can't be read."""
+        status = self.status()
+        return status.camera if status else dict(default or {})
 
-    def fresh(self, timeout: float = 1.0) -> np.ndarray | None:
-        """A frame grabbed now in which the strip still shows the last command's number: the
-        game drew it after that command was carried out, and nothing else was sent since."""
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            raw = self.raw_grab()
-            status = self.read(raw)
-            if status is not None and status.seq == self._seq:
-                return raw
-            time.sleep(0.02)
-        self.read(self.raw_grab(), waited=True)
-        return None
-
-    def wait_for(self, check, timeout: float = 1.0) -> np.ndarray | None:
-        """A frame whose strip passes `check` (a Status -> bool), grabbed within `timeout`."""
+    def poll(self, check, timeout: float = 1.0) -> tuple[Status, np.ndarray] | None:
+        """A frame whose strip passes `check` (a Status -> bool), grabbed within `timeout`: its
+        status and the raw frame; None when none did (and then, if a menu is open over the map, the
+        step stops: read)."""
         deadline = time.time() + timeout
         while time.time() < deadline:
             raw = self.raw_grab()
             status = self.read(raw)
             if status is not None and check(status):
-                return raw
+                return status, raw
             time.sleep(0.02)
         self.read(self.raw_grab(), waited=True)
         return None
+
+    def fresh(self, timeout: float = 1.0) -> np.ndarray | None:
+        """A frame grabbed now in which the strip still shows the last command's number: the
+        game drew it after that command was carried out, and nothing else was sent since."""
+        found = self.poll(lambda st: st.seq == self._seq, timeout)
+        return found[1] if found else None
 
     def send(self, command: str, timeout: float = 2.0, sends: int = 4) -> tuple[Status, np.ndarray] | None:
         """A command typed into the map's command box with a sequence number appended, then the
         strip polled until it shows that number: the command has been carried out and the frame
         rendered. Returns the status and that raw frame; None when the map never answered (sent
         `sends` times, `timeout` seconds each). Before each retry, the chat's "focus" gives the
-        box the keyboard back, in case it lost it (see capture_script.galaxy's command box)."""
+        box the keyboard back, in case it lost it (see map/script.galaxy's command box)."""
         for attempt in range(sends):
             self.read(self.raw_grab())  # a menu opened since the last command: wait, rather than type into it
             if attempt:
                 detail(f"no answer to \"{command}\"; giving the command box the keyboard back (chat \"focus\")")
                 self._seq = self._seq % 255 + 1
                 send_chat(f"focus {self._seq} ;")
-                self.wait_for(lambda st: st.seq == self._seq, timeout=1.0)
+                self.poll(lambda st: st.seq == self._seq, timeout=1.0)
             self._seq = self._seq % 255 + 1  # 1..255; 0 is what the strip shows before any command
             send_command(f"{command} {self._seq}")
-            deadline = time.time() + timeout
-            while time.time() < deadline:
-                raw = self.raw_grab()
-                status = self.read(raw)
-                if status is not None and status.seq == self._seq:
-                    return status, raw
-                time.sleep(0.02)
-            self.read(self.raw_grab(), waited=True)  # unanswered: a menu open over the map takes the keys
+            answer = self.poll(lambda st: st.seq == self._seq, timeout)  # unanswered: a menu open over the map takes the keys
+            if answer is not None:
+                return answer
         return None
+
+    def command(self, text: str, timeout: float = 3.0) -> Status | None:
+        """A command whose answer only matters as far as a warning: the status it was answered with,
+        or None (warned)."""
+        answer = self.send(text, timeout=timeout)
+        if answer is None:
+            warn(f"  no answer to \"{text}\"")
+            return None
+        return answer[0]
+
+    def side(self, team: int) -> bool:
+        """Our player put on a team ("side <team>": 1 Order, 2 Chaos); whether the map answered."""
+        if self.send(f"side {team}", timeout=3.0) is None:
+            return False
+        self.team = team
+        return True
+
+    def move_camera(self, x: float, y: float, timeout: float = 3.0) -> Status | None:
+        """The camera to a cell ("tile 0 <x> <y>": the capture camera, no tile's scene), once it has
+        stopped; the status it was answered with (the camera where the bounds let it go), or None."""
+        answer = self.send(f"tile 0 {x:.2f} {y:.2f}", timeout=timeout)
+        return answer[0] if answer else None
 
 
 # ------------------------------------------------------------------------------------------------
@@ -293,11 +291,11 @@ def game_bounds(session: Session, manifest: dict) -> dict | None:
     """The camera bounds the game applies right now: where the camera stops when sent to the
     map's corners (None if the map didn't answer, or the result makes no sense)."""
     size = manifest["mapSize"]
-    low = step(lambda: session.send("tile 0 0 0", timeout=3.0), "the bounds check")
-    high = step(lambda: session.send(f"tile 0 {size['width']} {size['height']}", timeout=3.0), "the bounds check")
+    low = step(lambda: session.move_camera(0, 0), "the bounds check")
+    high = step(lambda: session.move_camera(size["width"], size["height"]), "the bounds check")
     if not (low and high):
         return None
-    bounds = {"left": low[0].camera_x, "bottom": low[0].camera_y, "right": high[0].camera_x, "top": high[0].camera_y}
+    bounds = {"left": low.camera_x, "bottom": low.camera_y, "right": high.camera_x, "top": high.camera_y}
     return bounds if bounds["left"] < bounds["right"] and bounds["bottom"] < bounds["top"] else None
 
 
@@ -313,7 +311,7 @@ def measure_bounds(session: Session, manifest: dict, manifest_path: Path) -> Non
     planned = manifest["cameraBounds"]
     if any(abs(bounds[k] - planned[k]) > 2 for k in bounds):
         plan_grid(manifest, bounds)
-        manifest_path.write_text(json.dumps(manifest, indent=2))
+        write_manifest(manifest_path, manifest)
         log(f"camera bounds in the game: {bounds} (map file: {planned}); grid re-planned: {manifest['cols']}x{manifest['rows']} = {len(manifest['tiles'])} tiles")
     else:
         log(f"camera bounds in the game match the map file: {bounds}")
@@ -352,7 +350,7 @@ def start_up(session: Session, manifest: dict, manifest_path: Path, out: Path, b
         # The blanked column's width goes into the manifest (status.pageLeft): the stitch leaves
         # it out of every tile, and a resumed run blanks it from its first frame.
         manifest["status"]["pageLeft"] = wait_for_strip(session, out)
-        manifest_path.write_text(json.dumps(manifest, indent=2))
+        write_manifest(manifest_path, manifest)
         # The map running is the one prepared for this run (not one an earlier run left).
         expected_id = manifest["status"].get("mapId")
         seen = step(session.status, "reading the strip")
@@ -397,29 +395,6 @@ def finish_start_up(session: Session, manifest: dict, manifest_path: Path, until
 # ------------------------------------------------------------------------------------------------
 
 
-def black_settled(session: Session, first: np.ndarray, white: np.ndarray) -> np.ndarray:
-    """The shot over black, once the skybox swap has finished rendering: the share of black
-    pixels jumps and then holds still between two grabs (no sky in view: the first frame as it
-    is)."""
-
-    def black_share(frame: np.ndarray) -> float:
-        return float((frame[::4, ::4].max(axis=2) <= 6).mean())
-
-    before, frame, share = black_share(white), first, black_share(first)
-    for _ in range(8):
-        if share - before <= 0.005:
-            return frame  # no sky in view, or the swap not rendered yet
-        settle(0.05)
-        again = session.grab(dark_ok=True)
-        if again is None:
-            return frame
-        next_share = black_share(again)
-        if abs(next_share - share) < 0.002:
-            return again
-        frame, share = again, next_share
-    return frame
-
-
 def whole_frame(session: Session, frame: np.ndarray | None, reference: np.ndarray | None) -> tuple[np.ndarray | None, bool]:
     """The kept shot, retaken while it disagrees with the tile's reference frame (the frame the
     strip acknowledged `tile` in: same view) and with the retake before it: a half-drawn frame.
@@ -447,15 +422,41 @@ def whole_frame(session: Session, frame: np.ndarray | None, reference: np.ndarra
     return frame, False
 
 
-def shoot_once(session: Session, tile: dict, settle_time: float, matting: bool):
+# Cells round a team-coloured doodad watched for a side switch (team_boxes), and how far past a
+# tile's view one may stand and still reach into it (a starting platform, an outer wall).
+TEAM_RADIUS, TEAM_REACH = 3.0, 6.0
+
+
+def team_boxes(manifest: dict, camera: dict, shape: tuple) -> list[tuple[int, int, int, int]] | None:
+    """The screen boxes round the team-coloured doodads in a tile's view (manifest teamColoured,
+    from the map's Objects file), watched for a side switch; None when there are none: nothing in
+    the view changes with the side."""
+    ppc, screen = manifest["pxPerCell"], manifest["screen"]
+    half_w, half_h = screen["w"] / ppc / 2 + TEAM_REACH, screen["h"] / ppc / 2 + TEAM_REACH
+    near = [{"x": x, "y": y} for x, y in manifest.get("teamColoured") or []
+            if abs(x - camera["x"]) <= half_w and abs(y - camera["y"]) <= half_h]
+    if not near:
+        return None
+    return [circle_box(screen_point(cell, camera, screen, ppc), TEAM_RADIUS * ppc, shape) for cell in near]
+
+
+def shoot_once(session: Session, tile: dict, settle_time: float, manifest: dict):
     """(the strip's status at the tile: where the camera really is; the kept shot; the same view
     over the black skybox when matting; whether the kept shot doesn't match the view the tile
-    was acknowledged in)."""
+    was acknowledged in; with team-coloured doodads in view, the same from Chaos's side: its shot
+    and its shot over black when matting, else None).
+
+    With team-coloured doodads in view, the shots are taken in the order that needs no extra sky
+    swap, as the elements' are: the kept shot from Order, switch, from Chaos, black from Chaos,
+    switch back, black from Order."""
+    matting = (manifest.get("sky") or {}).get("mode") == "matte"
+    if session.team != 1 and session.side(1):  # a step done again after a lost focus, left on Chaos
+        settle(SWITCH_CAP)
     # `tile`, acknowledged once the camera has moved and been clamped: the status says where
     # the camera really is, and the acknowledged frame is the reference view.
     answer = session.send(tile_command(tile), timeout=3.0)
     if answer is None:
-        return None, None, None, False
+        return None, None, None, False, None
     moved = time.time()
     status = answer[0]
     reference = session.blank(answer[1])
@@ -467,26 +468,36 @@ def shoot_once(session: Session, tile: dict, settle_time: float, matting: bool):
         settle(wait)
     raw = session.fresh()
     if raw is None:
-        return status, None, None, False
+        return status, None, None, False, None
     frame, mismatch = whole_frame(session, session.blank(raw), reference)
+    boxes = team_boxes(manifest, status.camera, frame.shape) if frame is not None else None
+    chaos = None
+    if boxes is not None and session.side(2):
+        chaos_white, _ = recoloured_frame(session, frame, boxes)
+        chaos_black = shot_over_black(session, chaos_white) if matting else None
+        reference = chaos_black if matting else chaos_white
+        back = session.side(1)
+        # Shot 2 (matting): the same over black, from Order again (the sky already black).
+        black = None
+        if back:
+            again, _ = recoloured_frame(session, reference, boxes)
+            black = again if matting and chaos_black is not None else None  # (no black answered: the sky's state unknown)
+        return status, frame, black, mismatch, (chaos_white, chaos_black)
     # Shot 2 (matting): the same over black; the stitch turns the pair into colour and
     # transparency.
     black = None
     if matting and frame is not None:
-        answer = session.send("black")
-        raw = answer[1] if answer is not None else None
-        if raw is not None:
-            black = black_settled(session, session.blank(raw), frame)
-    return status, frame, black, mismatch
+        black = shot_over_black(session, frame)
+    return status, frame, black, mismatch, None
 
 
-def shoot(session: Session, tile: dict, settle_time: float, matting: bool):
+def shoot(session: Session, tile: dict, settle_time: float, manifest: dict):
     """One tile, start to finish, as one step. A tile whose kept shot isn't the view it was
     acknowledged in (something moved the camera in between) is done again, once."""
-    result = shoot_once(session, tile, settle_time, matting)
+    result = shoot_once(session, tile, settle_time, manifest)
     if result[3] and result[1] is not None:
         log(f"    tile {tile['index'] + 1}: the view changed under it; doing it again")
-        result = shoot_once(session, tile, settle_time, matting)
+        result = shoot_once(session, tile, settle_time, manifest)
     return result
 
 
@@ -577,7 +588,7 @@ def capture_tiles(session: Session, manifest: dict, start: int, settle_time: flo
     def take(tile: dict, total: int, sides: list[str]) -> None:
         note = ""
         try:
-            status, frame, black, mismatch = step(lambda: shoot(session, tile, settle_time, matting), f"tile {tile['index'] + 1}/{total}")
+            status, frame, black, mismatch, chaos = step(lambda: shoot(session, tile, settle_time, manifest), f"tile {tile['index'] + 1}/{total}")
         except Recoverable as e:
             if e.resume_at is None:  # lost during this tile (the game closed): the fresh launch carries on at it
                 e.resume_at = tile["index"]
@@ -588,8 +599,8 @@ def capture_tiles(session: Session, manifest: dict, start: int, settle_time: flo
                 state["cleared"] = status.cleared_since_ready
             if status.intro:
                 note += "  (the intro cutscene is playing)"
-            positions[str(tile["index"])] = {"x": status.camera_x, "y": status.camera_y}
-            positions_path.write_text(json.dumps(positions))
+            positions[str(tile["index"])] = status.camera
+            write_json(positions_path, positions, indent=None)
             note += offset_note(status, tile)
             if mismatch:
                 note += "  (kept shot doesn't match the view the tile was acknowledged in)"
@@ -615,12 +626,22 @@ def capture_tiles(session: Session, manifest: dict, start: int, settle_time: flo
             return
         state["failures"] = 0
         state["previous"] = frame
-        saver.submit(save_frame, out / f"tile_{tile['index']:04d}", frame)
+        saver.submit(save_frame, tile_stem(out, tile["index"]), frame)
         if matting:
             if black is not None:
-                saver.submit(save_frame, out / f"tile_{tile['index']:04d}-black", black)
+                saver.submit(save_frame, tile_stem(out, tile["index"], black=True), black)
             else:
                 note += "  (no shot over black; kept opaque)"
+        if chaos is not None:
+            # The team-colour pair: the same view from Chaos's side (the stitch's team-colour mask).
+            chaos_white, chaos_black = chaos
+            if chaos_white is not None and (chaos_black is not None or not matting):
+                saver.submit(save_frame, tile_stem(out, tile["index"], chaos=True), chaos_white)
+                if chaos_black is not None:
+                    saver.submit(save_frame, tile_stem(out, tile["index"], black=True, chaos=True), chaos_black)
+                note += "  (and from Chaos's side)"
+            else:
+                note += "  (no shots from Chaos's side)"
         for side in sides:
             if edge_content(frame, black, matting, left, side):
                 flagged.append((tile, side))
@@ -634,9 +655,9 @@ def capture_tiles(session: Session, manifest: dict, start: int, settle_time: flo
         # A resumed run: the outer tiles shot before it still count (from their saved shots).
         for tile in tiles[:start]:
             sides = sides_of(tile)
-            if sides and frame_exists(out / f"tile_{tile['index']:04d}"):
-                frame = load_frame(out / f"tile_{tile['index']:04d}")
-                black = load_frame(out / f"tile_{tile['index']:04d}-black") if frame_exists(out / f"tile_{tile['index']:04d}-black") else None
+            if sides and frame_exists(tile_stem(out, tile["index"])):
+                frame = load_frame(tile_stem(out, tile["index"]))
+                black = load_frame(tile_stem(out, tile["index"], black=True)) if frame_exists(tile_stem(out, tile["index"], black=True)) else None
                 flagged.extend((tile, side) for side in sides if edge_content(frame, black, matting, left, side))
     if any(t.get("edge") for t in tiles[start:]):
         # Tiles past the grid left by the run this one resumes: the camera bounds lifted again.
@@ -678,7 +699,7 @@ def extend_past_grid(manifest: dict, tiles: list, flagged: list, take, session, 
             unbound_sent = True
         log(f"  the map runs on past the grid's edge at {len(new)} tiles: {len(new)} more beyond them (ring {ring + 1})")
         tiles.extend(tile for tile, _ in new)
-        manifest_path.write_text(json.dumps(manifest, indent=2))  # before shooting: a resumed run knows them, and the stitch places them
+        write_manifest(manifest_path, manifest)  # before shooting: a resumed run knows them, and the stitch places them
         with ui.bar(len(new), f"tiles past the grid (ring {ring + 1})") as advance:
             for tile, side in new:
                 take(tile, len(tiles), [side])
@@ -692,30 +713,28 @@ def extend_past_grid(manifest: dict, tiles: list, flagged: list, take, session, 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="heroes-capture capture", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("manifest", type=Path, help="the .json written by inject.py")
+    ap.add_argument("manifest", type=Path, help="the .json written by prepare")
     ap.add_argument("--game", help="Heroes of the Storm folder (found from the install by default)")
     ap.add_argument("--battlenet", default=os.environ.get("HRS_BATTLENET"), help="the Battle.net app (Battle.net.exe), used to start Heroes when it isn't running; found automatically if not given")
     ap.add_argument("--no-launch", action="store_true", help="the map is already running")
     ap.add_argument("--launch-only", action="store_true", help="launch the map and stop (to try the commands by hand)")
-    ap.add_argument("--probe-light", action="store_true", help="diagnostic: command sequences at chosen points (HRS_PROBE_POINTS, HRS_PROBE_TILE_PATH), a shot after each")
-    ap.add_argument("--probe-sky", action="store_true", help="diagnostic: one edge tile over each solid-colour skybox, to check the colour shows and is uniform")
-    ap.add_argument("--probe-waits", action="store_true", help="diagnostic: the fixed waits tried shorter on sample tiles and a sky swap, compared with the current ones; and the sky pass with positions further apart")
-    ap.add_argument("--probe-elements", action="store_true", help="diagnostic: the same views over white, black and two greys at spots with added light (shields, orbs, lava, embers), to compare mattes")
-    ap.add_argument("--probe-sky-reach", action="store_true", help="diagnostic: the camera as far past the camera bounds as it goes, the sky shot there with the render's lens and wider ones, to see how much parallax sky there is")
-    ap.add_argument("--probe-depth", action="store_true", help="diagnostic: only measure the sky layers' parallax (done during the start-up in every render)")
-    ap.add_argument("--probe-monitor", action="store_true", help="diagnostic: the start-up at this monitor's resolution (with --monitor), then a report on the window, the strip's cells and the first tile; run once per monitor")
-    ap.add_argument("--settle", type=float, default=0.1, help="least seconds from a move to the kept screenshot (default 0.1; the waits probe found differences only where the scene animates anyway, as at 0.5)")
+    for name, (_, what) in probes.PROBES.items():
+        ap.add_argument(f"--probe-{name}", action="store_true", help=f"diagnostic: {what}")
+    ap.add_argument("--settle", type=float, default=0.1, help="least seconds from a move to the kept screenshot (default 0.1: shorter showed differences only where the scene animates anyway)")
     ap.add_argument("--start", type=int, default=0, help="first tile, to resume a run (default 0)")
     ap.add_argument("--monitor", help="put the game on this monitor before launching the map (its number as Windows lists them, its device name, or primary); the map then runs at its resolution")
     ap.add_argument("--monitor-region", type=int, help="diagnostic: capture this mss monitor number instead of the game window")
     return ap.parse_args(argv)
 
 
-def main(argv: list[str]) -> None:
+def main(argv: list[str], specifics_of: Callable[[dict], Specifics]) -> None:
+    """Capture a prepared map; specifics_of(manifest) gives what its category and the map itself
+    add (cli.specifics_of)."""
     args = parse_args(argv)
-    manifest = json.loads(args.manifest.read_text())
+    manifest = read_json(args.manifest)
+    specifics = specifics_of(manifest)
     if not manifest.get("status"):
-        sys.exit(f"{args.manifest} has no status strip: prepare the map again with inject.py")
+        sys.exit(f"{args.manifest} has no status strip: prepare the map again")
     tiles = manifest["tiles"]
     out = args.manifest.parent / manifest["id"] / "tiles"
     out.mkdir(parents=True, exist_ok=True)
@@ -731,7 +750,7 @@ def main(argv: list[str]) -> None:
     # Where the camera really was for each tile (the status strip's echo), for stitch.py; kept
     # across a resumed run.
     positions_path = args.manifest.parent / manifest["id"] / "positions.json"
-    positions: dict = json.loads(positions_path.read_text()) if args.start and positions_path.exists() else {}
+    positions: dict = read_json(positions_path) if args.start and positions_path.exists() else {}
 
     if not args.no_launch:
         game = args.game or find_install()
@@ -742,20 +761,9 @@ def main(argv: list[str]) -> None:
         done("Launched. In the game, type commands ending in ';' (the map's command box has the keyboard): 'tile <n>;' moves to a tile, 'clean;', 'black;', 'sky <colour>;', 'pause;'.")
         return
 
-    if args.probe_light:
-        log(f"Lighting probe on {manifest['map']}: screenshots at chosen spots and cameras.")
-    elif args.probe_waits:
-        log(f"Waits probe on {manifest['map']}: sample tiles and a sky swap with shorter waits, compared with the current ones.")
-    elif args.probe_depth:
-        log(f"Sky depth probe on {manifest['map']}: the sky layers' parallax, measured at three camera positions.")
-    elif args.probe_monitor:
-        log(f"Monitor probe on {manifest['map']}: the start-up at this monitor's resolution, then a report on what the tool found there.")
-    elif args.probe_elements:
-        log(f"Elements probe on {manifest['map']}: the same views over white, black and two greys, for the matte.")
-    elif args.probe_sky_reach:
-        log(f"Sky reach probe on {manifest['map']}: the camera as far past the camera bounds as it goes, the sky shot there through wider lenses.")
-    elif args.probe_sky:
-        log(f"Skybox probe on {manifest['map']}: one edge tile, a scripted sequence of skybox swaps, a shot after each.")
+    probe = next((name for name in probes.PROBES if getattr(args, f"probe_{name.replace('-', '_')}")), None)
+    if probe:
+        log(f"Probe {probe} on {manifest['map']}: {probes.PROBES[probe][1]}.")
     else:
         shots = "two shots each (over the light grey, over black)" if (manifest.get("sky") or {}).get("mode") == "matte" else "one shot each (over black; the void is black terrain)"
         resumed = f", carrying on at tile {args.start + 1}" if args.start else ""
@@ -777,7 +785,6 @@ def main(argv: list[str]) -> None:
         if (region["width"], region["height"]) != expected:
             warn(f"that is not the {expected[0]}x{expected[1]} the grid was planned for; the stitch will still work, at a different scale")
         session = Session(screen, int(manifest["status"].get("pageLeft", 0)))
-        probe = args.probe_light or args.probe_sky or args.probe_sky_reach or args.probe_waits or args.probe_depth or args.probe_elements or args.probe_monitor
         measured = None
         sky_waits = False  # the sky work put off until the map is ready (its world was hidden)
 
@@ -809,35 +816,11 @@ def main(argv: list[str]) -> None:
         start_up(session, manifest, args.manifest, out, before_ready=None if probe or sky_done else lambda: sky_work(wait_if_hidden=True))
         if sky_waits:
             sky_work()
-        if args.probe_light:
-            probes.probe_light(session, manifest, out)
+        if probe:
+            probes.PROBES[probe][0](session, manifest, out)
             return
-        if args.probe_sky_reach:
-            probes.probe_sky_reach(session, manifest, out)
-            return
-        if args.probe_sky:
-            probes.probe_sky(session, manifest, out)
-            return
-        if args.probe_waits:
-            probes.probe_waits(session, manifest, out)
-            return
-        if args.probe_elements:
-            probes.probe_elements(session, manifest, out)
-            return
-        if args.probe_monitor:
-            probes.probe_monitor(session, manifest, out)
-            return
-        if args.probe_depth:
-            with stage("sky depth measurement"):
-                step(lambda: sky_layers.measure(session, manifest, out.parent), "measuring the sky layers")
-            with stage("leaving"):
-                quit_match()
-            log_timings("capture")
-            return
-        if manifest.get("structures") == "elements":
-            # Each structure and camp on its own, then every structure brought down: the tiles
-            # are the bare terrain (a resumed run only brings them down again).
-            element_capture.capture_elements(session, manifest, out.parent, tile_command, black_settled)
+        for hook in specifics.before_tiles:
+            hook(session, manifest, out.parent)
         capture_tiles(session, manifest, args.start, args.settle, out, positions, positions_path, args.manifest)
 
     with stage("leaving"):

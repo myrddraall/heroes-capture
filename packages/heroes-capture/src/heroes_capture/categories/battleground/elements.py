@@ -1,8 +1,7 @@
 """Map elements (ELEMENTS-PLAN.md): what a render cuts out of a map, read from its files when it is
 prepared (its structures, towns and camps: element_list), an element's cut-out from its shots alone
-over the sky (cut_out), and the holes the cores stand on (filled when a map is prepared, opened
-again by the capture script as it starts). The elements probe (probes.py, --probe-elements) uses
-the rest: its targets, and the pixels two shots of the same view differ in."""
+over the sky (matting.cut_out), and the holes the cores stand on (filled when a map is prepared, opened
+again by the capture script as it starts)."""
 
 import math
 import re
@@ -11,30 +10,15 @@ import struct
 import numpy as np
 from scipy import ndimage
 
-from .stormlib import Archive
-from .sky import LIGHT_LEVEL
+from heroes_capture.map.galaxy import functions
 
-# The Order team's computer player (libCore_gv_cOMPUTER_TeamOrder), who owns its structures, and
-# its number in libGame_gv_teams.
-ORDER_PLAYER, ORDER_TEAM = 11, 1
-# A town's structures: those within this many cells of its town hall (its walls reach 13).
-TOWN_RADIUS = 14
-# Pixels that differ by more than this (the largest of the three channels) count as changed.
-ELEMENT_THRESHOLD = 24
-# An element's cut-out from its shots alone over the sky (cut_out), opacity out of 255. At or below
-# VEIL: transparent. At or above SOLID: opaque; soft edges, glass and glows lie between. Measured
-# over the white sky, whose bloom left a veil on the sky (99.9% of its pixels at 7 or less) and took
-# solid parts down to about 236 (Battlefield of Eternity's tower, camp and Immortal: the elements
-# probe); over the light grey the sky comes out at exactly 0 and solid parts at exactly 255 (the
-# matte probe), so they hold with room to spare.
-VEIL_ALPHA, SOLID_ALPHA = 8, 235
-# A pixel of an element's shot within this much (the largest of the three channels) of the same
-# pixel in its tile's shot with everything hidden is something that can't be hidden (a cliff
-# doodad), not the element: two shots over the sky differ by almost nothing (the probe: at most
-# 0.006% of pixels between two in a row).
-EMPTY_MATCH = 10
-
-
+# A town hall's ring: the structures of its town's region within this many cells of it (hall,
+# fountain, gate, towers, walls at up to 14.4, and the standalone tower a fort takes with it when
+# it falls: GameLib kills one within 15). A town region's structures beyond the ring are its
+# outposts (the towers, gate and fountain the map adds further down the lane): structures within
+# OUTPOST_LINK cells of one another form one.
+RING_RADIUS = 15
+OUTPOST_LINK = 14
 # t3CellFlags (the map's terrain cells, a byte each): the cell is a hole, not drawn (the sky shows
 # through). Battlefield of Eternity's cores each stand on a small hole their pedestal covers.
 CELL_HOLE = 4
@@ -53,12 +37,6 @@ def parse_objects(objects: str) -> tuple[list[dict], list[dict]]:
         return found
 
     return parse("ObjectUnit", "UnitType"), parse("ObjectDoodad", "Type")
-
-
-def placed(manifest: dict) -> tuple[list[dict], list[dict]]:
-    """The prepared map's placed units and doodads."""
-    with Archive(manifest["stormmap"]) as archive:
-        return parse_objects(archive.read_text("Objects") or "")
 
 
 def is_structure(unit_type: str) -> bool:
@@ -158,12 +136,12 @@ def region_contains(region: dict, x: float, y: float) -> bool:
 def parse_towns(script: str, regions: dict[int, dict]) -> list[dict]:
     """The map's towns, as its script hooks them up for GameLib (libGame_gv_townTownData, numbered
     in that order: each "lv_town += 1"): lane (the lv_lane last set), owner and region."""
-    hookup = re.search(r"bool gt_HookupTownData_Func[\s\S]*?\n}", script)
+    hookup = functions(script).get("gt_HookupTownData_Func")
     towns, lane = [], None
     if not hookup:
         return towns
     events = r"\blv_lane = (\d+);|\b(lv_town \+= 1);|\.lv_owner = libCore_gv_cOMPUTER_Team(\w+);|\.lv_townRegion = RegionFromId\((\d+)\);"
-    for m in re.finditer(events, hookup.group(0)):
+    for m in re.finditer(events, hookup):
         if m.group(1):
             lane = int(m.group(1))
         elif m.group(2):
@@ -181,11 +159,11 @@ def parse_camps(script: str, points: dict[int, tuple[float, float]]) -> list[dic
     (libMapM_gv_jungleCreepCamps, numbered in that order, each "lv_junglecamp += 1":
     libMapM_gf_JungleRespawnCreepsForCamp's numbers): defender type, its captain's and defenders'
     spawn points (Objects' points), their middle, and how far they spread from it."""
-    hookup = re.search(r"bool gt_HookupJungleCreepData_Func[\s\S]*?\n}", script)
+    hookup = functions(script).get("gt_HookupJungleCreepData_Func")
     camps = []
     if not hookup:
         return camps
-    for n, block in enumerate(re.split(r"\blv_junglecamp \+= 1;", hookup.group(0))[1:], start=1):
+    for n, block in enumerate(re.split(r"\blv_junglecamp \+= 1;", hookup)[1:], start=1):
         kind = re.search(r"lv_mapDataCampDefenderType = libMapM_ge_JungleCampDefenderTypes_(\w+);", block)
         ids = re.findall(r"lv_mapData(?:CampCaptainSpawnPoint|DefenderSpawnPoints\[\d+\]) = PointFromId\((\d+)\);", block)
         spots = [points[int(i)] for i in ids if int(i) in points]
@@ -197,11 +175,41 @@ def parse_camps(script: str, points: dict[int, tuple[float, float]]) -> list[dic
     return camps
 
 
+def group_outposts(structures: list[dict], towns: list[dict]) -> list[dict]:
+    """The towns' outposts, numbered in town order and, within a town, from the hall outwards: a
+    town's structures beyond its hall's ring (RING_RADIUS), joined when within OUTPOST_LINK of one
+    another. Sets each structure's "outpost" (None: the ring, the cores, anything outside the
+    towns, and a town without a hall) and returns the outposts: number, town, lane, owner and the
+    middle of the structures."""
+    outposts = []
+    for u in structures:
+        u["outpost"] = None
+    for t in towns:
+        own = [u for u in structures if u["town"] == t["town"]]
+        hall = next((u for u in own if u["type"].startswith("TownTownHall")), None)
+        if hall is None:
+            continue
+        beyond = [u for u in own if math.dist((u["x"], u["y"]), (hall["x"], hall["y"])) > RING_RADIUS]
+        clusters: list[list[dict]] = []
+        for u in beyond:
+            near = [c for c in clusters if any(math.dist((u["x"], u["y"]), (v["x"], v["y"])) <= OUTPOST_LINK for v in c)]
+            merged = [u] + [v for c in near for v in c]
+            clusters = [c for c in clusters if c not in near] + [merged]
+        middles = [(sum(u["x"] for u in c) / len(c), sum(u["y"] for u in c) / len(c), c) for c in clusters]
+        for x, y, c in sorted(middles, key=lambda m: math.dist(m[:2], (hall["x"], hall["y"]))):
+            outposts.append({"outpost": len(outposts) + 1, "town": t["town"], "lane": t["lane"], "owner": t["owner"],
+                             "x": round(x, 3), "y": round(y, 3)})
+            for u in c:
+                u["outpost"] = outposts[-1]["outpost"]
+    return outposts
+
+
 def element_list(script: str, objects: str, regions_xml: str) -> dict:
     """What a render cuts out of a map (ELEMENTS-PLAN.md), read from its files when it is prepared:
-    its structures (Objects' placed units) with their towns (the region each stands in), its camps,
-    and for each element the radius of the circle that isolates it. Which tile each is shot from is
-    the capture's to pick (source_tile): the grid can be planned again once the map is running."""
+    its structures (Objects' placed units) with their towns (the region each stands in) and
+    outposts (group_outposts), its camps, and for each element the radius of the circle that
+    isolates it. Which tile each is shot from is the capture's to pick (source_tile): the grid can
+    be planned again once the map is running."""
     regions = parse_regions(regions_xml)
     towns = parse_towns(script, regions)
     structures = []
@@ -211,10 +219,11 @@ def element_list(script: str, objects: str, regions_xml: str) -> dict:
         town = next((t["town"] for t in towns if region_contains(regions.get(t["region"], {"shapes": []}), u["x"], u["y"])), None)
         structures.append({"id": u["id"], "type": u["type"], "x": u["x"], "y": u["y"], "owner": OWNERS.get(u["player"]),
                            "town": town, "core": u["type"].endswith("Core"), "radius": STRUCTURE_RADIUS})
+    outposts = group_outposts(structures, towns)
     camps = parse_camps(script, parse_points(objects))
     for c in camps:
         c["radius"] = round(c["spread"] + CAMP_MARGIN, 3)
-    return {"structures": structures, "towns": towns, "camps": camps}
+    return {"structures": structures, "towns": towns, "outposts": outposts, "camps": camps}
 
 
 # Structures never copied (they fall themselves, in waves): the cores (a copy lacks the statue and
@@ -347,80 +356,3 @@ def source_tile(element: dict, tiles: list[dict]) -> dict:
     """The grid tile an element is shot from: the one whose centre is nearest it (the least
     perspective lean), so its cut-out drops into the map where that tile's pixels are used."""
     return min(tiles, key=lambda t: math.dist((t["x"], t["y"]), (element["x"], element["y"])))
-
-
-def element_targets(manifest: dict) -> dict:
-    """What the elements probe shoots, read from the map: the Order team's forward town (its town
-    hall furthest from its core, and the structures within TOWN_RADIUS of it), the mercenary camp
-    nearest that town, the Order core, and the middle of the map (where the objective spawns)."""
-    units, doodads = placed(manifest)
-    order = [u for u in units if u["player"] == ORDER_PLAYER]
-    core = next(u for u in order if u["type"].endswith("Core"))
-    hall = max((u for u in order if u["type"].startswith("TownTownHall")), key=lambda u: math.dist((u["x"], u["y"]), (core["x"], core["y"])))
-    town = sorted((u for u in order if u["type"].startswith("Town") and math.dist((u["x"], u["y"]), (hall["x"], hall["y"])) <= TOWN_RADIUS),
-                  key=lambda u: math.dist((u["x"], u["y"]), (hall["x"], hall["y"])))
-    camps = [d for d in doodads if "MercCamp" in d["type"]]
-    camp = min(camps, key=lambda d: math.dist((d["x"], d["y"]), (hall["x"], hall["y"]))) if camps else None
-    area = manifest["area"]
-    middle = {"x": round((area["left"] + area["right"]) / 2, 1), "y": round((area["bottom"] + area["top"]) / 2, 1)}
-    return {"town": town, "camp": camp, "core": core, "middle": middle}
-
-
-def changed(a: np.ndarray, b: np.ndarray, left: int) -> np.ndarray:
-    """Where two shots of the same view differ (the strip's column left out: never changed)."""
-    mask = np.abs(a.astype(np.int16) - b.astype(np.int16)).max(axis=2) > ELEMENT_THRESHOLD
-    mask[:, :left] = False
-    return mask
-
-
-def describe(mask: np.ndarray) -> str:
-    """A difference in numbers: the share of pixels changed, and the box round them."""
-    if not mask.any():
-        return "no pixels changed"
-    rows, cols = np.flatnonzero(mask.any(axis=1)), np.flatnonzero(mask.any(axis=0))
-    box = (int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1)
-    fill = float(mask[box[1] : box[3], box[0] : box[2]].mean())
-    return f"{mask.mean() * 100:6.3f}% of pixels changed, within x {box[0]}..{box[2]}, y {box[1]}..{box[3]} ({fill * 100:.0f}% of that box)"
-
-
-def screen_point(spot: dict, tile: dict, screen: dict, px_per_cell: float) -> tuple[float, float]:
-    """Where a cell is on screen in a tile's shot (the camera straight down at the tile's centre)."""
-    return screen["w"] / 2 + (spot["x"] - tile["x"]) * px_per_cell, screen["h"] / 2 - (spot["y"] - tile["y"]) * px_per_cell
-
-
-def circle_box(centre: tuple[float, float], radius: float, shape: tuple[int, ...]) -> tuple[int, int, int, int]:
-    """The rows and columns (v0, v1, u0, u1) of a frame of `shape` that hold a circle (`centre`
-    and `radius` in pixels), a pixel to spare each way: all a cut-out needs of its shots."""
-    v0, v1 = max(0, math.floor(centre[1] - radius) - 1), min(shape[0], math.ceil(centre[1] + radius) + 2)
-    u0, u1 = max(0, math.floor(centre[0] - radius) - 1), min(shape[1], math.ceil(centre[0] + radius) + 2)
-    return v0, max(v0, v1), u0, max(u0, u1)
-
-
-def cut_out(white: np.ndarray, black: np.ndarray, centre: tuple[float, float], radius: float,
-            empty: np.ndarray | None = None, others: list[tuple[float, float]] = (), level: float | None = None) -> np.ndarray:
-    """An element's cut-out (RGBA) from its two shots alone over the sky, over white and over black:
-    matted as the stitch mattes a tile, then only the circle round it kept (`centre` and `radius` in
-    screen pixels), the sky's faint veil made transparent and the solid parts opaque, their colour
-    the black shot's (VEIL_ALPHA, SOLID_ALPHA). `empty`: its tile's shot over white with everything
-    hidden; what is the same in both is what can't be hidden (the map's cliff doodads), left out.
-    `others`: where other elements are on the shot (screen pixels), whose own pixels these may be
-    (rubble shot with all the rest of the rubble lying there): only what is nearer `centre` than
-    any of them is kept. `level`: the light sky's level, measured on the whole shot (light_level),
-    when these are only part of it (circle_box: the matte works pixel by pixel, so a part of the
-    shots gives that part of the cut-out exactly); measured on these when not given."""
-    from .stitch import matte, light_level  # here: the stitch imports inject, which imports this module
-
-    rgba = matte(white, black, level or light_level(white, black) or LIGHT_LEVEL, animated=False)
-    alpha = rgba[..., 3]
-    yy, xx = np.ogrid[: alpha.shape[0], : alpha.shape[1]]
-    own = (xx - centre[0]) ** 2 + (yy - centre[1]) ** 2
-    alpha[own > radius**2] = 0
-    for ox, oy in others:
-        alpha[(xx - ox) ** 2 + (yy - oy) ** 2 < own] = 0
-    if empty is not None:
-        alpha[np.abs(white.astype(np.int16) - empty.astype(np.int16)).max(axis=2) <= EMPTY_MATCH] = 0
-    alpha[alpha <= VEIL_ALPHA] = 0
-    solid = alpha >= SOLID_ALPHA
-    rgba[solid, :3] = black[solid]
-    alpha[solid] = 255
-    return rgba

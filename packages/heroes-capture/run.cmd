@@ -2,17 +2,18 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: a full elements render of Battlefield of Eternity, pack format 3 (the elements'
-rem cut-outs in atlases, an overview per tiled layer), on the primary monitor. --monitor <n> on the
-rem command puts the game on another monitor first (the run's log lists them); --probe-monitor
-rem --monitor <n> checks a monitor instead of rendering (README, Monitors).
+rem Current step: Dragon Shire (black void; 461 team-coloured doodads: its buildings, hedges, flags
+rem and lamps) and Punisher Arena (an arena: three areas and rounds), each rendered afresh with its
+rem structures kept, packs in format 6 with team colour (the structures' too, shot in the tiles).
+rem --monitor <n> puts the game on another monitor first.
 rem A failed run leaves its working files in tmp\ (pip, when it runs, writes tmp\setup.log).
 setlocal
 pushd "%~dp0"
 set "PYTHONPATH=%~dp0src"
 rem The tool's dependencies, installed quietly when missing (pip's output in tmp\setup.log).
 py -c "import heroes_capture.cli, numpy, PIL, pyvips, scipy, mss, pydirectinput, dxcam, typer, rich, pmtiles" 2>nul || call :install || goto :copy
-py -m heroes_capture map render "Battlefield of Eternity" --structures elements --force
+py -m heroes_capture map render "Dragon Shire" --force
+py -m heroes_capture map render "Punisher Arena" --force
 popd
 
 :copy

@@ -12,7 +12,6 @@
 parsers for now (`heroes-capture prepare --help`).
 """
 
-import json
 import os
 import shutil
 import sys
@@ -27,17 +26,18 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from . import ui
-from .game_menus import ScriptBroken
+from heroes_capture.common import ui
+from heroes_capture.common.game_menus import ScriptBroken
+from heroes_capture.common.jsonio import read_json, write_manifest
 
-PROBES = ("probe_light", "probe_sky", "probe_sky_reach", "probe_depth", "probe_waits", "probe_elements", "probe_monitor")
+PROBES = ("probe_monitor", "probe_sky", "probe_sky_reach")  # probes.PROBES, as `map render` takes them
 DISTANCE = "214"  # camera distance: far, so tall objects lean little at the seams
 KEEP = "0.4"  # share of each screenshot used, centred
-VALIDATED = Path(__file__).with_name("validated-maps.json")
 TMP = Path("tmp")  # the working files and the diagnostic log, in the current folder
 LOGS = Path("logs")  # the plain log: the output as --log prints it, kept
 MAPS = Path("maps")  # the default output folder
 PASS_THROUGH = {"allow_extra_args": True, "ignore_unknown_options": True}
+WINDOWS_ONLY = ("mss", "pydirectinput", "dxcam")  # what driving the game needs, and only Windows has
 
 app = typer.Typer(
     help="Captures Heroes of the Storm assets from the game client. Start Heroes from the Battle.net app "
@@ -62,22 +62,49 @@ def screen_size(monitor: str | None = None) -> str | None:
     picture the game letterboxes there (monitors.game_size). ValueError when none is named so."""
     if sys.platform != "win32":
         return None
-    from .monitors import choose
+    from heroes_capture.common.monitors import choose
 
     return choose(monitor or "primary").game_size
 
 
+def specifics_for(map_name: str, category: str):
+    """What a map's category and the map itself add to the stages (map/specifics.py): the
+    category's part (categories/<category>), then the map's own (maps/)."""
+    from heroes_capture import maps
+    from heroes_capture.categories.arena import specifics as arena
+    from heroes_capture.categories.battleground import specifics as battleground
+    from heroes_capture.map.specifics import Specifics
+
+    specifics = Specifics(category)
+    {"arena": arena, "battleground": battleground}[category].extend(specifics)
+    maps.extend(map_name, specifics)
+    return specifics
+
+
+def specifics_of_map(map_name: str, map_script: str):
+    """specifics_for a map being prepared, its category read from its script: an arena (a map of
+    rounds) or a battleground (any other)."""
+    from heroes_capture.categories.arena import specifics as arena
+
+    return specifics_for(map_name, "arena" if arena.matches(map_script) else "battleground")
+
+
+def specifics_of(manifest: dict):
+    """specifics_for a prepared map, as its manifest records it."""
+    return specifics_for(manifest["map"], manifest["category"])
+
+
 def run_capture(argv: list[str]) -> None:
-    """The capture, started again after a lost match (capture.recover); a crash's traceback goes
+    """The capture, started again after a lost match (tiles.recover); a crash's traceback goes
     into the run's log too, so a failed run can be diagnosed from the copied results."""
-    from . import capture
-    from .runlog import log
+    from heroes_capture.capture import tiles
+    from heroes_capture.common.runlog import log
 
     try:
-        capture.main(argv)
-    except capture.Recoverable as e:
+        tiles.main(argv, specifics_of)
+    except tiles.Recoverable as e:
         with ui.suspend():  # the restarted capture draws its own view
-            code = capture.recover(e, argv)
+            code = tiles.recover(e, argv)
         if code:
             raise SystemExit(code)
     except SystemExit:
@@ -172,7 +199,7 @@ def working_files(folder: Path) -> list[Path]:
     found = []
     for manifest in sorted(folder.glob("*.json")):
         try:
-            data = json.loads(manifest.read_text(encoding="utf-8"))
+            data = read_json(manifest)
         except (OSError, ValueError):
             continue
         if isinstance(data, dict) and data.get("id") == manifest.stem and "tiles" in data:
@@ -209,7 +236,7 @@ def split_map(words: list[str]) -> tuple[str | None, list[str]]:
     own options: the map is the first word no option takes as a value. (The map isn't a declared
     argument: click would take the first bare word for it, which in `--fov 12 "Dragon Shire"` is
     the 12.)"""
-    from .inject import OPTION_VALUES
+    from heroes_capture.capture.prepare import OPTION_VALUES
 
     found, options, i = None, [], 0
     while i < len(words):
@@ -242,11 +269,11 @@ def maps_to_render(map_spec: str | None, category: Category | None, validated: d
     category left out: the one named (the game's spelling of its name; a .stormmap path's file
     name; an unsupported arena or brawl renders when named, with a warning), or the category's
     supported maps (all of them for "all"), in map list's order."""
-    from . import game_data
+    from heroes_capture.common import game_data
 
     if map_spec and map_spec.lower().endswith(".stormmap"):
         return [(map_spec, Path(map_spec).name[: -len(".stormmap")])], 0
-    with game_data.open_storage(game_data.find_install()) as storage:
+    with game_data.game_storage() as storage:
         index = game_data.map_index(storage)
         if map_spec:
             name = game_data.find_map(storage, map_spec)
@@ -266,7 +293,7 @@ def kept_run(work: Path, map_id: str, options: list[str]) -> Path | None:
     render with these preparing options can carry on: the same map, prepared the same way."""
     manifest = work / f"{map_id}.json"
     try:
-        data = json.loads(manifest.read_text(encoding="utf-8"))
+        data = read_json(manifest)
     except (OSError, ValueError):
         return None
     if data.get("renderOptions") != options or not manifest.with_suffix(".stormmap").exists():
@@ -277,11 +304,11 @@ def kept_run(work: Path, map_id: str, options: list[str]) -> Path | None:
 def first_missing_tile(manifest_path: Path, manifest: dict) -> int:
     """Where a kept run's capture carries on: at its first tile without a screenshot, less the
     ones that may have been half-written when it stopped. len(tiles) when all are there."""
-    from .frames import frame_exists
+    from heroes_capture.common.frames import frame_exists, tile_stem
 
     tiles = manifest_path.with_suffix("") / "tiles"
     for position, tile in enumerate(manifest["tiles"]):
-        if not frame_exists(tiles / f"tile_{tile['index']:04d}"):
+        if not frame_exists(tile_stem(tiles, tile["index"])):
             return max(0, position - SAVERS)
     return len(manifest["tiles"])
 
@@ -291,27 +318,30 @@ def render_one(map_spec: str, name: str, options: list[str], output_dir: Path, k
     """One map: skipped when its pack is in the output folder already (unless force), carried on
     from a kept run of it, or prepared, captured and stitched (the stitch writes its pack); its
     working files removed after (unless keep_tmp). False when skipped."""
-    from . import inject, pack, stitch
+    from heroes_capture.common import game_data
+    from heroes_capture.capture import prepare
+    from heroes_capture.capture import pack
+    from heroes_capture.capture import stitch
 
     structures = options[options.index("--structures") + 1]
     work = Path(options[options.index("--out") + 1])
-    map_id = inject.render_id(name, structures)
-    out = output_dir / inject.slug(name)
+    map_id = prepare.render_id(name, structures)
+    out = output_dir / game_data.slug(name)
     if not force and pack.is_written(out, structures):
         ui.done(f"{name}: already rendered in {out} (--force renders it again)")
         return False
     note = "" if name in validated else "; not validated: it may not come out right"
     manifest_path = None if force else kept_run(work, map_id, options)
     if manifest_path:
-        planned = json.loads(manifest_path.read_text())
+        planned = read_json(manifest_path)
         start = first_missing_tile(manifest_path, planned)
         ui.done(f"{name}: carrying on from the run left in {work} ({start} of {len(planned['tiles'])} tiles kept){note}")
     else:
         with ui.step(f"Preparing {name}"):
-            manifest_path = inject.main([map_spec, *options])
-        planned = json.loads(manifest_path.read_text())
+            manifest_path = prepare.main([map_spec, *options], specifics_of_map)
+        planned = read_json(manifest_path)
         planned["renderOptions"] = options  # what a later render must match to carry this one on
-        manifest_path.write_text(json.dumps(planned, indent=2))
+        write_manifest(manifest_path, planned)
         start = 0
         ui.done(f"{planned['map']} ({structures} structures): {len(planned['tiles'])} tiles planned, "
                 + ("void shot over white and black" if planned["sky"]["mode"] == "matte" else "black void") + note)
@@ -323,7 +353,7 @@ def render_one(map_spec: str, name: str, options: list[str], output_dir: Path, k
         with ui.step(f"Capturing {name} in the game"):
             run_capture([manifest, *(["--start", str(start)] if start else []), *capture_options])
     with ui.step(f"Stitching {name}"):
-        stitch.main([manifest, "--output-dir", str(output_dir)])
+        stitch.main([manifest, "--output-dir", str(output_dir)], specifics_of)
     if not keep_tmp:
         remove([manifest_path, manifest_path.with_suffix(".stormmap"), manifest_path.with_suffix("")])
     ui.done(f"{name}: the map is in {stitch.output_folder(output_dir, planned)} (heroes-capture map view \"{name}\" shows it)")
@@ -340,13 +370,9 @@ def render(
     keep_tmp: Annotated[bool, typer.Option("--keep-tmp", help="Leave the working files (screenshots, the prepared map, diagnostic logs) in tmp\\ for diagnosis.")] = False,
     game: Annotated[Optional[str], typer.Option(hidden=True)] = None,  # the install, when it isn't found by itself
     monitor: Annotated[Optional[str], typer.Option("--monitor", help="Put the game on this monitor before launching the map, and render at its resolution: its number as Windows lists them (the run's log lists the monitors), its device name, or primary.", show_default=False)] = None,
-    probe_light: Annotated[bool, typer.Option(hidden=True)] = False,  # diagnostics instead of the tiles
+    probe_monitor: Annotated[bool, typer.Option(hidden=True)] = False,  # diagnostics instead of the tiles: the start-up on a monitor, with --monitor, and a report
     probe_sky: Annotated[bool, typer.Option(hidden=True)] = False,
     probe_sky_reach: Annotated[bool, typer.Option(hidden=True)] = False,
-    probe_depth: Annotated[bool, typer.Option(hidden=True)] = False,
-    probe_waits: Annotated[bool, typer.Option(hidden=True)] = False,
-    probe_elements: Annotated[bool, typer.Option(hidden=True)] = False,
-    probe_monitor: Annotated[bool, typer.Option(hidden=True)] = False,  # the start-up on a monitor, with --monitor, and a report
     show_ui: Annotated[bool, typer.Option(hidden=True)] = False,  # diagnostic: launch with the HUD up and stop
 ) -> None:
     """Prepare, capture and stitch a map, or every map of a category.
@@ -359,12 +385,12 @@ def render(
     """
     import traceback
 
-    from . import inject
+    from heroes_capture.capture import prepare
 
     map_spec, extra = split_map(list(ctx.args))
     if (map_spec is None) == (category is None):
         raise typer.BadParameter("name one map, or pick maps with --category")
-    chosen = {"probe_light": probe_light, "probe_sky": probe_sky, "probe_sky_reach": probe_sky_reach, "probe_depth": probe_depth, "probe_waits": probe_waits, "probe_elements": probe_elements, "probe_monitor": probe_monitor}
+    chosen = {"probe_monitor": probe_monitor, "probe_sky": probe_sky, "probe_sky_reach": probe_sky_reach}
     probe = next((f"--{name.replace('_', '-')}" for name in PROBES if chosen[name]), None)
     if category and (probe or show_ui):
         raise typer.BadParameter("the diagnostics take one map")
@@ -393,7 +419,7 @@ def render(
             if show_ui:
                 options.append("--show-ui")
             with ui.step(f"Preparing {maps[0][1]}"):
-                manifest = str(inject.main([maps[0][0], *options]))
+                manifest = str(prepare.main([maps[0][0], *options], specifics_of_map))
             with ui.step(f"Probe {probe}" if probe else "Launching the map with the HUD up (diagnostic; stops there)"):
                 run_capture([manifest, probe or "--launch-only", *capture_options])
         return
@@ -430,7 +456,9 @@ def render(
 
 def validated_maps() -> dict[str, dict]:
     """validated-maps.json's maps: name -> {version, note}."""
-    return json.loads(VALIDATED.read_text(encoding="utf-8"))["maps"]
+    from heroes_capture import maps
+
+    return maps.validated_maps()
 
 
 GONE = "No longer in the game"
@@ -441,7 +469,7 @@ def map_rows(game_maps: dict[str, str], folder_maps: list[str], validated: dict[
     alphabetically; the folder maps, which can't be rendered, under Other; then the validated maps
     the game no longer has. Status: "validated", "not yet", "unsupported" (a folder map, or an
     arena or brawl not validated) or "not in the game"."""
-    from .game_data import CATEGORIES
+    from heroes_capture.common.game_data import CATEGORIES
 
     rows = []
     for category in CATEGORIES:
@@ -471,21 +499,21 @@ def view(
 
     The pack is served on this computer until you stop it (Ctrl+C): the viewer reads its tiles by range requests, which a browser won't make to files opened from disk.
     """
-    from . import pack
-    from .inject import slug
-    from .serve import serve
+    from heroes_capture.capture import pack
+    from heroes_capture.common.game_data import slug
+    from heroes_capture.capture.serve import serve
 
     folder = output_dir / slug(map)
     if not folder.is_dir():
-        from . import game_data
+        from heroes_capture.common import game_data
 
-        with game_data.open_storage(game_data.find_install()) as storage:
+        with game_data.game_storage() as storage:
             folder = output_dir / slug(game_data.find_map(storage, map))
-    packed = pack.variant_folder(folder, structures.value) / "pack"
-    if not (packed / "pack.json").exists():
-        raise SystemExit(f"no pack in {packed}: render the map first (heroes-capture map render \"{map}\")")
-    server = serve(packed)
-    ui.done(f"{packed} at http://127.0.0.1:{server.server_port}/index.html (Ctrl+C stops it)")
+    variant = pack.variant_folder(folder, structures.value)
+    if not (variant / "pack" / "pack.json").exists() or not (variant / "raw" / "index.html").exists():
+        raise SystemExit(f"no pack in {variant / 'pack'}: render the map first (heroes-capture map render \"{map}\")")
+    server = serve(variant, "raw/index.html")
+    ui.done(f"{variant / 'pack'} at http://127.0.0.1:{server.server_port}/raw/index.html (Ctrl+C stops it)")
     try:
         while True:
             time.sleep(3600)
@@ -503,11 +531,11 @@ def list_maps(
 
     Validated: the map's render has been reviewed and, where needed, tuned for (validated-maps.json). The rest render with the defaults, unchecked.
     """
-    from .game_data import find_install, folder_maps, map_index, open_storage
+    from heroes_capture.common.game_data import folder_maps, game_storage, map_index
 
     log_to(TMP)
     with kept_on_failure(TMP), ui.step("Reading the game's maps"):
-        with open_storage(find_install()) as storage:
+        with game_storage() as storage:
             game_maps = {name: entry["category"] for name, entry in map_index(storage).items()}
             folders = folder_maps(storage)
     rows = map_rows(game_maps, folders, validated_maps())
@@ -537,13 +565,13 @@ def list_maps(
 @app.command(context_settings=PASS_THROUGH, add_help_option=False)
 def prepare(ctx: typer.Context) -> None:
     """Prepare a map: read it, inject the capture script, plan the grid (prints the manifest)."""
-    from . import inject
+    from heroes_capture.capture import prepare
 
     args = list(ctx.args)
-    opts = inject.parse_args(args)  # --help, and a mistyped option, before any file is written
+    opts = prepare.parse_args(args)  # --help, and a mistyped option, before any file is written
     log_to(Path(opts["out"]))
     with ui.step(f"Preparing {opts['map']}"):
-        manifest = inject.main(args)
+        manifest = prepare.main(args, specifics_of_map)
     print(manifest)
 
 
@@ -556,7 +584,7 @@ def capture(ctx: typer.Context) -> None:
         return
     log_to(Path(args[0]).parent)
     restart = os.environ.get("HRS_RECOVERIES")  # a capture started again after a lost match (capture.recover)
-    title = f"Capturing {json.loads(Path(args[0]).read_text())['map']} in the game" + (f" (restart {restart} of 3)" if restart else "")
+    title = f"Capturing {read_json(Path(args[0]))['map']} in the game" + (f" (restart {restart} of 3)" if restart else "")
     with ui.step(title):  # the live view, also in a restarted capture's own process
         run_capture(args)
 
@@ -564,15 +592,15 @@ def capture(ctx: typer.Context) -> None:
 @app.command(context_settings=PASS_THROUGH, add_help_option=False)
 def stitch(ctx: typer.Context) -> None:
     """Stitch a capture's screenshots into the map image, sky layers and viewer."""
-    from . import stitch as stitching
+    from heroes_capture.capture import stitch as stitching
 
     args = list(ctx.args)
     if not args or Path(args[0]).suffix != ".json" or {"--help", "-h"} & set(args):
-        stitching.main(args)  # its usage, or --help
+        stitching.main(args, specifics_of)  # its usage, or --help
         return
     log_to(Path(args[0]).parent)
-    with ui.step(f"Stitching {json.loads(Path(args[0]).read_text())['map']}"):
-        stitching.main(args)
+    with ui.step(f"Stitching {read_json(Path(args[0]))['map']}"):
+        stitching.main(args, specifics_of)
 
 
 @app.command("clean-up")
@@ -646,15 +674,19 @@ def self_check() -> None:
 
     from . import __path__ as package_path
 
-    # The modules that drive the game need Windows to import at all.
-    windows_only = {"capture", "element_capture", "game_control", "game_state", "game_window", "monitors", "probes", "screen", "sky_layers", "watch"}
-    skip = {"__main__"} | (set() if sys.platform == "win32" else windows_only)
-    modules = [f"heroes_capture.{m.name}" for m in pkgutil.iter_modules(package_path) if m.name not in skip]
-    modules += ["numpy.fft", "scipy.ndimage", "scipy.optimize", "PIL.Image", "pyvips"]
+    ours = [m.name for m in pkgutil.walk_packages(package_path, "heroes_capture.") if m.name != "heroes_capture.__main__"]
+    others = ["numpy.fft", "scipy.ndimage", "scipy.optimize", "PIL.Image", "pyvips"]
     if sys.platform == "win32":
-        modules += ["dxcam", "dxcam.processor._numpy_kernels", "mss", "pydirectinput"]
-    for name in modules:
-        importlib.import_module(name)
+        others += ["dxcam", "dxcam.processor._numpy_kernels", "mss", "pydirectinput"]
+    loaded = 0
+    for name in ours + others:
+        try:
+            importlib.import_module(name)
+            loaded += name in ours
+        except ModuleNotFoundError as e:
+            # The modules that drive the game need Windows' screen grabbing and input to import.
+            if sys.platform == "win32" or e.name not in WINDOWS_ONLY:
+                raise
     import pyvips
 
     if not pyvips.API_mode:
@@ -663,11 +695,12 @@ def self_check() -> None:
     table.add_row("Battlefield of Eternity", STATUS_STYLE["validated"])
     Console(file=io.StringIO(), width=80, color_system="truecolor").print(table)  # loads Rich's Unicode width tables
     validated_maps()
-    from . import casclib, stormlib
+    from heroes_capture.common import casclib
+    from heroes_capture.common import stormlib
 
     stormlib._load()
     casclib._load()
-    print(f"self-check: {len(modules)} modules, Rich, the data files and both native libraries load")
+    print(f"self-check: {loaded} modules, Rich, the data files and both native libraries load")
 
 
 def main(argv: list[str] | None = None) -> None:

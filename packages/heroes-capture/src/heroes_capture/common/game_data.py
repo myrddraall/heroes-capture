@@ -11,9 +11,10 @@ import re
 import tempfile
 from pathlib import Path
 
-from .casclib import Storage
-from .runlog import log
-from .stormlib import Archive
+from heroes_capture.common.casclib import Storage
+from heroes_capture.common.jsonio import read_json
+from heroes_capture.common.runlog import log
+from heroes_capture.common.stormlib import Archive
 
 
 def cache_dir() -> Path:
@@ -99,6 +100,11 @@ def open_storage(install: Path | None) -> Storage:
     return Storage.online(cache_dir() / "casc")
 
 
+def game_storage() -> Storage:
+    """This computer's install's storage, found (find_install), or Blizzard's CDN without one."""
+    return open_storage(find_install())
+
+
 # ------------------------------------------------------------------------------------------------
 # Maps
 # ------------------------------------------------------------------------------------------------
@@ -140,7 +146,7 @@ def map_index(storage: Storage) -> dict[str, dict]:
     key = hashlib.sha256("\n".join(["v2", *names]).encode()).hexdigest()[:16]
     cached = cache_dir() / f"maps-{key}.json"
     if cached.exists():
-        return json.loads(cached.read_text(encoding="utf-8"))
+        return read_json(cached)
     log(f"indexing the game's maps ({len(names)} depot files, once per game update) ...")
     index = {}
     with tempfile.TemporaryDirectory() as folder:
@@ -154,7 +160,7 @@ def map_index(storage: Storage) -> dict[str, dict]:
                 if not archive.has("mapscript.galaxy"):
                     continue  # a mod
                 strings = archive.read_text(GAMESTRINGS) or ""
-                header = archive.read("DocumentHeader") if archive.has("DocumentHeader") else b""
+                header = archive.read_optional("DocumentHeader") or b""
             title = re.search(r"DocInfo/Name=(.+)", strings)
             if title:
                 index[title.group(1).strip()] = {"file": name, "category": map_category(_dependencies(header))}
@@ -174,6 +180,12 @@ def folder_maps(storage: Storage) -> list[str]:
         title = re.search(r"DocInfo/Name=(.+)", strings)
         titles.append(title.group(1).strip() if title else Path(folder.replace("\\", "/")).stem)
     return titles
+
+
+def slug(name: str) -> str:
+    """A map's id from its name: lower case, words joined by hyphens ("Battlefield of Eternity" ->
+    battlefield-of-eternity): its output folder and its id in the pack."""
+    return re.sub(r"^-|-$", "", re.sub(r"[^a-z0-9]+", "-", name.lower()))
 
 
 def _plain(name: str) -> str:
@@ -221,7 +233,7 @@ def light_sets(storage: Storage) -> dict:
     """For every tileset its light set and skybox, for every light set its main ("Key") light's
     direction: {terrains, lights}, from every mod's GameData/TerrainData.xml and LightData.xml. A
     field set later replaces one set earlier; missing fields come from a definition's parent."""
-    from .light_data import parse_lights, parse_terrains
+    from heroes_capture.common.lighting import parse_lights, parse_terrains
 
     files = []
     for name in storage.find("*TerrainData.xml") + storage.find("*LightData.xml"):

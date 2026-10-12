@@ -9,8 +9,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from .runlog import current
-from .screen import _mss
+from heroes_capture.common.runlog import current
+from heroes_capture.common.screen import _mss
 
 WATCH_EVERY = 2.0
 # A quarter of the screen across: enough to tell what is drawn.
@@ -19,8 +19,8 @@ WATCH_SCALE = 4
 WATCH_LIMIT = 900.0
 
 
-def start_watch(region: dict, folder: Path) -> threading.Event:
-    """Starts watching `region` into `folder`; set the returned event to stop it."""
+def start_watch(region: dict, folder: Path) -> None:
+    """Starts watching `region` into `folder`, until the tiles start (or WATCH_LIMIT)."""
     folder.mkdir(parents=True, exist_ok=True)
     stop = threading.Event()
 
@@ -40,4 +40,3 @@ def start_watch(region: dict, folder: Path) -> threading.Event:
                 stop.wait(max(0.0, started + at + WATCH_EVERY - time.time()))
 
     threading.Thread(target=run, name="watch", daemon=True).start()
-    return stop

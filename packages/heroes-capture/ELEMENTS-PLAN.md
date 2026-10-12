@@ -5,7 +5,7 @@ objective as its own cut-out, so a viewer can show or hide each one: by hand, or
 a chosen time ("the map at 10:00"). It replaces the two renders `--structures keep|hide` make now.
 
 **Prototype map:** Battlefield of Eternity. Everything below marked *probed* was tried there with
-the elements probe (`map render "Battlefield of Eternity" --probe-elements`, probes.py) and seen
+the elements probe (`--probe-elements`, removed once the elements capture was built) and seen
 to work; the rest is still to build.
 
 ## How an element is cut out
@@ -59,9 +59,37 @@ darkens and drawn with multiply under the element.
 ## Elements
 
 Every element has a kind, its unit type and placed cell (so a replay can find it), a group, and
-one or more states, each a cut-out. Colours: the observer's (the left team blue) only; a
-colouring per team was dropped (the client draws its own colours whatever the script sets with
-`PlayerSetColorIndex`: *probed*).
+one or more states, each a cut-out. Colours: the observer's (the left team blue) only. The client
+draws each unit as our player's ally (blue) or enemy (red), whatever the script sets with
+`PlayerSetColorIndex` (*probed*). The other side's colouring can be had mid-match: our player put
+on Chaos (`side 2`: alliances and the team upgrade, as GameLib makes the teams) redraws
+every structure in the Chaos player's colours with its models unchanged, and putting it back
+restores the picture exactly (*probed*, `--probe-sides`, since removed). Giving the structures to the other
+team's computer (as Sylvanas's Possession turns a minion) flips the colours too,
+but also swaps the gates and fountains for the other side's models: not usable.
+What a Chaos colouring would need shot again (*probed*, `--probe-chaos-view`, since removed: each forward town
+and core brought down and a camp spawned, each view shot from both sides): the standing
+structures and the bare terrain only. No rubble changes with the side, on either team, debris
+chips and the cores' glows included (their blue or red is each side's own material); nor do the
+camps. In the terrain, Heaven's decorations do (the crystal beds' gems, the lamps round them, the
+discs by the camps, the gems on the core's steps), and so does the Hell base's spawn gate; Hell's
+lava orbs don't. The elements capture now takes each standing structure's pair from Chaos's side too,
+in between Order's (`<shot>-chaos`, `<shot>-chaos-black`; the record's `chaos`): white from
+Order, switch, white and black from Chaos, switch back, black from Order. A switch is on screen
+47-212 ms after its acknowledgement, all at once (*probed*, `--probe-switch`, since removed), so each is watched
+for in the structure's circle, for at most 0.35 s. The terrain's team-coloured pieces are the
+doodads the map's `Objects` file gives a team's colour (`TeamColor` 11 or 12, the teams' computer
+players: 132 on Battlefield of Eternity, Heaven's lamps, crystal beds, grates and outer walls and
+Hell's core range; 14 on Cursed Hollow, 461 on Dragon Shire). Checked against the side probe's
+shots: every change in Order's town view lies on one. The manifest lists their cells
+(`teamColoured`), and a tile with one within 6 cells of its view is shot from Chaos's side too, in
+the same order (`tile_<n>-chaos`, `-chaos-black`; 89 of Battlefield of Eternity's 126 tiles). The
+stitch turns the pairs into team-colour masks (capture/team_colour.py; PACK.md, Team colour): each
+pixel's amount of its team's colour, Order's team's or Chaos's (the game colours everything as our
+player's ally or enemy, so a Chaos structure changes the other way from an Order one). One direction
+of change explains 98% of the structures' and the same holds on the terrain; the other side comes
+back within about 8 levels on average (more in the brightest glows), and a viewer can show the
+teams in any colours.
 
 | Kind | What | Where it comes from | Group | States |
 | --- | --- | --- | --- | --- |
@@ -81,7 +109,7 @@ Battlefield of Eternity has about 72 structures in 8 towns (2 cores, 26 towers, 
 
 The capture script already removes units as they spawn, pauses the map's animations
 (`AnimSetPausedAll` over the map region) and drives the camera tile by tile. The elements add
-commands to it (`el ...`, capture_script.galaxy):
+commands to it (`el ...`, categories/battleground/script.galaxy):
 
 - **Structures:** hidden all at once and shown one at a time (`el hideall`, `el show <x> <y>`,
   the structure nearest the cell). *Probed.* A structure that is only hidden leaves a dark patch
@@ -219,8 +247,8 @@ and each map's stat-event names.
    rubble, clearing and bare passes; the pack format; the viewer's toggles. *Built, not yet run in
    the game:* the element list read when a map is prepared (`elements.element_list`: structures
    with their towns from the script's town data and the map's regions, camps from the script's
-   jungle data and the map's points), the passes (`element_capture.py`, `--structures elements`,
-   its own pack in `elements/`), the cut-outs placed by the stitch (`stitch.write_elements`), the
+   jungle data and the map's points), the passes (`categories/battleground/element_capture.py`, `--structures elements`,
+   its own pack in `elements/`), the cut-outs placed after the stitch (`element_stitch.write_elements`), the
    pack's `data.elements` (PACK.md, Elements) and the reference viewer's elements layer. Still to
    do: the seams routed so each element's area of the map comes from the tile it was shot from;
    maps of several arenas.
@@ -243,5 +271,6 @@ and each map's stat-event names.
   map's moving effects end up in them, and hidden structures leave patches.
 - **Higher resolution for camps and objectives** (a closer camera): the perspective lean changes
   with the camera's distance, so a closer shot wouldn't lie on the map exactly.
-- **A colouring per team:** the client ignores the colours the script sets; a second launch with
-  the player on the other team would be needed.
+- **A colouring per team** (not built): the client ignores the colours the script sets, but our
+  player put on Chaos mid-match redraws every structure in the Chaos player's colours (see
+  Elements), so a second colouring needs no second launch.

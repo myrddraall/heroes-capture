@@ -6,13 +6,15 @@ import json
 import urllib.request
 
 import numpy as np
-import pytest
 import pyvips
 from PIL import Image
 from pmtiles.reader import MmapSource, Reader
 from pmtiles.tile import TileType
 
-from heroes_capture import pack
+from heroes_capture.capture import matting
+from heroes_capture.capture import pack
+from heroes_capture.categories.battleground import element_pack, element_stitch
+from heroes_capture.map.specifics import Specifics
 
 
 def test_levels_reach_down_to_one_tile():
@@ -40,18 +42,21 @@ def read_tile(reader, level, x, y):
 
 
 def test_a_pyramid_reads_back_level_by_level(tmp_path):
+    """The overview is its level whole (level 0 here: the image a quarter size, padded with
+    transparency to whole pixels of it); the archive holds the levels finer than it, and no other."""
     source = image_file(tmp_path / "layer.png", 1300, 700)
-    meta = pack.write_pyramid(tmp_path / "layer.png", tmp_path / "layer.pmtiles", "layer")
-    # The overview: the finest level no longer than OVERVIEW_MAX on a side, whole (here the full size).
+    meta = pack.write_pyramid(tmp_path / "layer.png", tmp_path / "layer.pmtiles", "layer", 0, pack.TILE_WEBP)
     assert meta == {"size": [1300, 700], "levels": 3, "tileSize": 512,
-                    "overview": {"file": "layer-overview.webp", "level": 2, "size": [1300, 700]}}
+                    "overview": {"file": "layer-overview.webp", "level": 0, "size": [325, 175]}}
     overview = np.asarray(Image.open(tmp_path / "layer-overview.webp").convert("RGBA"))
-    assert overview.shape == (700, 1300, 4)
-    assert np.abs(overview[:400, :500, :3].astype(int) - source[:400, :500, :3]).mean() < 4
+    assert overview.shape == (175, 325, 4)
+    assert overview[50, 50, 3] == 255 and overview[50, 300, 3] == 0
+    assert np.abs(overview[25, 25, :3].astype(int) - source[100:104, 100:104, :3].mean(axis=(0, 1))).max() < 6
+    assert not Image.open(tmp_path / "layer-overview.webp").getexif()  # no metadata
     with open(tmp_path / "layer.pmtiles", "rb") as f:
         reader = Reader(MmapSource(f))
         header = reader.header()
-        assert header["tile_type"] == TileType.WEBP and (header["min_zoom"], header["max_zoom"]) == (0, 2)
+        assert header["tile_type"] == TileType.WEBP and (header["min_zoom"], header["max_zoom"]) == (1, 2)
         assert reader.metadata()["size"] == [1300, 700]
         # The full image at level 2: its left tile like the source (lossy), the right one empty.
         full = read_tile(reader, 2, 0, 0)
@@ -62,21 +67,42 @@ def test_a_pyramid_reads_back_level_by_level(tmp_path):
         # Level 1 (half size): pixel (i, j) covers full pixels (2i..2i+1, 2j..2j+1).
         half = read_tile(reader, 1, 0, 0)
         assert np.abs(half[100, 100, :3].astype(int) - source[200:202, 200:202, :3].mean(axis=(0, 1))).max() < 6
-        # Level 0, one tile: the whole image a quarter size, padded with transparency.
-        whole = read_tile(reader, 0, 0, 0)
-        assert whole[50, 50, 3] == 255 and whole[50, 300, 3] == 0 and whole[400, 50, 3] == 0
+        assert read_tile(reader, 0, 0, 0) is None  # the overview's level: not in the archive
 
 
-def test_a_big_layer_s_overview_is_a_coarser_level(tmp_path):
-    """A layer wider than OVERVIEW_MAX: the overview is the finest level that fits, the same pixels
-    as that level's tiles."""
-    image_file(tmp_path / "big.png", 2600, 1000)  # levels: 325, 650, 1300, 2600 wide -> the overview is level 2
-    meta = pack.write_pyramid(tmp_path / "big.png", tmp_path / "big.pmtiles", "big")
+def test_each_layer_s_overview_level():
+    """A map layer's overview: its finest level no longer than OVERVIEW_MAP (2048) on a side, never
+    the finest level (but on a layer of one level). A sky layer's: the level the opening view draws
+    it at, the zoom where the map's overview is a pixel to a window pixel (further back, the sky is
+    drawn larger), within OVERVIEW_MAX (4096): Battlefield of Eternity's map at level 2, its haze at 3."""
+    assert pack.map_overview_level(2600, 1000) == 2  # levels 325, 650, 1300, 2600 wide
+    assert pack.map_overview_level(12865, 9260) == 2  # 1609 x 1158
+    assert pack.map_overview_level(1300, 700) == 1  # level 2 would fit, but is the full image
+    assert pack.map_overview_level(400, 300) == 0  # one level: the full image
+    opening = 2.0 ** (2 - 5)  # the map's level 2 of 6 a pixel to a window pixel
+    assert pack.sky_overview_level(14360, 7312, 0.45, opening) == 3  # 3590 x 1828
+    assert pack.sky_overview_level(14360, 7312, 1.0, opening) == 2  # at the map's rate: as the map
+    assert pack.sky_overview_level(40000, 20000, 0.45, opening) == 3  # of 8 levels: 5 wanted, 10000 wide
+
+
+def test_each_layer_s_encoding():
+    """The map's and the background art's tiles: colour at quality 85, transparency exact; the
+    haze's transparency lossy too (PACK.md, Tile pyramids)."""
+    assert pack.tile_webp("map") == pack.tile_webp("map-m1") == pack.tile_webp("background") == {"Q": 85, "alpha_q": 100}
+    assert pack.tile_webp("haze") == {"Q": 90, "alpha_q": 50}
+
+
+def test_a_big_layer_s_archive_starts_past_its_overview(tmp_path):
+    """The overview's pixels are those its level's tiles would have had: the finer level's, halved."""
+    source = image_file(tmp_path / "big.png", 2600, 1000)
+    meta = pack.write_pyramid(tmp_path / "big.png", tmp_path / "big.pmtiles", "big", 2, pack.TILE_WEBP)
     assert meta["levels"] == 4 and meta["overview"] == {"file": "big-overview.webp", "level": 2, "size": [1300, 500]}
     overview = np.asarray(Image.open(tmp_path / "big-overview.webp").convert("RGBA"))
+    assert np.abs(overview[100, 100, :3].astype(int) - source[200:202, 200:202, :3].mean(axis=(0, 1))).max() < 6
     with open(tmp_path / "big.pmtiles", "rb") as f:
-        tile = read_tile(Reader(MmapSource(f)), 2, 0, 0)
-    assert np.abs(overview[:500, :512, :3].astype(int) - tile[:500, :512, :3]).mean() < 3
+        reader = Reader(MmapSource(f))
+        assert (reader.header()["min_zoom"], reader.header()["max_zoom"]) == (3, 3)
+        assert read_tile(reader, 2, 0, 0) is None
 
 
 def test_atlases_pack_pictures_in_shelves_without_overlap():
@@ -97,7 +123,7 @@ def test_atlases_pack_pictures_in_shelves_without_overlap():
 
 def test_an_empty_layer_has_no_pyramid(tmp_path):
     Image.new("RGBA", (600, 600), (0, 0, 0, 0)).save(tmp_path / "empty.png")
-    assert pack.write_pyramid(tmp_path / "empty.png", tmp_path / "empty.pmtiles", "empty") is None
+    assert pack.write_pyramid(tmp_path / "empty.png", tmp_path / "empty.pmtiles", "empty", 0, pack.TILE_WEBP) is None
 
 
 def stitched(out, out_id="test-map-structures"):
@@ -123,18 +149,21 @@ def stitched(out, out_id="test-map-structures"):
 
 
 def test_a_pack_from_a_stitch(tmp_path, monkeypatch):
-    from heroes_capture import game_data
+    from heroes_capture.common import game_data
 
     monkeypatch.setattr(game_data, "open_storage", lambda install: (_ for _ in ()).throw(OSError("no game here")))
     monkeypatch.setattr(game_data, "find_install", lambda: None)
     out = tmp_path / "maps" / "test-map"
     manifest = stitched(out)
-    folder = pack.write(out, manifest, ["test-map-structures"])
+    folder = pack.write(out, manifest, ["test-map-structures"], Specifics("battleground"))
     assert folder == out / "pack"
     assert sorted(p.name for p in out.iterdir()) == ["pack", "raw"]  # the stitch's files moved or removed
-    assert sorted(p.name for p in (out / "raw").iterdir()) == ["background.png", "composite.png", "fixed.png", "haze.png", "layers.json", "map.png"]
-    description = json.loads((folder / "pack.json").read_text())
-    assert description["format"] == 3 and description["gameBuild"] is None and description["arenas"] is None
+    assert sorted(p.name for p in (out / "raw").iterdir()) == ["background.png", "composite.png", "fixed.png", "haze.png", "index.html",
+                                                               "layers.json", "map.png"]
+    text = (folder / "pack.json").read_text()
+    assert "\n" not in text and ", " not in text  # compact
+    description = json.loads(text)
+    assert description["format"] == 6 and description["gameBuild"] is None and description["arenas"] is None
     assert description["map"] == {"id": "test-map", "name": "Test Map", "category": None, "validated": False, "structures": "keep",
                                   "sizeCells": [64, 64], "cameraBounds": {"left": 14, "bottom": 14, "right": 50, "top": 50}}
     assert [(l["id"], l["kind"], l["file"]) for l in description["layers"]] == [
@@ -143,23 +172,23 @@ def test_a_pack_from_a_stitch(tmp_path, monkeypatch):
     map_layer = description["layers"][-1]
     assert map_layer["originCell"] == [2.0, 60.0] and map_layer["levels"] == 2 and map_layer["size"] == [900, 600]
     assert description["layers"][1]["pxPerCell"] == 21.6 and description["layers"][1]["rate"] == 0.45
-    # Each tiled layer's overview (here the layers are small: the full size).
-    assert description["layers"][1]["overview"] == {"file": "background-overview.webp", "level": 1, "size": [700, 400]}
-    assert map_layer["overview"] == {"file": "map-overview.webp", "level": 1, "size": [900, 600]}
+    # Each tiled layer's overview (here the layers are small: the level under the full size).
+    assert description["layers"][1]["overview"] == {"file": "background-overview.webp", "level": 0, "size": [350, 200]}
+    assert map_layer["overview"] == {"file": "map-overview.webp", "level": 0, "size": [450, 300]}
     assert list(description["images"]) == ["thumbnail"]
     files = description["files"]
     assert set(files) == {"fixed.webp", "background.pmtiles", "background-overview.webp", "haze.pmtiles", "haze-overview.webp",
-                          "map.pmtiles", "map-overview.webp", "thumbnail.webp", "index.html"}
+                          "map.pmtiles", "map-overview.webp", "thumbnail.webp"}
     import hashlib
     assert files["map.pmtiles"]["sha256"] == hashlib.sha256((folder / "map.pmtiles").read_bytes()).hexdigest()
     assert pack.is_written(out, "keep") and not pack.is_written(out, "hide")
 
 
 def test_the_local_server_answers_byte_ranges(tmp_path):
-    from heroes_capture.serve import serve
+    from heroes_capture.capture.serve import serve
 
     (tmp_path / "a.pmtiles").write_bytes(bytes(range(256)) * 4)
-    server = serve(tmp_path, open_browser=False)
+    server = serve(tmp_path, page=None)
     try:
         url = f"http://127.0.0.1:{server.server_port}/a.pmtiles"
         ranged = urllib.request.urlopen(urllib.request.Request(url, headers={"Range": "bytes=10-19"}))
@@ -174,7 +203,7 @@ def test_the_local_server_answers_byte_ranges(tmp_path):
 
 def element_shots(folder, key, u, v):
     """An element's two shots alone over the sky: a solid 2x2 square at (u, v) of a 40x30 screen."""
-    from heroes_capture.frames import save_frame
+    from heroes_capture.common.frames import save_frame
 
     white = np.full((30, 40, 3), 230, np.uint8)
     black = np.zeros((30, 40, 3), np.uint8)
@@ -184,11 +213,11 @@ def element_shots(folder, key, u, v):
 
 
 def test_an_element_s_cut_out_lands_on_its_cell_in_the_map_image(tmp_path):
-    """stitch.write_elements: a tile whose camera stood at cell (10, 10) is placed at (100, 50) on the
+    """element_stitch.write_elements: a tile whose camera stood at cell (10, 10) is placed at (100, 50) on the
     canvas (2 px per cell, so that cell is at (120, 65)), and the map image is the canvas from
     (4, 5). An element at cell (11, 9) lands where the image's geo puts that cell, whether its shot
     was taken from the tile's camera position or half a cell east of it."""
-    from heroes_capture import stitch
+    from heroes_capture.capture import stitch
 
     base, out = tmp_path / "run", tmp_path / "out"
     (base / "elements").mkdir(parents=True)
@@ -202,8 +231,8 @@ def test_an_element_s_cut_out_lands_on_its_cell_in_the_map_image(tmp_path):
     (base / "positions.json").write_text(json.dumps({"0": {"x": 10, "y": 10}}))
     scale, ax, ay = 2.0, 100.0, 85.0  # cell (10, 10) at canvas (120, 65)
     (out / "m.geo.json").write_text(json.dumps({"originCell": {"x": -(ax - 4) / scale, "y": (ay - 5) / scale}}))
-    layout = stitch.Layout({0: np.array([100.0, 50.0])}, {0}, {}, {0: {"index": 0, "x": 10, "y": 10}}, 40, 30, 0)
-    assert stitch.write_elements({"id": "m"}, base, out, layout, scale, ax, ay, "m") == 2
+    layout = stitch.Layout({0: np.array([100.0, 50.0])}, {}, {0: {"index": 0, "x": 10, "y": 10}}, 40, 30, 0)
+    assert element_stitch.write_elements({"id": "m"}, base, out, layout, scale, ax, ay, "m") == 2
     index = json.loads((out / "m-elements.json").read_text())
     # Cell (11, 9) in the image: ((11 + 48) * 2, (40 - 9) * 2) = (118, 62).
     assert [c["rect"] for c in index["cutouts"]] == [[118, 62, 2, 2], [118, 62, 2, 2]]
@@ -212,7 +241,7 @@ def test_an_element_s_cut_out_lands_on_its_cell_in_the_map_image(tmp_path):
 
 
 def test_the_pack_s_elements(tmp_path):
-    """pack.collect_elements: the cut-outs packed into the pack's atlases (standing, rubble, masks,
+    """element_pack.collect_elements: the cut-outs packed into the pack's atlases (standing, rubble, masks,
     and small: every state at the overview scale), and data.elements listing every structure and
     camp with its states' places in them."""
     out, raw, packed = tmp_path / "out", tmp_path / "raw", tmp_path / "pack"
@@ -221,57 +250,133 @@ def test_the_pack_s_elements(tmp_path):
     Image.new("RGBA", (4, 3), (0, 100, 0, 255)).save(out / "m-elements" / "structure-5-rubble.png")
     Image.new("RGBA", (3, 2), (0, 0, 100, 255)).save(out / "m-elements" / "structure-6-standing.png")
     Image.new("RGBA", (3, 2), (255, 255, 255, 255)).save(out / "m-elements" / "structure-6-standing-under-5.png")
+    Image.new("RGB", (3, 2), (100, 0, 0)).save(out / "m-elements" / "structure-5-standing-team.png")  # its team colour
     (out / "m-elements.json").write_text(json.dumps({"image": "m", "cutouts": [
-        {"key": "structure-5-standing", "kind": "structure", "element": 5, "state": "standing", "file": "structure-5-standing.png", "rect": [118, 62, 3, 2]},
+        {"key": "structure-5-standing", "kind": "structure", "element": 5, "state": "standing", "file": "structure-5-standing.png", "rect": [118, 62, 3, 2],
+         "teamMask": "structure-5-standing-team.png"},
         {"key": "structure-5-rubble", "kind": "structure", "element": 5, "state": "rubble", "file": "structure-5-rubble.png", "rect": [117, 61, 4, 3]},
         {"key": "structure-6-standing", "kind": "structure", "element": 6, "state": "standing", "file": "structure-6-standing.png", "rect": [120, 62, 3, 2],
          "hiddenBy": [{"id": 5, "file": "structure-6-standing-under-5.png"}]}]}))
     manifest = {"id": "m", "elements": {
-        "structures": [{"id": 5, "type": "TownCannonTowerL2", "x": 11, "y": 9, "owner": "order", "town": 1, "core": False, "radius": 6},
-                       {"id": 6, "type": "TownWallRadial2L3", "x": 12, "y": 9, "owner": "order", "town": 1, "core": False, "radius": 6}],
+        "structures": [{"id": 5, "type": "TownCannonTowerL2", "x": 11, "y": 9, "owner": "order", "town": 1, "outpost": 1, "core": False, "radius": 6},
+                       {"id": 6, "type": "TownWallRadial2L3", "x": 12, "y": 9, "owner": "order", "town": 1, "outpost": None, "core": False, "radius": 6}],
         "towns": [{"town": 1, "lane": 1, "owner": "order", "region": 2, "name": "Lane 1 - Order - Town 1"}],
+        "outposts": [{"outpost": 1, "town": 1, "lane": 1, "owner": "order", "x": 11.0, "y": 9.0}],
         "camps": [{"camp": 1, "type": "SiegeCamp1", "x": 30, "y": 31, "spawns": [], "spread": 2, "radius": 5}]}}
-    data = pack.collect_elements(out, raw, packed, manifest, "map", small_factor=2)
+    data = element_pack.collect_elements(out, raw, packed, manifest, "map", small_factor=2)
     assert data["layer"] == "map" and data["towns"][0]["town"] == 1
-    # The atlases: the two standing cut-outs side by side; the rubble alone; the one mask; every
-    # state at half size, ceil(3/2) x ceil(2/2) and ceil(4/2) x ceil(3/2), the tallest first.
+    # Each structure's outpost (format 4), and the outposts with their middle as a cell.
+    assert [u["outpost"] for u in data["structures"]] == [1, None]
+    assert data["outposts"] == [{"outpost": 1, "town": 1, "lane": 1, "owner": "order", "cell": [11.0, 9.0]}]
+    # The atlases: the two standing cut-outs side by side, ATLAS_GAP apart; the rubble alone; the
+    # one mask; every state at half size, ceil(3/2) x ceil(2/2) and ceil(4/2) x ceil(3/2), the
+    # tallest first.
     assert data["atlases"] == {
-        "standing": {"file": "elements/standing.webp", "size": [6, 2], "scale": 1},
+        "standing": {"file": "elements/standing.webp", "size": [10, 2], "scale": 1},
         "rubble": {"file": "elements/rubble.webp", "size": [4, 3], "scale": 1},
         "masks": {"file": "elements/masks.webp", "size": [3, 2], "scale": 1},
-        "small": {"file": "elements/small.webp", "size": [6, 2], "scale": 0.5}}
+        "small": {"file": "elements/small.webp", "size": [14, 2], "scale": 0.5},
+        "team": {"file": "elements/team.webp", "size": [3, 2], "scale": 1},
+        "teamSmall": {"file": "elements/teamSmall.webp", "size": [2, 1], "scale": 0.5}}
     assert data["structures"][0]["states"] == {
-        "standing": {"rect": [118, 62, 3, 2], "atlas": "standing", "at": [0, 0], "small": [2, 0]},
+        "standing": {"rect": [118, 62, 3, 2], "atlas": "standing", "at": [0, 0], "small": [6, 0], "teamMask": {"at": [0, 0], "small": [0, 0]}},
         "rubble": {"rect": [117, 61, 4, 3], "atlas": "rubble", "at": [0, 0], "small": [0, 0]}}
     assert data["structures"][1]["states"] == {
-        "standing": {"rect": [120, 62, 3, 2], "atlas": "standing", "at": [3, 0], "small": [4, 0], "hiddenBy": [{"id": 5, "at": [0, 0]}]}}
+        "standing": {"rect": [120, 62, 3, 2], "atlas": "standing", "at": [7, 0], "small": [12, 0], "hiddenBy": [{"id": 5, "at": [0, 0]}]}}
     assert data["camps"] == [{"camp": 1, "type": "SiegeCamp1", "cell": [30, 31], "states": {}}]
+    # The colour lossy (within a few levels), the transparency exact; the masks lossless. A cut-out
+    # one pixel tall is all edge: WebP's colour, at half the pixels, mixes in the gap under it.
+    near = lambda pixel, colour, within=8: np.abs(pixel.astype(int) - colour).max() <= within and pixel[3] == colour[3]  # noqa: E731
     standing = np.asarray(Image.open(packed / "elements" / "standing.webp").convert("RGBA"))
-    assert tuple(standing[0, 0]) == (100, 0, 0, 255) and tuple(standing[0, 3]) == (0, 0, 100, 255)
+    assert near(standing[0, 0], (100, 0, 0, 255)) and near(standing[0, 7], (0, 0, 100, 255))
     small = np.asarray(Image.open(packed / "elements" / "small.webp").convert("RGBA"))
-    assert small.shape == (2, 6, 4) and tuple(small[0, 2]) == (100, 0, 0, 255)  # the standing cut-out, shrunk
+    assert small.shape == (2, 14, 4) and near(small[0, 6], (100, 0, 0, 255), within=20)  # the standing cut-out, shrunk
+    masks = np.asarray(Image.open(packed / "elements" / "masks.webp").convert("RGBA"))
+    assert (masks == 255).all()
+    team = np.asarray(Image.open(packed / "elements" / "team.webp").convert("RGB"))
+    assert (team[..., 0] == 100).all() and not team[..., 1:].any()  # exact: lossless
     assert not list((packed / "elements").glob("structure-*"))  # no file per cut-out any more
     assert (raw / "elements" / "structure-5-standing.png").exists() and not (out / "m-elements.json").exists()
 
 
-def test_the_stitch_s_leftovers_are_cleared_but_not_its_elements(tmp_path):
-    """collect_raw clears the stitch's leftover files from the map's folder, but leaves its elements'
-    cut-outs and index for collect_elements (the first elements render lost them)."""
-    out, raw = tmp_path / "out", tmp_path / "raw"
-    (out / "m-elements").mkdir(parents=True)
-    (out / "m-elements" / "structure-5-standing.png").write_bytes(b"png")
-    (out / "m-elements.json").write_text("{}")
-    (out / "m-preview.jpg").write_bytes(b"jpg")
-    pack.collect_raw(out, raw, "m", [])
-    assert not (out / "m-preview.jpg").exists()
-    assert (out / "m-elements.json").exists() and (out / "m-elements" / "structure-5-standing.png").exists()
+def test_a_pack_stitched_away_from_the_prepared_map_reads_its_pictures_from_the_game(tmp_path, monkeypatch):
+    """The prepared .stormmap stays on the computer that prepared it (a results folder leaves it
+    out): stitched elsewhere, the pack reads the map's own pictures from the game's copy of the
+    map, by its name, and leaves no copy behind."""
+    import types
+
+    from heroes_capture.common import game_data
+
+    storage = types.SimpleNamespace(build=lambda: 98348, close=lambda: None)
+    monkeypatch.setattr(game_data, "game_storage", lambda: storage)
+    monkeypatch.setattr(game_data, "map_index", lambda s: {})
+    monkeypatch.setattr(game_data, "map_file", lambda s, name: (name, b"the map's archive"))
+    seen = []
+
+    def map_images(stormmap, storage_, folder):
+        seen.append(stormmap.read_bytes() if stormmap and stormmap.exists() else None)
+        return {}
+
+    monkeypatch.setattr(pack, "map_images", map_images)
+    out = tmp_path / "maps" / "test-map"
+    folder = pack.write(out, stitched(out), ["test-map-structures"], Specifics("battleground"))
+    assert seen == [b"the map's archive"]
+    assert not list((out / "raw").glob("*.stormmap"))
+    assert json.loads((folder / "pack.json").read_text())["gameBuild"] == 98348
+
+
+def test_a_map_layer_s_team_colour_mask_is_tiled_with_it(tmp_path, monkeypatch):
+    """The stitch's team-colour mask of a map image (<image>-team.png: Order's team's amount in red,
+    Chaos's in green) becomes the map layer's teamMask: a lossless pyramid tiled and levelled as the
+    layer, its empty tiles left out; and pack.json gives the colours it was shot in (PACK.md, Team
+    colour)."""
+    from heroes_capture.common import game_data
+
+    monkeypatch.setattr(game_data, "open_storage", lambda install: (_ for _ in ()).throw(OSError("no game here")))
+    monkeypatch.setattr(game_data, "find_install", lambda: None)
+    out = tmp_path / "maps" / "test-map"
+    manifest = stitched(out)
+    mask = np.zeros((600, 900, 3), np.uint8)
+    mask[100:140, 100:140, 0] = 200  # Order's team, in the first tile only
+    mask[110:120, 600:620, 1] = 90  # Chaos's, in the second
+    Image.fromarray(mask).save(out / "test-map-structures-team.png")
+    folder = pack.write(out, manifest, ["test-map-structures"], Specifics("battleground"))
+    description = json.loads((folder / "pack.json").read_text())
+    layer = description["layers"][-1]
+    assert layer["teamMask"] == {"file": "map-team.pmtiles", "overview": {"file": "map-team-overview.webp", "level": 0, "size": [450, 300]}}
+    assert description["teamColours"] == {"order": [101, 159, 255], "chaos": [255, 57, 48], "maskScale": 2.0}
+    assert {"map-team.pmtiles", "map-team-overview.webp"} <= set(description["files"])
+    with open(folder / "map-team.pmtiles", "rb") as f:
+        reader = Reader(MmapSource(f))
+        first, second, third = read_tile(reader, 1, 0, 0), read_tile(reader, 1, 1, 0), read_tile(reader, 1, 0, 1)
+    assert tuple(first[120, 120, :2]) == (200, 0) and tuple(second[115, 610 - 512, :2]) == (0, 90)  # exact: lossless
+    assert third is None  # nothing there: not stored
+    assert (out / "raw" / "map-team.png").exists()
+
+
+def test_the_stitch_s_leftovers_are_cleared_after_the_pack_data_hooks(tmp_path, monkeypatch):
+    """The pack clears the stitch's leftover files from the map's folder only once the pack_data
+    hooks (map/specifics.py) have taken theirs (the battlegrounds' elements: the first elements
+    render lost them), and puts what the hooks give in the pack's data."""
+    from heroes_capture.common import game_data
+
+    monkeypatch.setattr(game_data, "open_storage", lambda install: (_ for _ in ()).throw(OSError("no game here")))
+    monkeypatch.setattr(game_data, "find_install", lambda: None)
+    out = tmp_path / "maps" / "test-map"
+    manifest = stitched(out)
+    (out / "test-map-structures-elements.json").write_text("{}")
+    seen = []
+    specifics = Specifics("battleground", pack_data=[lambda packing: seen.append((packing.out / "test-map-structures-elements.json").exists()) or {"x": 1}])
+    folder = pack.write(out, manifest, ["test-map-structures"], specifics)
+    assert seen == [True] and not (out / "test-map-structures-elements.json").exists() and not (out / "test-map-structures-preview.jpg").exists()
+    assert json.loads((folder / "pack.json").read_text())["data"] == {"x": 1}
 
 
 def test_a_state_with_nothing_left_is_kept_as_nothing(tmp_path):
     """A fallen moonwell leaves nothing: its rubble's shots over the sky are empty. The stitch records
     the state with no file, and the pack lists it as null (PACK.md, Elements)."""
-    from heroes_capture import stitch
-    from heroes_capture.frames import save_frame
+    from heroes_capture.capture import stitch
+    from heroes_capture.common.frames import save_frame
 
     base, out = tmp_path / "run", tmp_path / "out"
     (base / "elements").mkdir(parents=True)
@@ -281,20 +386,51 @@ def test_a_state_with_nothing_left_is_kept_as_nothing(tmp_path):
     (base / "elements" / "elements.json").write_text(json.dumps({"structure-7-rubble": {
         "kind": "structure", "element": 7, "state": "rubble", "x": 11, "y": 9, "radius": 3, "tile": 0, "camera": {"x": 10, "y": 10}}}))
     (out / "m.geo.json").write_text(json.dumps({"originCell": {"x": -48, "y": 40}}))
-    layout = stitch.Layout({0: np.array([100.0, 50.0])}, {0}, {}, {0: {"index": 0, "x": 10, "y": 10}}, 40, 30, 0)
-    assert stitch.write_elements({"id": "m"}, base, out, layout, 2.0, 100.0, 85.0, "m") == 1
+    layout = stitch.Layout({0: np.array([100.0, 50.0])}, {}, {0: {"index": 0, "x": 10, "y": 10}}, 40, 30, 0)
+    assert element_stitch.write_elements({"id": "m"}, base, out, layout, 2.0, 100.0, 85.0, "m") == 1
     manifest = {"id": "m", "elements": {"structures": [{"id": 7, "type": "TownMoonwellL2", "x": 11, "y": 9, "owner": "order", "town": 1,
                                                         "core": False, "radius": 3}], "towns": [], "camps": []}}
-    data = pack.collect_elements(out, tmp_path / "raw", tmp_path / "pack", manifest, "map", small_factor=8)
+    data = element_pack.collect_elements(out, tmp_path / "raw", tmp_path / "pack", manifest, "map", small_factor=8)
     assert data["structures"][0]["states"] == {"rubble": None}
+
+
+def test_a_standing_structure_shot_from_both_sides_gets_its_team_colour_mask(tmp_path):
+    """A standing structure's shots from Chaos's side (the record's chaos) are cut out like Order's,
+    and its team-colour mask (team_colour.py) saved over the same rectangle: where its team colour
+    went from blue to red, Order's team's amount."""
+    from heroes_capture.capture import stitch
+    from heroes_capture.capture.team_colour import MASK_SCALE, TEAM_COLOURS
+    from heroes_capture.common.frames import save_frame
+
+    base, out = tmp_path / "run", tmp_path / "out"
+    (base / "elements").mkdir(parents=True)
+    out.mkdir()
+    body = np.array([60.0, 50.0, 40.0])
+    for side, colour in (("", TEAM_COLOURS["order"]), ("-chaos", TEAM_COLOURS["chaos"])):
+        for sky, level in (("", 230), ("-black", 0)):
+            shot = np.full((30, 40, 3), level, np.uint8)
+            shot[15:19, 20:24] = body + 0.5 * np.array(colour)  # the structure, opaque, its orb half team colour
+            save_frame(base / "elements" / f"structure-5-standing{side}{sky}", shot)
+    (base / "elements" / "elements.json").write_text(json.dumps({"structure-5-standing": {
+        "kind": "structure", "element": 5, "state": "standing", "x": 11, "y": 9, "radius": 3, "tile": 0, "camera": {"x": 10, "y": 10},
+        "chaos": "structure-5-standing-chaos"}}))
+    (out / "m.geo.json").write_text(json.dumps({"originCell": {"x": -48, "y": 40}}))
+    layout = stitch.Layout({0: np.array([100.0, 50.0])}, {}, {0: {"index": 0, "x": 10, "y": 10}}, 40, 30, 0)
+    assert element_stitch.write_elements({"id": "m"}, base, out, layout, 2.0, 100.0, 85.0, "m") == 1
+    cut = json.loads((out / "m-elements.json").read_text())["cutouts"][0]
+    assert cut["teamMask"] == "structure-5-standing-team.png"
+    mask = np.asarray(Image.open(out / "m-elements" / cut["teamMask"]))
+    picture = np.asarray(Image.open(out / "m-elements" / cut["file"]))
+    assert mask.shape[:2] == picture.shape[:2]
+    assert abs(mask[..., 0].max() / 255 * MASK_SCALE - 0.5) < 0.02 and not mask[..., 1].any()
 
 
 def test_a_town_hall_s_rubble_leaves_out_its_town_s_moonwell(tmp_path):
     """A hall's fall brings its town's moonwell down too: the moonwell's rubble lies in the hall's
     rubble shot. The hall's cut-out keeps only what is nearer the hall than the moonwell (as does
     every town structure's, of its town's moonwells and hall); another town's doesn't count."""
-    from heroes_capture import stitch
-    from heroes_capture.frames import save_frame
+    from heroes_capture.capture import stitch
+    from heroes_capture.common.frames import save_frame
 
     base, out = tmp_path / "run", tmp_path / "out"
     (base / "elements").mkdir(parents=True)
@@ -308,13 +444,13 @@ def test_a_town_hall_s_rubble_leaves_out_its_town_s_moonwell(tmp_path):
     (base / "elements" / "elements.json").write_text(json.dumps({"structure-5-rubble": {
         "kind": "structure", "element": 5, "state": "rubble", "x": 11, "y": 9, "radius": 6, "tile": 0, "camera": {"x": 10, "y": 10}}}))
     (out / "m.geo.json").write_text(json.dumps({"originCell": {"x": -48, "y": 40}}))
-    layout = stitch.Layout({0: np.array([100.0, 50.0])}, {0}, {}, {0: {"index": 0, "x": 10, "y": 10}}, 40, 30, 0)
+    layout = stitch.Layout({0: np.array([100.0, 50.0])}, {}, {0: {"index": 0, "x": 10, "y": 10}}, 40, 30, 0)
 
     def cut(moonwell_town):
         manifest = {"id": "m", "elements": {"structures": [
             {"id": 5, "type": "TownTownHallL3", "x": 11, "y": 9, "town": 1},
             {"id": 6, "type": "TownMoonwellL3", "x": 14.5, "y": 9, "town": moonwell_town}]}}
-        assert stitch.write_elements(manifest, base, out, layout, 2.0, 100.0, 85.0, "m") == 1
+        assert element_stitch.write_elements(manifest, base, out, layout, 2.0, 100.0, 85.0, "m") == 1
         return json.loads((out / "m-elements.json").read_text())["cutouts"][0]["rect"]
 
     assert cut(1)[2] == 2  # the hall's square alone
@@ -324,8 +460,8 @@ def test_a_town_hall_s_rubble_leaves_out_its_town_s_moonwell(tmp_path):
 def test_the_stitch_shows_what_it_took_for_moving(tmp_path):
     """A tile's pixels that changed colour between its two shots (not grey) shown for diagnosis: the shot marked, and the densest square of them over white and over
     black, next to the run's folder."""
-    from heroes_capture import stitch
-    from heroes_capture.frames import save_frame
+    from heroes_capture.capture import stitch
+    from heroes_capture.common.frames import save_frame
 
     base = tmp_path / "tmp" / "run"
     (base / "tiles").mkdir(parents=True)
@@ -335,7 +471,7 @@ def test_the_stitch_shows_what_it_took_for_moving(tmp_path):
     save_frame(base / "tiles" / "tile_0000", white)
     save_frame(base / "tiles" / "tile_0000-black", black)
     shots = stitch.Shots({"sky": {"mode": "matte"}}, base)
-    assert stitch.moving_mask(white, black).sum() == 100
+    assert matting.moved_pixels(white, black).sum() == 100
     stitch.show_moving(shots, [0])
     shown = list((tmp_path / "tmp").glob("moving-*/*.png"))
     assert sorted(f.name for f in shown) == ["tile-1-densest.png", "tile-1-marked.png"]
@@ -348,8 +484,8 @@ def test_a_standing_structure_is_masked_where_its_neighbour_stands_in_front(tmp_
     shows the wall over part of it, so the tower's cut-out gets a mask of that part (hidden while
     the wall stands); the wall's shot with the tower beside it shows the tower nowhere in front, so
     the wall gets none."""
-    from heroes_capture import stitch
-    from heroes_capture.frames import save_frame
+    from heroes_capture.capture import stitch
+    from heroes_capture.common.frames import save_frame
 
     base, out = tmp_path / "run", tmp_path / "out"
     folder = base / "elements"
@@ -380,8 +516,8 @@ def test_a_standing_structure_is_masked_where_its_neighbour_stands_in_front(tmp_
         "structure-6-standing": {"kind": "structure", "state": "standing", "element": 6, "x": 13, "y": 9, "radius": 3, "tile": 0,
                                  "camera": camera, "neighbours": [5]}}))
     (out / "m.geo.json").write_text(json.dumps({"originCell": {"x": -48, "y": 40}}))
-    layout = stitch.Layout({0: np.array([100.0, 50.0])}, {0}, {}, {0: {"index": 0, "x": 10, "y": 10}}, 40, 30, 0)
-    assert stitch.write_elements({"id": "m"}, base, out, layout, 2.0, 100.0, 85.0, "m") == 2
+    layout = stitch.Layout({0: np.array([100.0, 50.0])}, {}, {0: {"index": 0, "x": 10, "y": 10}}, 40, 30, 0)
+    assert element_stitch.write_elements({"id": "m"}, base, out, layout, 2.0, 100.0, 85.0, "m") == 2
     cuts = {c["key"]: c for c in json.loads((out / "m-elements.json").read_text())["cutouts"]}
     assert cuts["structure-6-standing"]["hiddenBy"] == []
     [mask] = cuts["structure-5-standing"]["hiddenBy"]

@@ -13,7 +13,6 @@ Layers: "parallax", the map's parallax model as it is (background art and haze t
 haze shells alone. Written to <id>/sky-layers.json.
 """
 
-import json
 import math
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -21,11 +20,13 @@ from pathlib import Path
 
 import numpy as np
 
-from .frames import save_frame
-from .game_control import settle, step
-from . import ui
-from .runlog import log, warn
-from .sky import lens_scale
+from heroes_capture.capture.sky import lens_scale
+from heroes_capture.common import ui
+from heroes_capture.common.frames import save_frame
+from heroes_capture.common.game_control import settle, step
+from heroes_capture.common.jsonio import write_json
+from heroes_capture.common.matching import grey, phase_correlate
+from heroes_capture.common.runlog import log, warn
 
 SKY_SETTLE = 0.1  # real seconds for a sky swap to be drawn before its shot (was 1; the waits probe found shots within one level down to 0.05)
 MAP_SETTLE = 0.1  # real seconds after a camera move before a shot of the map (as the tiles' settle)
@@ -37,27 +38,8 @@ def phase_offset(a: np.ndarray, b: np.ndarray) -> tuple[float, float, float]:
     """(dx, dy, strength): how far the content of `b` moved from where it is in `a`, in screen
     pixels, to a fraction of a pixel (phase correlation at half size). Strength near 1 is a
     clean match; under about 0.05 there was nothing to match."""
-    def prepare(f: np.ndarray) -> np.ndarray:
-        g = f[::2, ::2].astype(np.float32).mean(axis=2)
-        g -= g.mean()
-        return g * np.outer(np.hanning(g.shape[0]), np.hanning(g.shape[1])).astype(np.float32)
-
-    pa, pb = prepare(a), prepare(b)
-    cross = np.fft.rfft2(pb) * np.conj(np.fft.rfft2(pa))
-    cross /= np.abs(cross) + 1e-9
-    corr = np.fft.irfft2(cross, s=pa.shape)
-    y, x = np.unravel_index(int(np.argmax(corr)), corr.shape)
-    h, w = corr.shape
-
-    def refine(before: float, peak: float, after: float) -> float:
-        denom = before - 2 * peak + after
-        return 0.5 * (before - after) / denom if denom else 0.0
-
-    fy = y + refine(corr[(y - 1) % h, x], corr[y, x], corr[(y + 1) % h, x])
-    fx = x + refine(corr[y, (x - 1) % w], corr[y, x], corr[y, (x + 1) % w])
-    dy = fy - h if fy > h / 2 else fy
-    dx = fx - w if fx > w / 2 else fx
-    return float(dx) * 2, float(dy) * 2, float(corr.max())
+    dy, dx, strength = phase_correlate(grey(a, 2), grey(b, 2))
+    return -dx * 2, -dy * 2, strength
 
 
 AXES_AGREE = 0.1  # a shell's rates across and down agree to within this share (the background art: 0.4574, 0.4596)
@@ -99,11 +81,11 @@ def measure(session, manifest: dict, out_dir: Path, area: dict | None = None) ->
         """The map and each sky layer, with the camera at (x, y). Each layer is put up anew at
         every position: at speed 1 it then shows the same frozen moment each time (left up while
         the camera moved, the haze drifted enough to skew its rate)."""
-        answer = session.send(f"tile 0 {x:.2f} {y:.2f}", timeout=3.0)
-        if answer is None:
+        status = session.move_camera(x, y)
+        if status is None:
             return None
         settle(MAP_SETTLE)
-        frames = {"map": session.grab(dark_ok=True), "camera": (answer[0].camera_x, answer[0].camera_y)}
+        frames = {"map": session.grab(dark_ok=True), "camera": (status.camera_x, status.camera_y)}
         if session.send(f"hidemap {clip}") is None:  # map clipped away, sky frozen, our sky down
             return None
         for name, command in layers.items():
@@ -153,7 +135,7 @@ def measure(session, manifest: dict, out_dir: Path, area: dict | None = None) ->
         result["layers"][name] = layer
     result["mapPxPerCell"] = scale
     path = out_dir / "sky-layers.json"
-    path.write_text(json.dumps(result, indent=2))
+    write_json(path, result, indent=2)
     log("  sky layers: " + "; ".join(f"{n} rate {result['layers'][n]['rate']}" for n in layers) + f" -> {path.name}")
     return result
 
@@ -224,12 +206,10 @@ def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep:
 
     def at(x: float, y: float, near: float) -> tuple[float, float] | None:
         """The camera to (x, y), the map clipped away at `near`, our sky down."""
-        answer = session.send(f"tile 0 {x:.2f} {y:.2f}", timeout=3.0)
-        if answer is None:
+        status = session.move_camera(x, y)
+        if status is None or session.send(f"hidemap {near}") is None:  # map clipped away, sky frozen, our sky down
             return None
-        if session.send(f"hidemap {near}") is None:  # map clipped away, sky frozen, our sky down
-            return None
-        return answer[0].camera_x, answer[0].camera_y
+        return status.camera_x, status.camera_y
 
     def fixed_alone() -> None:
         """The fixed skybox through each lens (it moves with the camera: the same at every position)."""
@@ -280,5 +260,5 @@ def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep:
             advance()
     step(lambda: session.send("sky mapparallax 1"), "putting the map's own parallax back")
     saver.shutdown(wait=True)
-    (folder / "positions.json").write_text(json.dumps(record, indent=2))
+    write_json(folder / "positions.json", record, indent=2)
     log(f"  sky layer images: {len(record['positions'])} positions -> {folder.name}/")

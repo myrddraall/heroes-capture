@@ -1,4 +1,5 @@
-"""Phase correlation: how far one image's content moved in another (the stitches' matching)."""
+"""Phase correlation: how far one image's content moved in another (the stitches' matching, the
+capture's check that the view held still, the sky layers' rates)."""
 
 import numpy as np
 
@@ -25,3 +26,8 @@ def phase_correlate(a: np.ndarray, b: np.ndarray) -> tuple[float, float, float]:
     dy = fy - h if fy > h / 2 else fy
     dx = fx - w if fx > w / 2 else fx
     return -float(dy), -float(dx), float(corr.max())
+
+
+def grey(frame: np.ndarray, step: int) -> np.ndarray:
+    """A frame's brightness (float), every `step`-th pixel each way: what is matched."""
+    return frame[::step, ::step].astype(np.float32).mean(axis=2)

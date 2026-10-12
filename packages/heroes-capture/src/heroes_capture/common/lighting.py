@@ -1,4 +1,4 @@
-"""The map's main light, for the lighting-refit look (see capture_script.galaxy): the map's
+"""The map's main light, for the lighting-refit look (see capture/script.galaxy): the map's
 tileset (t3Terrain.xml) names a light set (CTerrain Lighting), and the light set's "Key"
 directional light has a direction. Tileset and light-set definitions live in the game's data
 (game_data.light_sets reads them at runtime); a map can override either in its own TerrainData.xml

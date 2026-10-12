@@ -1,0 +1,652 @@
+//--------------------------------------------------------------------------------------------------
+// The capture's part (capturing maps): "tile <n> <x> <y>" moves the camera to tile n, with the
+// scene as the tiles have it; the skies, the lens, the map's opening fast-forwarded, the sweep.
+//--------------------------------------------------------------------------------------------------
+// init: hrsCap_CaptureInit
+// command: tile hrsCap_gt_Tile_Func
+// command: clean hrsCap_gt_Clean_Func
+// command: black hrsCap_gt_Black_Func
+// command: sky hrsCap_gt_Sky_Func
+// command: fov hrsCap_gt_Fov_Func
+// command: hidemap hrsCap_gt_HideMap_Func
+// command: pause hrsCap_gt_Pause_Func
+// command: unbound hrsCap_gt_Unbound_Func
+// command: side hrsCap_gt_Side_Func
+const bool hrsCap_hideStructures = ${hide_structures};
+const fixed hrsCap_distance = ${distance};
+const fixed hrsCap_pitch = ${pitch};
+const int hrsCap_tileCount = ${tile_count};
+int hrsCap_currentTile = 0;
+fixed hrsCap_curX = 0.0;  // the current tile's camera target (from the command, else the table)
+fixed hrsCap_curY = 0.0;
+fixed[${tile_count}] hrsCap_tileX;
+fixed[${tile_count}] hrsCap_tileY;
+trigger hrsCap_gt_Quiet;
+bool hrsCap_keepCreeps = false;  // command "el keep 1": the sweep leaves camps alone (the elements capture)
+const fixed hrsCap_refitWait = 0.1;  // real seconds the lighting-refit look is held before each tile (0.25 until shorter proved to change nothing but the effects that animate anyway)
+bool hrsCap_unbound = false;  // command "unbound": the camera may go anywhere on the map (tiles past the camera bounds)
+trigger hrsCap_gt_Sweep;
+trigger hrsCap_gt_FastForward;
+fixed hrsCap_bgSpeed = 100.0;  // animation speed (percent) "sky" gives a background; command "bgspeed"
+const string hrsCap_mapSky = "${map_sky}";  // the map's own sky models ("sky mapsky", "sky mapparallax")
+const string hrsCap_mapParallax = "${map_parallax}";
+bool hrsCap_paused = false;  // the map's animations have been paused (once the game started)
+bool hrsCap_eventOff = false;  // the map's event switched off (MapMechanicsLib), before the gates open
+bool[64] hrsCap_frameShown;  // which interface frame types the match showed at its start (hrsCap_SaveFrames), by type less c_syncFrameTypeFirst
+const fixed hrsCap_gatesDelay = 3.0;  // seconds to the gates opening (the game's default is 35)
+const fixed hrsCap_forwardSeconds = ${forward_seconds};  // real seconds the map's opening timers are kept short (none known for this map: no wait)
+const fixed hrsCap_readySeconds = 18.0;  // real seconds from the gates opening to the map ready and paused, fast-forward included: the cores' entrance animation hadn't finished at 10
+
+//--------------------------------------------------------------------------------------------------
+// The scene: units, camera, interface, sky.
+//--------------------------------------------------------------------------------------------------
+void hrsCap_InitTiles () {
+${tile_lines}
+}
+
+void hrsCap_RemoveUnits (unitfilter lp_filter) {
+    unitgroup lv_g;
+    int lv_u;
+    unit lv_unit;
+
+    lv_g = UnitGroup(null, c_playerAny, RegionEntireMap(), lp_filter, 0);
+    lv_u = UnitGroupCount(lv_g, c_unitCountAll);
+    for (;; lv_u -= 1) {
+        lv_unit = UnitGroupUnitFromEnd(lv_g, lv_u);
+        if (lv_unit == null) { break; }
+        // Objective units stay: Hanamura's payload carries the path lines drawn to it.
+        if ((UnitGetType(lv_unit) == "Payload_Neutral") || (UnitGetType(lv_unit) == "Payload_Neutral_Warning")) { continue; }
+        UnitRemove(lv_unit);
+        if (hrsCap_ready) {
+            hrsCap_clearedSinceReady += 1;
+        }
+    }
+}
+
+// Remove heroes, minions, mercenaries, map creatures and summons; what stays (structures, and
+// map-mechanic units such as altars: removing those leaves holes in the terrain) loses its
+// health bars, and is hidden in terrain-only mode. Hidden, not removed: removing a core could
+// end the game.
+void hrsCap_ClearUnits () {
+    unitgroup lv_g;
+    int lv_u;
+    unit lv_unit;
+
+    hrsCap_RemoveUnits(UnitFilter((1 << c_targetFilterHeroic), 0, (1 << c_targetFilterStructure), 0));
+    hrsCap_RemoveUnits(UnitFilter((1 << c_targetFilterMinion), 0, (1 << c_targetFilterStructure), 0));
+    if (!hrsCap_keepCreeps) {
+        hrsCap_RemoveUnits(UnitFilter((1 << c_targetFilterCreep), 0, (1 << c_targetFilterStructure), 0));
+        hrsCap_RemoveUnits(UnitFilter(0, (1 << (c_targetFilterMapCreature - 32)), (1 << c_targetFilterStructure), 0));
+        hrsCap_RemoveUnits(UnitFilter(0, (1 << (c_targetFilterSummoned - 32)), (1 << c_targetFilterStructure), 0));
+    }
+
+    lv_g = UnitGroup(null, c_playerAny, RegionEntireMap(), UnitFilter(0, 0, (1 << c_targetFilterMissile), 0), 0);
+    lv_u = UnitGroupCount(lv_g, c_unitCountAll);
+    for (;; lv_u -= 1) {
+        lv_unit = UnitGroupUnitFromEnd(lv_g, lv_u);
+        if (lv_unit == null) { break; }
+        UnitSetState(lv_unit, c_unitStateStatusBar, false);
+        // Never outlined under the mouse: a cursor left over a structure lit it up in its shot.
+        UnitSetState(lv_unit, c_unitStateHighlightable, false);
+        if (hrsCap_hideStructures) {
+            ActorSend(libNtve_gf_MainActorofUnit(lv_unit), "SetVisibility");
+        }
+    }
+}
+
+// The camera bounds lifted to the whole map, after the command "unbound" (the capture's tiles past the
+// camera bounds, where map content runs on past the edge of the grid). Before every pan: the map
+// may put its own bounds back at any time.
+void hrsCap_LiftBounds () {
+    if (hrsCap_unbound) {
+        CameraSetBounds(PlayerGroupAll(), RegionRect(0.0, 0.0, ${map_width}, ${map_height}), false);
+    }
+}
+
+void hrsCap_ApplyCamera (int lp_player) {
+    CameraLockInput(lp_player, true);
+    CameraUseHeightDisplacement(lp_player, false);
+    CameraSetValue(lp_player, c_cameraValuePitch, hrsCap_pitch, 0.0, -1, 10.0);
+    CameraSetValue(lp_player, c_cameraValueYaw, 90.0, 0.0, -1, 10.0);
+    CameraSetValue(lp_player, c_cameraValueDistance, hrsCap_distance, 0.0, -1, 10.0);${lens_lines}
+}
+
+// A camera like real play (distance 34, fov 45), shallow (pitch 35) and facing the map's main
+// light (yaw ${refit_yaw}). The game fits its lighting (the region the main light and
+// shadows are computed for) to the last camera it takes as normal and never refits it for the
+// capture camera: the rest of the map was drawn without the main light (a dark, straight-edged
+// area, a different one each match; dark boxes around holes). So every tile shows this camera
+// at its centre for a few frames first, and the game refits around the tile. Only the latest
+// look counts, and only a shallow look towards the light cleared every box (pitch 52 or other
+// yaws left boxes around some holes).
+void hrsCap_NormalCamera (int lp_player) {
+    CameraSetValue(lp_player, c_cameraValuePitch, 35.0, 0.0, -1, 10.0);
+    CameraSetValue(lp_player, c_cameraValueYaw, ${refit_yaw}, 0.0, -1, 10.0);
+    CameraSetValue(lp_player, c_cameraValueDistance, 34.0, 0.0, -1, 10.0);
+    CameraSetValue(lp_player, c_cameraValueFieldOfView, 45.0, 0.0, -1, 10.0);
+}
+
+// No fog of war, no unexplored black, no HUD, no messages, a top-down camera, the sky.
+void hrsCap_Scene () {
+    int lv_p;
+    int lv_f;
+
+    // (Not VisEnable(c_visTypeFog, false): with fog of war off the reveal below stops working,
+    // and only the vision around one team's buildings is drawn lit.)
+    // The whole map, not RegionEntireMap() (the playable area): terrain outside the playable
+    // bounds is otherwise left unexplored, under the black fog-of-war mask and its gradient
+    // at the boundary, which darkened the outer walls and trees of Dragon Shire to half.
+    lv_p = 0;
+    for ( ; lv_p <= 15 ; lv_p += 1 ) {
+        VisExploreArea(lv_p, ${map_region}, true, false);
+        VisRevealArea(lv_p, ${map_region}, 0.0, false);
+    }
+
+    lv_p = 1;
+    for ( ; lv_p <= 10 ; lv_p += 1 ) {
+        if ((PlayerStatus(lv_p) == c_playerStatusActive)) {
+${hero_ui_lines}            hrsCap_ApplyCamera(lv_p);
+        }
+    }
+${ui_lines}${bounds_line}
+    hrsCap_LiftBounds();
+    GameSetBackground(0, "${sky_model}", 100.0);  // the camera-fixed skybox (sky.py)
+    hrsCap_skyState = ${sky_state};${doodad_lines}
+    UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
+    // Every animation on the map paused (glows, fires, smoke, swaying trees, flags), the way
+    // Blizzard's maps do at game over: the two shots of a tile then differ only by the sky.
+    // Only once the map is ready (see hrsCap_gt_FastForward): everything the start and the
+    // first objective bring is there; the sweep sends it the moment that is so.
+    // (Water is the terrain's own layer, not an actor; its waves are time-driven in the shader
+    // and neither its data nor catalog edits still them, so it keeps moving.)
+    if (hrsCap_ready) {
+        libNtve_gf_SendActorMessageToGameRegion(${map_region}, "AnimSetPausedAll");
+    }
+}
+
+// The map's intro cutscene is still running for someone (the sweep stops it, and the game's
+// intro code then takes a moment to restore the camera and interface).
+bool hrsCap_IntroPlaying () {
+    int lv_p;
+
+    lv_p = 1;
+    for ( ; lv_p <= 10 ; lv_p += 1 ) {
+        if ((libMapM_gv_mMIntroCutscene[lv_p] != c_cutsceneNone) && (libMapM_gv_mMIntroCutsceneFinished[lv_p] == false)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Skip the map's intro cutscene the way the game's own skip does: stop the cutscene. The
+// intro (libMapM_gf_PlayMapMechanicIntroForPlayer) waits for its cutscene to end and then
+// restores the camera, interface, sound and vision itself, so nothing is left half-done.
+void hrsCap_SkipIntro () {
+    int lv_p;
+
+    lv_p = 1;
+    for ( ; lv_p <= 10 ; lv_p += 1 ) {
+        if ((libMapM_gv_mMIntroCutscene[lv_p] != c_cutsceneNone) && (libMapM_gv_mMIntroCutsceneFinished[lv_p] == false)) {
+            CutsceneStop(libMapM_gv_mMIntroCutscene[lv_p]);
+        }
+    }
+}
+
+// The game's own in-world labels (mercenary camp names and timers) are text tags stored per
+// camp in the map-mechanics library; hide them, or they end up in the screenshots.
+void hrsCap_HideLabels () {
+    int lv_c;
+
+    lv_c = 1;
+    for ( ; lv_c <= libMapM_gv_jungleMaxCamps ; lv_c += 1 ) {
+        if ((libMapM_gv_jungleCreepCamps[lv_c].lv_campHelperTextTagOrder != c_textTagNone)) {
+            TextTagShow(libMapM_gv_jungleCreepCamps[lv_c].lv_campHelperTextTagOrder, PlayerGroupAll(), false);
+        }
+        if ((libMapM_gv_jungleCreepCamps[lv_c].lv_campHelperTextTagChaos != c_textTagNone)) {
+            TextTagShow(libMapM_gv_jungleCreepCamps[lv_c].lv_campHelperTextTagChaos, PlayerGroupAll(), false);
+        }
+        // The camp's name, description and respawn timer ("Bruiser Camp", "Defeat or bribe this
+        // camp", "0:29") are an interface panel per camp, created inside the game's
+        // MercCampPanel and positioned over the camp (the camp's own dialog is only the anchor).
+        if ((libMapM_gv_uIJungleCampPanel.lv_jungleCreepCampsInfoPanel[lv_c] != c_invalidDialogControlId)) {
+            DialogControlSetVisible(libMapM_gv_uIJungleCampPanel.lv_jungleCreepCampsInfoPanel[lv_c], PlayerGroupAll(), false);
+        }
+    }
+    if ((libMapM_gv_uIJungleCampPanel.lv_jungleCreepCampsParentPanel != c_invalidDialogControlId)) {
+        DialogControlSetVisible(libMapM_gv_uIJungleCampPanel.lv_jungleCreepCampsParentPanel, PlayerGroupAll(), false);
+    }
+}
+
+// Put back what the capture changed: the game's end-of-match sequence (the camera flying to a
+// core, the explosion) crashed the game the moment it started, with the interface hidden and
+// the camera far out of its normal range. Blizzard's own cinematic exit restores the same
+// things. The sky slots too, as a render leaves them (our sky in the fixed slot, the map's own
+// parallax in the other, normal speed): leaving with them as the sky probes set them (a slot
+// empty, keyed copies, speed 1) crashed the game the moment the match ended.
+void hrsCap_Restore () {
+    int lv_p;
+    int lv_f;
+    camerainfo lv_cam;
+
+    TriggerEnable(hrsCap_gt_Sweep, false);
+    hrsCap_bgSpeed = 100.0;
+    GameSetBackground(0, "${sky_model}", 100.0);
+    hrsCap_skyState = ${sky_state};
+    if ((hrsCap_mapParallax != "")) {
+        GameSetBackground(1, hrsCap_mapParallax, 100.0);
+    }
+    lv_cam = CameraInfoDefault();
+    lv_p = 1;
+    for ( ; lv_p <= 10 ; lv_p += 1 ) {
+        if ((PlayerStatus(lv_p) == c_playerStatusActive)) {
+            CameraSetValue(lv_p, c_cameraValuePitch, CameraInfoGetValue(lv_cam, c_cameraValuePitch), 0.0, -1, 10.0);
+            CameraSetValue(lv_p, c_cameraValueDistance, CameraInfoGetValue(lv_cam, c_cameraValueDistance), 0.0, -1, 10.0);
+            CameraSetValue(lv_p, c_cameraValueFieldOfView, CameraInfoGetValue(lv_cam, c_cameraValueFieldOfView), 0.0, -1, 10.0);
+            CameraSetValue(lv_p, c_cameraValueFarClip, CameraInfoGetValue(lv_cam, c_cameraValueFarClip), 0.0, -1, 10.0);
+            CameraSetValue(lv_p, c_cameraValueNearClip, CameraInfoGetValue(lv_cam, c_cameraValueNearClip), 0.0, -1, 10.0);
+            CameraSetValue(lv_p, c_cameraValueYaw, CameraInfoGetValue(lv_cam, c_cameraValueYaw), 0.0, -1, 10.0);
+            CameraUseHeightDisplacement(lv_p, true);
+            CameraLockInput(lv_p, false);
+        }
+    }
+    UISetMode(PlayerGroupAll(), c_uiModeConsole, c_transitionDurationImmediate);
+    // The frame types the match showed at its start, and only those: every type shown rolled the
+    // end credits over the map (a frame a match keeps hidden).
+    lv_f = c_syncFrameTypeFirst;
+    for ( ; lv_f <= c_syncFrameTypeLast ; lv_f += 1 ) {
+        if (((lv_f - c_syncFrameTypeFirst) < 64)) {
+            UISetFrameVisible(PlayerGroupAll(), lv_f, hrsCap_frameShown[(lv_f - c_syncFrameTypeFirst)]);
+        }
+    }
+}
+
+// Which interface frame types the match shows, at its start (hrsCap_Init: before the scene or
+// the intro cutscene hides any), for hrsCap_Restore to put back.
+void hrsCap_SaveFrames () {
+    int lv_f;
+
+    lv_f = c_syncFrameTypeFirst;
+    for ( ; lv_f <= c_syncFrameTypeLast ; lv_f += 1 ) {
+        if (((lv_f - c_syncFrameTypeFirst) < 64)) {
+            hrsCap_frameShown[(lv_f - c_syncFrameTypeFirst)] = UIFrameVisible(hrsCap_LocalPlayer(), lv_f);
+        }
+    }
+}
+
+// Until the camera has stopped moving (a pan eases over several frames, the longer the further;
+// a clamp at the bounds is applied at the next update): the status strip's echo of the
+// camera's target is only right after this. At most 1.5 s.
+void hrsCap_WaitCameraStill () {
+    point lv_prev;
+    point lv_now;
+    int lv_n;
+
+    lv_prev = CameraGetTarget(hrsCap_statusPlayer);
+    lv_n = 0;
+    while ((lv_n < 24)) {
+        Wait(0.0625, c_timeReal);
+        lv_now = CameraGetTarget(hrsCap_statusPlayer);
+        if ((DistanceBetweenPoints(lv_now, lv_prev) < 0.02)) {
+            return;
+        }
+        lv_prev = lv_now;
+        lv_n += 1;
+    }
+}
+
+//--------------------------------------------------------------------------------------------------
+// The opening: gates early, the map's opening timers cut short, then the map is ready.
+//--------------------------------------------------------------------------------------------------
+
+// One of the map's opening timers to half a second from expiring, if it is running and has
+// longer than that to go.
+void hrsCap_CutShort (timer lp_t) {
+    if ((TimerGetRemaining(lp_t) > 0.5)) {
+        TimerSetElapsed(lp_t, (TimerGetDuration(lp_t) - 0.5));
+        hrsCap_openingCuts += 1;
+    }
+}
+
+// Once the gates have opened: for a few real seconds the map's opening timers (the countdown
+// to its first objective and the steps on the way: Hanamura's payload comes 3 minutes after the
+// gates) are cut short as each one starts, so the objective and what it brings are in place
+// before any tile is shot; the map is then ready. (Speeding game time up instead,
+// GameSetGlobalTimeScale, moved no timers: the game clock read 11 s after 10 s at 20x.)
+bool hrsCap_gt_FastForward_Func (bool testConds, bool runActions) {
+    int lv_n;
+
+    if (!runActions) {
+        return true;
+    }
+    lv_n = 0;
+    while ((lv_n < FixedToInt(hrsCap_forwardSeconds * 4.0))) {
+${cut_short_lines}
+        Wait(0.25, c_timeReal);
+        lv_n += 1;
+    }
+    Wait(MaxF(0.0, hrsCap_readySeconds - hrsCap_forwardSeconds), c_timeReal);
+    hrsCap_ready = true;
+    return true;
+}
+
+// Four times a second: units keep spawning (minions, mercenaries, objectives) and the chat line
+// lingers; sweep both, cut the intro short as soon as it starts, keep the game's labels hidden,
+// move the opening along, pause the animations once the map is ready, redraw the strip.
+bool hrsCap_gt_Sweep_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+${skip_intro_line}    hrsCap_HideLabels();
+    hrsCap_ClearUnits();
+    TransmissionClearGroup(PlayerGroupAll());
+    UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
+    // No camera scrolling from the mouse at a screen edge or the keys, from the start and even
+    // after something (the intro's exit) has unlocked it.
+    CameraLockInput(hrsCap_LocalPlayer(), true);
+${event_off_lines}    // The gates sooner (GameLib's countdown, before it gets far), then the fast-forward.
+    if (!libGame_gv_gameStarted && (TimerGetRemaining(libGame_gv_openTheGatesTimer) > hrsCap_gatesDelay)) {
+        TimerSetElapsed(libGame_gv_openTheGatesTimer, (TimerGetDuration(libGame_gv_openTheGatesTimer) - hrsCap_gatesDelay));
+    }
+    if (libGame_gv_gameStarted && !hrsCap_forwardStarted) {
+        hrsCap_forwardStarted = true;
+        TriggerExecute(hrsCap_gt_FastForward, false, false);
+    }
+    if (hrsCap_ready && !hrsCap_paused) {
+        hrsCap_paused = true;
+        libNtve_gf_SendActorMessageToGameRegion(${map_region}, "AnimSetPausedAll");
+        // No more minion waves (they walked into tiles between the shots over the light sky and black):
+        // GameLib's own stop for every lane's spawning.
+        libGame_gf_MinionStartStopMinionSpawnCycle(false);
+    }
+    hrsCap_introOn = hrsCap_IntroPlaying();
+    hrsCap_ReadBox();  // a backstop for a missed text-changed event
+    if (!hrsCap_boxUsed && (hrsCap_box != c_invalidDialogControlId)) {
+        DialogControlRequestFocus(hrsCap_box, PlayerGroupAll());  // the match starting: until the first command
+    }
+    hrsCap_tick = (1 - hrsCap_tick);
+    hrsCap_StatusDraw();
+    return true;
+}
+
+//--------------------------------------------------------------------------------------------------
+// Commands (typed into the command box). Each ends with hrsCap_Ack once its work is done, so the strip shows the
+// sequence number the capture appended to it.
+//--------------------------------------------------------------------------------------------------
+
+// "tile <n> [<x> <y>]": tile n, at the given map position or the planned one. The capture
+// gives the position: it re-plans the grid from the camera bounds the game applies at run time
+// (an arena's are far tighter than its map file says), which it measures by sending the camera
+// to two corners. Acknowledged once the camera has stopped (eased pan, clamp at the bounds):
+// the strip then reports where the camera really is.
+bool hrsCap_gt_Tile_Func (bool testConds, bool runActions) {
+    int lv_index;
+    string lv_xs;
+
+    lv_index = StringToInt(StringWord(hrsCap_cmd, 2));
+    lv_xs = StringWord(hrsCap_cmd, 3);
+    if ((lv_index < 0) || (lv_index > 999) || ((lv_xs == "") && (lv_index >= hrsCap_tileCount))) {
+        return true;
+    }
+    if (!runActions) {
+        return true;
+    }
+    hrsCap_NoteHide();  // a shot starts here: no note in it
+    // Nothing until the intro is over, so its exit can't undo the scene (the capture keeps
+    // asking until it answers).
+    if (hrsCap_IntroPlaying()) {
+        return true;
+    }
+    hrsCap_currentTile = lv_index;
+    if ((lv_xs != "")) {
+        hrsCap_curX = StringToFixed(lv_xs);
+        hrsCap_curY = StringToFixed(StringWord(hrsCap_cmd, 4));
+    }
+    else {
+        hrsCap_curX = hrsCap_tileX[lv_index];
+        hrsCap_curY = hrsCap_tileY[lv_index];
+    }
+    hrsCap_ClearUnits();${bounds_line}
+    hrsCap_LiftBounds();
+    // The normal camera at the tile first, a few frames, so the game refits its lighting there
+    // (see hrsCap_NormalCamera); then the scene and the capture camera.
+    CameraPan(hrsCap_cmdPlayer, Point(hrsCap_curX, hrsCap_curY), 0.0, -1, 10.0, false);
+    hrsCap_NormalCamera(hrsCap_cmdPlayer);
+    Wait(hrsCap_refitWait, c_timeReal);  // real time: a map that holds game time still (an arena's selection phase) would never return
+    if ((hrsCap_currentTile != lv_index)) {
+        return true;  // another tile was asked for meanwhile
+    }
+    hrsCap_Scene();
+    CameraPan(hrsCap_cmdPlayer, Point(hrsCap_curX, hrsCap_curY), 0.0, -1, 10.0, false);
+    hrsCap_statusPlayer = hrsCap_cmdPlayer;
+    hrsCap_WaitCameraStill();
+    if ((hrsCap_currentTile != lv_index)) {
+        return true;
+    }
+    // Ready for the kept shot: a transmission (an Immortal's voice line) puts a subtitle and its
+    // backdrop on screen, outside the frames the scene hides; cleared with the messages.
+    TransmissionClearGroup(PlayerGroupAll());
+    UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
+    hrsCap_Ack();
+    return true;
+}
+
+// "clean": the kept shot follows: camera unmoved, messages and transmissions cleared.
+bool hrsCap_gt_Clean_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    // A transmission (an Immortal's voice line) puts a subtitle and its backdrop on screen,
+    // outside the frames hidden by the scene; cleared right before the shot.
+    TransmissionClearGroup(PlayerGroupAll());
+    UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
+    hrsCap_Ack();
+    return true;
+}
+
+// "black": the black skybox, for the second clean shot (difference matting: the same view
+// over the light sky and over black gives each pixel's transparency). "tile" puts the light sky back (Scene).
+bool hrsCap_gt_Black_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    GameSetBackground(0, "HrsSkyBlack", 100.0);
+    hrsCap_skyState = 2;
+    TransmissionClearGroup(PlayerGroupAll());
+    UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
+    hrsCap_Ack();
+    return true;
+}
+
+// Sixteen times a second: transmissions (an Immortal's voice line puts a subtitle and its backdrop
+// on screen, outside the frames the scene hides) and messages cleared, so none can be in a kept
+// shot (the shot follows the tile's acknowledgement by a tenth of a second).
+bool hrsCap_gt_Quiet_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    TransmissionClearGroup(PlayerGroupAll());
+    UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
+    return true;
+}
+
+// "sky <colour> [<layer>]": the solid-colour skybox of that name (sky.py) on layer 0
+// (the camera-fixed skybox, the default) or 1 (c_backgroundTerrain, the terrain-relative
+// parallax layer, which Blizzard's arenas swap). "none" clears the layer, "heaven" is
+// HeavenSkybox, "mapsky" and "mapparallax" the map's own fixed and parallax sky models. At the
+// animation speed "bgspeed" set (100 unless changed). Never "none" on layer 1: every run that
+// emptied the parallax slot crashed the game when the match ended, even with it set again.
+bool hrsCap_gt_Sky_Func (bool testConds, bool runActions) {
+    string lv_colour;
+    string lv_model;
+    int lv_layer;
+
+    if (!runActions) {
+        return true;
+    }
+    lv_colour = StringWord(hrsCap_cmd, 2);
+    lv_layer = StringToInt(StringWord(hrsCap_cmd, 3));
+    if ((lv_colour == "none")) {
+        lv_model = "";
+    }
+    else if ((lv_colour == "heaven")) {
+        lv_model = "HeavenSkybox";
+    }
+    else if ((lv_colour == "mapsky")) {
+        lv_model = hrsCap_mapSky;
+    }
+    else if ((lv_colour == "mapparallax")) {
+        lv_model = hrsCap_mapParallax;
+    }
+    else {
+        lv_model = ("HrsSky" + StringCase(StringSub(lv_colour, 1, 1), true) + StringSub(lv_colour, 2, StringLength(lv_colour)));
+    }
+    GameSetBackground(lv_layer, lv_model, hrsCap_bgSpeed);
+    if ((lv_layer == 0) && (lv_colour == "${light_sky}")) { hrsCap_skyState = 1; }
+    else if ((lv_layer == 0) && (lv_colour == "black")) { hrsCap_skyState = 2; }
+    else { hrsCap_skyState = 0; }
+    UIClearMessages(PlayerGroupAll(), c_messageAreaAll);
+    hrsCap_Ack();
+    return true;
+}
+
+// "pause [0]": pause every animation on the map the way Blizzard's maps do at game over (the
+// whole-map actor message plus UnitPauseAll), "0" to resume. The sweep pauses them by itself
+// once the map is ready; the capture sends this only if the map never reports ready.
+bool hrsCap_gt_Pause_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    if ((StringWord(hrsCap_cmd, 2) == "0")) {
+        libNtve_gf_SendActorMessageToGameRegion(${map_region}, "AnimSetPausedAll 0");
+        UnitPauseAll(false);
+    }
+    else {
+        libNtve_gf_SendActorMessageToGameRegion(${map_region}, "AnimSetPausedAll");
+        UnitPauseAll(true);
+    }
+    hrsCap_Ack();
+    return true;
+}
+
+// "fov <degrees>": the camera's field of view, until the next "tile" puts the capture camera's
+// back (the sky layers' shots through wider lenses: a wider lens sees more of the sky shells from
+// where the camera can go).
+bool hrsCap_gt_Fov_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    CameraSetValue(hrsCap_cmdPlayer, c_cameraValueFieldOfView, StringToFixed(StringWord(hrsCap_cmd, 2)), 0.0, -1, 10.0);
+    hrsCap_Ack();
+    return true;
+}
+
+// "hidemap <near clip>" (the sky passes): the map clipped away at that distance (far clip 5000),
+// sky swaps at speed 1 (frozen), our sky taken down: what three commands did, in one.
+bool hrsCap_gt_HideMap_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    CameraSetValue(hrsCap_cmdPlayer, c_cameraValueNearClip, StringToFixed(StringWord(hrsCap_cmd, 2)), 0.0, -1, 10.0);
+    CameraSetValue(hrsCap_cmdPlayer, c_cameraValueFarClip, 5000.0, 0.0, -1, 10.0);
+    hrsCap_bgSpeed = 1.0;
+    GameSetBackground(0, "", hrsCap_bgSpeed);
+    hrsCap_skyState = 0;
+    hrsCap_Ack();
+    return true;
+}
+
+// Our player put on a team (1 Order, 2 Chaos) mid-match, as GameLib makes the teams at the start
+// (libGame_gf_InitializePlayer's alliances): allied, with shared vision, to that team's players
+// and its computer, enemy to the other team's, and the team's upgrade set (IsOnOrderTeam,
+// IsOnChaosTeam: what the data reads a player's team by). The client then draws every unit in our
+// new side's colours (ally blue, enemy red), models unchanged.
+void hrsCap_JoinTeam (int lp_player, int lp_team) {
+    int lv_t;
+    int lv_p;
+    playergroup lv_g;
+
+    lv_t = 1;
+    for ( ; lv_t <= 2 ; lv_t += 1 ) {
+        lv_g = libGame_gv_teams[lv_t].lv_teamPlayerGroup;
+        lv_p = -1;
+        while (true) {
+            lv_p = PlayerGroupNextPlayer(lv_g, lv_p);
+            if (lv_p < 0) { break; }
+            if (lv_p == lp_player) { continue; }
+            if (lv_t == lp_team) {
+                libNtve_gf_SetAlliance(lp_player, lv_p, libNtve_ge_AllianceSetting_AllyWithSharedVision);
+            }
+            else {
+                libNtve_gf_SetAlliance(lp_player, lv_p, libNtve_ge_AllianceSetting_Enemy);
+            }
+        }
+    }
+    if (lp_team == 1) {
+        libNtve_gf_SetUpgradeLevelForPlayer(lp_player, "IsOnOrderTeam", 1);
+        libNtve_gf_SetUpgradeLevelForPlayer(lp_player, "IsOnChaosTeam", 0);
+    }
+    else {
+        libNtve_gf_SetUpgradeLevelForPlayer(lp_player, "IsOnOrderTeam", 0);
+        libNtve_gf_SetUpgradeLevelForPlayer(lp_player, "IsOnChaosTeam", 1);
+    }
+}
+
+// "side <team>": our player put on that team (hrsCap_JoinTeam), every team colour then drawn from
+// its side; the shots of a structure or a tile from Chaos's side (the team-colour pairs).
+bool hrsCap_gt_Side_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    hrsCap_JoinTeam(hrsCap_cmdPlayer, StringToInt(StringWord(hrsCap_cmd, 2)));
+    hrsCap_Ack();
+    return true;
+}
+
+// "unbound": lift the camera bounds to the whole map from now on (see hrsCap_LiftBounds).
+bool hrsCap_gt_Unbound_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    hrsCap_unbound = true;
+    hrsCap_LiftBounds();
+    hrsCap_Ack();
+    return true;
+}
+
+// An actor message to every structure's main actor (how --structures hide hides them:
+// "SetVisibility").
+void hrsCap_StructuresMessage (string lp_message) {
+    unitgroup lv_g;
+    int lv_u;
+    unit lv_unit;
+
+    lv_g = UnitGroup(null, c_playerAny, RegionEntireMap(), UnitFilter((1 << c_targetFilterStructure), 0, 0, 0), 0);
+    lv_u = UnitGroupCount(lv_g, c_unitCountAll);
+    for (;; lv_u -= 1) {
+        lv_unit = UnitGroupUnitFromEnd(lv_g, lv_u);
+        if (lv_unit == null) { break; }
+        ActorSend(libNtve_gf_MainActorofUnit(lv_unit), lp_message);
+    }
+}
+
+// An actor message to every doodad on the map, as libNtve_gf_ShowHideDoodadsInRegion sends one
+// to a doodad type ("SetVisibility 0" / "SetVisibility 1": hidden, shown again).
+void hrsCap_DoodadsMessage (string lp_message) {
+    actor lv_region;
+
+    ActorRegionCreate(null, "TriggerRegion", ${map_region});
+    lv_region = libNtve_gf_ActorLastCreated();
+    ActorRegionSend(lv_region, c_actorIntersectAgainstRadiusContact, lp_message, "Doodad", "");
+    ActorScopeKill(ActorScopeFromActor(lv_region));
+}
+
+void hrsCap_CaptureInit () {
+    hrsCap_SaveFrames();
+    hrsCap_InitTiles();
+    hrsCap_gt_FastForward = TriggerCreate("hrsCap_gt_FastForward_Func");
+    libCore_gv_bALOpenTheGatesDelay = hrsCap_gatesDelay;  // read when GameLib starts its countdown
+    hrsCap_gt_Sweep = TriggerCreate("hrsCap_gt_Sweep_Func");
+    TriggerAddEventTimePeriodic(hrsCap_gt_Sweep, 0.25, c_timeReal);
+    hrsCap_gt_Quiet = TriggerCreate("hrsCap_gt_Quiet_Func");
+    TriggerAddEventTimePeriodic(hrsCap_gt_Quiet, 0.0625, c_timeReal);
+}

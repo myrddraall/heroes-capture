@@ -4,11 +4,10 @@ tools/build_native.py builds it (on Windows a Unicode DLL); native.py says where
 """
 
 import ctypes
-import os
-import sys
+import functools
 from pathlib import Path
 
-from .native import library
+from heroes_capture.common.native import encode_path, load
 
 CASC_OPEN_BY_NAME = 0
 CASC_LOCALE_ALL = 0xFFFFFFFF
@@ -21,22 +20,9 @@ STORAGE_PRODUCT = 4  # CascStorageProduct: the product's code name and build num
 class _StorageProduct(ctypes.Structure):
     _fields_ = [("code_name", ctypes.c_char * 0x1C), ("build", ctypes.c_uint32)]
 
-_lib = None
-
-
-def _load():
-    global _lib
-    if _lib is not None:
-        return _lib
-    path = library("CascLib.dll", "libcasc.so")
-    if sys.platform == "win32":
-        lib = ctypes.WinDLL(str(path))
-        path_type = ctypes.c_wchar_p  # built Unicode: storage paths are wide
-    else:
-        lib = ctypes.CDLL(str(path))
-        path_type = ctypes.c_char_p
+def _signatures(path_type) -> dict:
     handle, dword, name = ctypes.c_void_p, ctypes.c_uint32, ctypes.c_char_p
-    signatures = {
+    return {
         "CascOpenStorage": ([path_type, dword, ctypes.POINTER(handle)], ctypes.c_bool),
         "CascOpenOnlineStorage": ([path_type, dword, ctypes.POINTER(handle)], ctypes.c_bool),
         "CascCloseStorage": ([handle], ctypes.c_bool),
@@ -50,12 +36,11 @@ def _load():
         "CascGetStorageInfo": ([handle, ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)], ctypes.c_bool),
         "GetCascError": ([], dword),
     }
-    for function, (args, result) in signatures.items():
-        getattr(lib, function).argtypes = args
-        getattr(lib, function).restype = result
-    lib.path_type = path_type
-    _lib = lib
-    return lib
+
+
+@functools.cache
+def _load():
+    return load("CascLib.dll", "libcasc.so", _signatures)
 
 
 class Storage:
@@ -90,7 +75,7 @@ class Storage:
 
     @staticmethod
     def _path(lib, text: str):
-        return text if lib.path_type is ctypes.c_wchar_p else os.fsencode(text)
+        return encode_path(lib, text)
 
     def __enter__(self) -> "Storage":
         return self

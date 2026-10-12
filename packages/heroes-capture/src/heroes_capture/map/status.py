@@ -1,6 +1,6 @@
 """The status strip: how the capture knows a command has been carried out and rendered.
 
-The map script (capture_script.galaxy, hrsCap_Status*) draws a dialog in the top-left corner of
+The map script (map/script.galaxy, hrsCap_Status*) draws a dialog in the top-left corner of
 the screen: two columns of black-or-white cells, wider than they are tall, redrawn at the end of
 every command and on every sweep. Reading it from a screenshot is a handful of pixel
 averages, so the capture can poll it many times a second instead of judging the picture.
@@ -31,16 +31,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
-CELLS = 88
-ROWS = 64
+CELLS = 88  # bits read (the script draws one more: a fixed black cell at the top of the second column)
+ROWS = 64  # cells per column; the strip continues in a second column to the right
+CELL_UNITS = (25, 15)  # a cell's width and height in interface units (1200 to the interface's height: 30 x 18 px at 1440 lines)
 
 
-def interface_height(width: int, height: int) -> float:
-    """The height the game lays its interface out for, in pixels: the screen's, unless the screen
-    is narrower than 4:3, when the interface (1600 x 1200 units at 4:3) is scaled to the width
-    instead (1680 x 1344 gave cells 1.05 times their unit size, not 1.12). Everything measured
-    "relative to the screen's height" means this height."""
-    return min(height, width * 1200 / 1600)
 SEARCH_WIDTH = 160  # the strip is looked for this far from the left edge
 SEARCH_HEIGHT_SHARE = 0.9
 
@@ -51,15 +46,17 @@ class Status:
     game_seconds: int
     camera_x: float
     camera_y: float
-    sky_light: bool
-    sky_black: bool
-    tick: int
     ready: bool
     map_id: int
     phase: int
     cleared_since_ready: int
     intro: bool
     opening_cuts: int
+
+    @property
+    def camera(self) -> dict:
+        """Where the camera is: {x, y} in cells."""
+        return {"x": self.camera_x, "y": self.camera_y}
 
 
 class StatusStrip:
@@ -177,9 +174,6 @@ class StatusStrip:
             game_seconds=value(10, 10),
             camera_x=value(20, 15) / 64.0,
             camera_y=value(35, 15) / 64.0,
-            sky_light=bool(bits[51]),
-            sky_black=bool(bits[52]),
-            tick=bits[53],
             ready=bool(bits[54]),
             map_id=value(55, 16),
             phase=value(71, 2),

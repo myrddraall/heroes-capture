@@ -4,33 +4,20 @@ release; native.py says where (tools/build_native.py puts them there).
 """
 
 import ctypes
-import os
+import functools
 import sys
 from pathlib import Path
 
-from .native import library
+from heroes_capture.common.native import encode_path, load
 
 MPQ_FILE_COMPRESS = 0x00000200
 MPQ_FILE_REPLACEEXISTING = 0x80000000
 MPQ_COMPRESSION_ZLIB = 0x02
 SFILE_OPEN_FROM_MPQ = 0
 
-_lib = None
-
-
-def _load():
-    global _lib
-    if _lib is not None:
-        return _lib
-    path = library("StormLib.dll", "libstorm.so")
-    if sys.platform == "win32":
-        lib = ctypes.WinDLL(str(path), use_last_error=True)
-        path_type = ctypes.c_wchar_p  # the release DLL is a Unicode build: archive paths are wide
-    else:
-        lib = ctypes.CDLL(str(path))
-        path_type = ctypes.c_char_p
+def _signatures(path_type) -> dict:
     handle, dword, name = ctypes.c_void_p, ctypes.c_uint32, ctypes.c_char_p
-    signatures = {
+    return {
         "SFileOpenArchive": ([path_type, dword, dword, ctypes.POINTER(handle)], ctypes.c_bool),
         "SFileCloseArchive": ([handle], ctypes.c_bool),
         "SFileHasFile": ([handle, name], ctypes.c_bool),
@@ -42,12 +29,11 @@ def _load():
         "SFileWriteFile": ([handle, ctypes.c_void_p, dword, dword], ctypes.c_bool),
         "SFileFinishFile": ([handle], ctypes.c_bool),
     }
-    for function, (args, result) in signatures.items():
-        getattr(lib, function).argtypes = args
-        getattr(lib, function).restype = result
-    lib.path_type = path_type
-    _lib = lib
-    return lib
+
+
+@functools.cache
+def _load():
+    return load("StormLib.dll", "libstorm.so", _signatures, use_last_error=True)
 
 
 def _error() -> int:
@@ -64,8 +50,7 @@ class Archive:
     def __init__(self, path: str | Path):
         self.lib = _load()
         self.handle = ctypes.c_void_p()
-        encoded = str(path) if self.lib.path_type is ctypes.c_wchar_p else os.fsencode(str(path))
-        if not self.lib.SFileOpenArchive(encoded, 0, 0, ctypes.byref(self.handle)):
+        if not self.lib.SFileOpenArchive(encode_path(self.lib, str(path)), 0, 0, ctypes.byref(self.handle)):
             raise OSError(f"could not open {path} as an MPQ archive (error {_error()})")
 
     def __enter__(self) -> "Archive":
@@ -96,9 +81,14 @@ class Archive:
         finally:
             self.lib.SFileCloseFile(file)
 
+    def read_optional(self, name: str) -> bytes | None:
+        """A file's contents, or None when the archive has no such file."""
+        return self.read(name) if self.has(name) else None
+
     def read_text(self, name: str) -> str | None:
         """A text file's contents, or None when the archive has no such file."""
-        return self.read(name).decode("utf-8", errors="replace") if self.has(name) else None
+        data = self.read_optional(name)
+        return data.decode("utf-8", errors="replace") if data is not None else None
 
     def write(self, name: str, data: bytes) -> None:
         """Add the file, replacing any of that name, zlib-compressed."""

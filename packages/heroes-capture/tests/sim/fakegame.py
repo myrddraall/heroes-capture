@@ -3,9 +3,9 @@
     python fakegame.py <package dir> <work dir> [capture args...]
 
 Fakes ctypes.windll (process, window and input calls), pydirectinput, mss and subprocess, and a
-virtual clock (time.time/time.sleep), then runs heroes_capture.capture.main() on
+virtual clock (time.time/time.sleep), then runs heroes_capture.capture.tiles.main() on
 <work dir>/test-map.json (written by makemanifest.py). The fake game has the map's command box
-(capture_script.galaxy): it has the keyboard from the match's start, takes typed text (Unicode or
+(the map script, map/script.py): it has the keyboard from the match's start, takes typed text (Unicode or
 keys; Enter does nothing while it has the keyboard) and carries out the last complete ";"-ended
 command as the text arrives; the chat box, open when the box hasn't the keyboard, only answers
 "focus", which gives it back. It draws frames with the status strip the way the script does.
@@ -32,10 +32,15 @@ from PIL import Image
 
 TOOL, WORK = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
 ARGS = sys.argv[3:]
-W, H = (int(v) for v in os.environ.get("FAKE_SCREEN", "3440x1440").split("x"))
+W, H = (int(v) for v in os.environ.get("FAKE_SCREEN", "1920x1080").split("x"))
+# The height the game lays its interface out for: the screen's, or on a screen narrower than 4:3
+# the width's (1600 x 1200 units at 4:3; status.interface_height). The interface sits at the top.
+U = min(H, W * 1200 / 1600)
 # The status strip's cells as the game draws them: 25 x 15 interface units, 1200 units to the
-# screen's height (30 x 18 px at 1440 lines), each cell's edges on whole pixels.
-CELL_W, CELL_H = 25 * H / 1200, 15 * H / 1200
+# interface's height (22.5 x 13.5 px at 1080 lines), each cell's edges on whole pixels.
+CELL_W, CELL_H = 25 * U / 1200, 15 * U / 1200
+# Below this width to height the main menu has its narrow layout (game_state.NARROW_MENU_BELOW).
+NARROW_MENU_BELOW = 1.5
 # The frames kept: as many as 64 at 3440x1440 take (a 4K screen's frames are 2.25 times as big, so
 # fewer of them: a simulation stays within conftest's SIM_MEMORY at any screen size).
 CACHE_BYTES = 64 * 3440 * 1440 * 3
@@ -79,6 +84,7 @@ class Game:
         self.map_id = 0
         self.leaving = False
         self.cache = {}
+        self.views = {}  # what the camera sees, by view, without the strip
         rng = np.random.default_rng(1)
         small = rng.integers(30, 220, size=(64 * 6, 64 * 6, 3)).astype(np.uint8)
         self.world = np.asarray(Image.fromarray(small).resize((64 * 48, 64 * 48), Image.BILINEAR))  # 48 px per cell
@@ -93,15 +99,20 @@ class Game:
         self.sky_rate = float(os.environ.get("FAKE_SKY_RATE", "0.4"))
         self.menu = self._menu_frame()
         self.box, self.box_focus, self.box_lost = "", True, False  # the map's command box
+        self.team = 1  # our player's side ("side"): the team-coloured doodads' colour
+        self.team_cells = json.loads((WORK / "test-map.json").read_text()).get("teamColoured") or []
 
     def _menu_frame(self):
+        """The main menu: its fixed parts from the capture's references, in the narrow layout on a
+        narrow screen, sized and placed by the interface's height, the interface at the top."""
         frame = np.full((H, W, 3), 60, np.uint8)
-        folder = TOOL / "src" / "heroes_capture" / "menu-reference"
-        for p in json.loads((folder / "patches.json").read_text())["patches"]:
-            t = Image.open(folder / f"{p['name']}.png").convert("RGB")
-            pw, ph = int(round(p["w"] * H)), int(round(p["h"] * H))
-            x = int(round(p["dx"] * H)) if p["anchor"].endswith("left") else W - int(round(p["dx"] * H)) - pw
-            y = int(round(p["dy"] * H)) if p["anchor"].startswith("top") else H - int(round(p["dy"] * H)) - ph
+        folder = TOOL / "src" / "heroes_capture" / "common" / "menu-reference"
+        narrow = W / H < NARROW_MENU_BELOW
+        for p in json.loads((folder / ("patches-narrow.json" if narrow else "patches.json")).read_text())["patches"]:
+            t = Image.open(folder / f"{'narrow-' if narrow else ''}{p['name']}.png").convert("RGB")
+            pw, ph = int(round(p["w"] * U)), int(round(p["h"] * U))
+            x = int(round(p["dx"] * U)) if p["anchor"].endswith("left") else W - int(round(p["dx"] * U)) - pw
+            y = int(round(p["dy"] * U)) if p["anchor"].startswith("top") else int(round(U)) - int(round(p["dy"] * U)) - ph
             frame[y : y + ph, x : x + pw] = np.asarray(t.resize((pw, ph), Image.BILINEAR))
         return frame
 
@@ -215,6 +226,12 @@ class Game:
             else:
                 self.layer0 = words[1]
             ack(0.05)
+        elif cmd == "side":
+            # Redrawn on one of the next simulation ticks, after the acknowledgement (the switch
+            # probe: 47-212 ms).
+            team = int(words[1])
+            self.pending.append((_now[0] + 0.15, lambda: setattr(self, "team", team)))
+            ack(0.05)
         elif cmd == "unbound":
             self.bounds = (0.0, 0.0, 64.0, 64.0)
             ack(0.05)
@@ -265,10 +282,33 @@ class Game:
         if self.state == "loading" or (self.state == "map" and self.t() < 2 and not self.leaving):
             return np.full((H, W, 3), 25, np.uint8)
         bits = self.bits()
-        key = (self.cam, self.sky, self.clip, self.layer0, self.layer1, self.lens, tuple(bits))
+        hidden = bool(os.environ.get('FAKE_HIDDEN')) and self.phase() < 2
+        view_key = (self.cam, self.sky, self.clip, self.layer0, self.layer1, self.lens, hidden, self.team)
+        key = view_key + (tuple(bits),)
         if key in self.cache:
             return self.cache[key]
-        frame = np.full((H, W, 3), 198 if self.sky == 1 else 0, np.uint8)  # the light sky drawn at about 198
+        # The view drawn once, kept apart from the strip (which changes several times a second
+        # while the view holds still): each new strip is painted on a copy.
+        if view_key not in self.views:
+            if len(self.views) * W * H * 3 > CACHE_BYTES:
+                self.views.clear()
+            self.views[view_key] = self.view_frame(hidden)
+        frame = self.views[view_key].copy()
+        frame[:, : round(2 * CELL_W)] = 0  # the backdrop
+        for k in range(89):
+            logical = k if k < 64 else (None if k == 64 else k - 1)
+            v = 0 if logical is None else bits[logical]
+            col, row = k // 64, k % 64
+            x0, x1 = round(col * CELL_W), round((col + 1) * CELL_W)
+            y0, y1 = round(row * CELL_H), round((row + 1) * CELL_H)
+            frame[y0:y1, x0:x1] = 255 if v else 0
+        if len(self.cache) * W * H * 3 > CACHE_BYTES:
+            self.cache.clear()
+        self.cache[key] = frame
+        return frame
+
+    def view_frame(self, hidden):
+        """What the camera sees, without the strip."""
         world = self.world
         cx, cy = self.cam
         lens = 1.0
@@ -279,9 +319,16 @@ class Game:
 
         def view(source, fill):
             """What the camera sees of a 48 px per cell picture (y up): through a wider lens, a
-            patch `lens` times as big, scaled down to the screen."""
+            patch `lens` times as big, scaled down to the screen. A lens of k times or more is
+            read from every k-th pixel first, then scaled the rest of the way (a few times
+            quicker than scaling the whole patch: the simulation's time went there)."""
             vw, vh = int(round(W * lens)), int(round(H * lens))
             x0, y0 = int(round(cx * 48 - vw / 2)), int(round((64 - cy) * 48 - vh / 2))
+            k = max(1, int(lens))
+            if k > 1:
+                # Pixel i of the patch is pixel x0 + i*k of the picture: (x0 % k) + (x0 // k + i) * k.
+                source = source[y0 % k :: k, x0 % k :: k]
+                x0, y0, vw, vh = x0 // k, y0 // k, -(-vw // k), -(-vh // k)
             patch = np.full((vh, vw) + source.shape[2:], fill, source.dtype)
             sx0, sy0, wx0, wy0 = max(0, -x0), max(0, -y0), max(0, x0), max(0, y0)
             wx1, wy1 = min(source.shape[1], x0 + vw), min(source.shape[0], y0 + vh)
@@ -295,7 +342,20 @@ class Game:
             return patch, inside
 
         seen, inside = view(world, 0)
-        frame[inside] = seen[inside]
+        if inside.all():  # all of the view on the map: the view is the frame
+            frame = np.array(seen, np.uint8)
+        else:
+            frame = np.full((H, W, 3), 198 if self.sky == 1 else 0, np.uint8)  # the light sky drawn at about 198
+            frame[inside] = seen[inside]
+        if self.clip <= 230 and self.lens == 1.0:
+            # The team-coloured doodads: a disc a cell across each, in Order's colour (ally blue
+            # from Order's side, enemy red from Chaos's).
+            colour = (40, 90, 255) if self.team == 1 else (255, 60, 40)
+            yy, xx = np.ogrid[:H, :W]
+            for x, y in self.team_cells:
+                u, v = W / 2 + (x - cx) * 48, H / 2 - (y - cy) * 48
+                if -48 <= u < W + 48 and -48 <= v < H + 48:
+                    frame[(xx - u) ** 2 + (yy - v) ** 2 <= 24 ** 2] = colour
         if self.clip >= 600:  # only the fixed skybox survives: a purple gradient, or nothing
             frame[:] = 0
             if self.layer0 == "mapsky":
@@ -312,19 +372,8 @@ class Game:
                 a, _ = view(self.haze_alpha, 0.0)
                 base = base * (1 - a[..., None]) + 200 * a[..., None]
             frame = base.astype(np.uint8)
-        if os.environ.get('FAKE_HIDDEN') and self.phase() < 2:
+        if hidden:
             frame[:] = 0  # an in-game hero selection: the world hidden until the map is ready
-        frame[:, : round(2 * CELL_W)] = 0  # the backdrop
-        for k in range(89):
-            logical = k if k < 64 else (None if k == 64 else k - 1)
-            v = 0 if logical is None else bits[logical]
-            col, row = k // 64, k % 64
-            x0, x1 = round(col * CELL_W), round((col + 1) * CELL_W)
-            y0, y1 = round(row * CELL_H), round((row + 1) * CELL_H)
-            frame[y0:y1, x0:x1] = 255 if v else 0
-        if len(self.cache) * W * H * 3 > CACHE_BYTES:
-            self.cache.clear()
-        self.cache[key] = frame
         return frame
 
 
@@ -467,10 +516,20 @@ mss = types.ModuleType("mss")
 class MSS:
     monitors = [{"left": 0, "top": 0, "width": W, "height": H}] * 2
 
+    _source = _bgra = None
+
     def grab(self, region):
+        """The frame as mss gives it (BGRA), made once per frame: the capture grabs the same frame
+        many times while it polls the strip. Read-only, so nothing can change the one kept."""
         GAME.tick()
         f = GAME.frame()
-        return np.dstack([f[:, :, ::-1], np.full(f.shape[:2], 255, np.uint8)])
+        if f is not MSS._source:
+            bgra = np.empty(f.shape[:2] + (4,), np.uint8)
+            bgra[..., :3] = f[:, :, ::-1]
+            bgra[..., 3] = 255
+            bgra.setflags(write=False)
+            MSS._source, MSS._bgra = f, bgra
+        return MSS._bgra
 
     def close(self):
         pass
@@ -519,13 +578,14 @@ if FAULT == "wrongmap":
 sys.path.insert(0, str(TOOL / "src"))
 os.chdir(WORK)
 argv = [str(WORK / "test-map.json"), "--game", str(game_dir), *ARGS]
-from heroes_capture import capture  # noqa: E402
+from heroes_capture import cli  # noqa: E402
+from heroes_capture.capture import tiles  # noqa: E402
 
 try:
     try:
-        capture.main(argv)
-    except capture.Recoverable as e:
-        capture.recover(e, argv)
+        tiles.main(argv, cli.specifics_of)
+    except tiles.Recoverable as e:
+        tiles.recover(e, argv)
     outcome = "finished"
 except SystemExit as e:
     outcome = f"exit {e.code}"

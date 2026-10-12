@@ -1,34 +1,36 @@
-"""The Galaxy script injected into a battleground: capture_script.galaxy with the map's values
-filled in (inject.py appends it before InitMap and calls hrsCap_Init at InitMap's end). It skips
-the map's intro cutscene, opens the gates early and cuts the map's opening timers short, reveals
-the whole map, hides the HUD, removes units (and keeps removing them as they spawn), keeps or hides
-structures, pauses the map's animations, sets the solid-colour skybox and points the camera
-straight down. capture.py drives it through commands typed into its command box ("tile <n> <x> <y>;",
-"clean;", "black;", "quit;", ...) and reads its status strip, drawn in the screen's top-left corner, to know when each
-is done.
+"""heroes-capture's map script, assembled from parts: the map's own (script.galaxy here: the status
+strip, the command box, the note, leaving the match), then each layer's that takes part (the
+capture's, a category's, a single map's), in that order. prepare.py appends the script before the
+map's InitMap and calls hrsCap_Init at InitMap's end.
 
-Galaxy is single-pass: every function must be defined before its first use (inject.py checks),
-and one unknown native or syntax error stops the whole map script, which shows in the game as
-every interface panel visible at once. The calls in the script are ones Blizzard's own Heroes
-scripts make, except the lens values (field of view, far and near clip) and CameraSetBounds, which
-are StarCraft II natives the game also accepts. Actor messages are plain strings the game ignores
-when it doesn't know them, so they cannot break compilation.
+A part is plain Galaxy with two kinds of header line: "// command: <word> <trigger function>" (a
+command typed into the command box: its first word runs that trigger) and "// init: <function>"
+(run once as the map starts). Its ${name} placeholders are filled from the values the layers give.
+A function a later part defines again replaces the earlier one (the earlier part's default: the
+quit's hrsCap_Restore and hrsCap_EndMatch, for one). The assembled script declares the commands'
+triggers and every function first (a prototype each, as Blizzard's _h libraries do), so a part may
+call what a later one defines; then the parts; then the command table (hrsCap_CommandTrigger) and
+hrsCap_Init.
+
+Galaxy is single-pass, and one unknown native or syntax error stops the whole map script, which
+shows in the game as every interface panel visible at once: check refuses a script that calls a
+function before it is declared, or one no part defines. The calls in the parts are ones Blizzard's
+own Heroes scripts make, except the lens values (field of view, far and near clip) and
+CameraSetBounds, StarCraft II natives the game also accepts. Actor messages are plain strings the
+game ignores when it doesn't know them, so they cannot break compilation.
 """
 
+import re
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from string import Template
 
-from . import js_json
-from .sky import LIGHT_SKY, model_id
+from heroes_capture.common import js_json
+from heroes_capture.map.galaxy import functions
+from heroes_capture.map.status import CELL_UNITS, CELLS, ROWS
 
-TEMPLATE = Path(__file__).with_name("capture_script.galaxy")
-
-# The status strip (hrsCap_Status* in the script, read by status.py): cells and size.
-STATUS_CELLS = 89  # 88 bits plus a fixed black cell at the top of the second column
-STATUS_ROWS = 64  # cells per column; the strip continues in a second column to the right
-STATUS_CELL_W = 25  # cell width in interface units (30 px at 1440 lines: 1.2 px per unit)
-STATUS_CELL_H = 15  # cell height (18 px)
+PART = Path(__file__).with_name("script.galaxy")
+_DIRECTIVE = re.compile(r"^// (command: \w+|init:) (hrsCap_\w+)$", re.M)
 
 
 def fixed(n: float) -> str:
@@ -39,169 +41,79 @@ def fixed(n: float) -> str:
     return str(Decimal(n).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
 
 
-# The map's event off before the gates open, on a map whose objective isn't brought in for the
-# tiles (no opening timers cut short): Battlefield of Eternity's Immortals fought in the middle of
-# the tiles, depending on the timing. MapMechanicsLib's own switch, which a map's event checks when
-# the gates open (and the map's own disable trigger run, where it has one).
-EVENT_OFF_LINES = """    if (!libGame_gv_gameStarted && !hrsCap_eventOff) {
-        hrsCap_eventOff = true;
-        libMapM_gf_EnableDisableMapEvent(false);
+def map_values(map_id: int, map_width: int, map_height: int) -> dict:
+    """The map's own part's values, and the map's size and its whole region for every part: the
+    whole map, not RegionEntireMap() (only the playable area), for the reveal and for pausing every
+    animation the way Blizzard's own maps do at game over (Trial Grounds: one actor message to the
+    whole-map region, no filter; filter terms broke the map's script)."""
+    return {
+        "status_rows": str(ROWS), "status_cells": str(CELLS + 1), "status_cell_w": str(CELL_UNITS[0]), "status_cell_h": str(CELL_UNITS[1]),
+        "map_id": str(map_id), "map_width": fixed(map_width), "map_height": fixed(map_height),
+        "map_region": f"RegionRect(-16.0, -16.0, {fixed(map_width + 16)}, {fixed(map_height + 16)})",
     }
-"""
 
 
-def capture_script(
-    *,
-    tiles: list[dict],
-    hide_structures: bool,
-    distance: float,
-    pitch: float = 90,
-    refit_yaw: float = 180,
-    lens: dict | None,
-    unbound: bool,
-    show_ui: bool,
-    sky_colour: str = "white",
-    map_sky: dict | None = None,
-    map_width: int = 256,
-    map_height: int = 256,
-    opening_timers: list[str] = (),
-    map_id: int = 0,
-    hide_doodads: list[str] = (),
-    keep_intro: bool = False,
-    arena: bool = False,
-    boss: bool = False,
-    hole_cells: list[tuple[int, int]] = (),
-) -> str:
-    """The script for one prepared map.
+def assemble(parts: list[str], values: dict) -> str:
+    """The script from its parts (the map's own first, then each layer's), their placeholders filled
+    from `values` (see the module's note)."""
+    texts = [Template(part).substitute(values) for part in parts]
+    commands, inits = [], []
+    for text in texts:
+        for kind, function in _DIRECTIVE.findall(text):
+            if kind == "init:":
+                inits.append(function)
+            else:
+                commands.append((kind.split()[1], function))
+    # A function defined again later replaces the earlier definition.
+    last: dict[str, int] = {}
+    for k, text in enumerate(texts):
+        for name in functions(text):
+            last[name] = k
+    for k, text in enumerate(texts):
+        for name, body in functions(text).items():
+            if last[name] != k:
+                texts[k] = text = text.replace(body, f"// {name}: redefined by a later part")
+    defined = {name: body for text in texts for name, body in functions(text).items()}
+    triggers = [function.removesuffix("_Func") for _, function in commands]
+    header = ["//" + "-" * 98, "// heroes-capture's map script (map/script.py): the commands' triggers and every function, declared.",
+              "//" + "-" * 98, *(f"trigger {t};" for t in triggers), *(body[: body.index("{")].rstrip() + ";" for body in defined.values()),
+              "trigger hrsCap_CommandTrigger (string lp_word);"]
+    table = "\n".join(f'    if ((lp_word == "{word}")) {{ return {trigger}; }}' for (word, _), trigger in zip(commands, triggers))
+    created = "\n".join(f'    {trigger} = TriggerCreate("{function}");' for (_, function), trigger in zip(commands, triggers))
+    called = "\n".join(f"    {init}();" for init in inits)
+    tail = f"""// The command a first word runs (the parts' "// command:" lines).
+trigger hrsCap_CommandTrigger (string lp_word) {{
+{table}
+    return null;
+}}
 
-    tiles: camera targets, in map cells. hide_structures: hide structures and map-mechanic units
-    too. distance: the camera's distance from its target. pitch: degrees (90 is straight down).
-    refit_yaw: yaw of the lighting-refit look before each tile (towards the map's main light).
-    lens: {fov, farClip} for a narrow field of view; None leaves the map's. unbound: lift the
-    map's camera bounds so edge tiles are not clamped (and, on a map that is several arenas in one,
-    so the camera can reach every arena); lifted before each tile's first pan, since the map may
-    put its own bounds back at any time. show_ui: leave the HUD up (diagnostic). sky_colour: the
-    sky each tile starts under, white (then "black" for the matte's second shot) or black.
-    map_width, map_height: the map's size in cells (MapInfo), for the reveal: RegionEntireMap() is
-    only the playable area. opening_timers: the map's timers between the gates and its first
-    objective (opening-timers.json), cut short so the objective is in place before the tiles; a map
-    without any has its event switched off instead (EVENT_OFF_LINES).
-    map_sky: the map's own sky models {fixed, parallax}, for the probe commands "sky mapsky" and
-    "sky mapparallax". map_id: the prepared map's identity, 0..65535, shown in the status strip.
-    hide_doodads: doodad types to hide (cloud layers placed in the map as doodads). keep_intro:
-    let the intro cutscene play out (diagnostic). arena: the map plays rounds (its script includes
-    LibAREN: Punisher Arena), so a core killed ends only the round, and "quit" first gives the
-    other team all but its last round win. boss: the map's script includes LibMLBD (Battlefield
-    of Eternity), so the elements probe's "el boss" spawns its Immortal. hole_cells:
-    the cells of the holes the cores stand on, filled in the map file (inject.py): the script opens
-    them again with TerrainShowRegion as it starts, so the map looks as the game draws it, and
-    shows them on "el holes show" (the ground where a core stood).
-    """
-    map_sky = map_sky or {"fixed": None, "parallax": None}
-    if lens:
-        lens_lines = f"""
-    CameraSetValue(lp_player, c_cameraValueFieldOfView, {fixed(lens["fov"])}, 0.0, -1, 10.0);
-    CameraSetValue(lp_player, c_cameraValueFarClip, {fixed(lens["farClip"])}, 0.0, -1, 10.0);
-    // The near clip well out from the game's tiny default: depth precision goes with the
-    // far/near ratio, and at this distance flat decals on the ground (road trim, cracks, the
-    // decorations lying on surfaces) were z-fighting the ground and losing in patches.
-    CameraSetValue(lp_player, c_cameraValueNearClip, 5.0, 0.0, -1, 10.0);"""
-    else:
-        lens_lines = """
-    // No lens: the game's own clip planes (a sky shot's "hidemap" moved them).
-    CameraSetValue(lp_player, c_cameraValueNearClip, CameraInfoGetValue(CameraInfoDefault(), c_cameraValueNearClip), 0.0, -1, 10.0);
-    CameraSetValue(lp_player, c_cameraValueFarClip, CameraInfoGetValue(CameraInfoDefault(), c_cameraValueFarClip), 0.0, -1, 10.0);"""
-    bounds_line = """
-    CameraSetBounds(PlayerGroupAll(), RegionEntireMap(), false);""" if unbound else ""
-    # The whole map, not RegionEntireMap() (only the playable area), for the reveal and for pausing
-    # every animation the way Blizzard's own maps do at game over (Trial Grounds: one actor message
-    # to the whole-map region, no filter; filter terms broke the map's script).
-    map_region = f"RegionRect(-16.0, -16.0, {fixed(map_width + 16)}, {fixed(map_height + 16)})"
-    hero_ui_lines = "" if show_ui else """            libUIUI_gf_UIHeroConsoleShowHideForPlayer(false, lv_p);
-            libUIUI_gf_UIGameUIShowHideConsolePanelForPlayer(false, lv_p);
-            libUIUI_gf_UIHeroTrackerArrowShowHideForPlayer(false, lv_p);
-"""
-    ui_lines = "" if show_ui else """    UISetMode(PlayerGroupAll(), c_uiModeFullscreen, c_transitionDurationImmediate);
-    // Every UI frame type, as cinematic mode does (the intro's exit re-shows whatever was
-    // visible when it started, debug panels included); text tags are left alone.
-    lv_f = c_syncFrameTypeFirst;
-    for ( ; lv_f <= c_syncFrameTypeLast ; lv_f += 1 ) {
-        if ((lv_f != c_syncFrameTypeTextTag)) {
-            UISetFrameVisible(PlayerGroupAll(), lv_f, false);
-        }
-    }"""
-    doodad_lines = "".join(
-        f'\n    libNtve_gf_ShowHideDoodadsInRegion(false, RegionEntireMap(), "{kind}");  // a cloud layer, placed as doodads'
-        for kind in hide_doodads
-    )
-    arena_quit_line = ("    libAREN_gv_aRM_RoundScore[libGame_gf_EnemyTeam(libGame_gf_TeamNumberOfPlayer(hrsCap_cmdPlayer))]"
-                       " = libAREN_gv_victoriesCount - 1;\n") if arena else ""
-    # "el boss <team> <x> <y>" (the elements probe): the map's objective unit, on the maps whose
-    # spawn function we know; elsewhere the verb does nothing.
-    boss_line = ("        libMLBD_gf_MMBOESpawnBoss(StringToInt(StringWord(hrsCap_cmd, 3)), Point(StringToFixed(StringWord(hrsCap_cmd, 4)),"
-                 " StringToFixed(StringWord(hrsCap_cmd, 5))));\n") if boss else ""
-    # "el terrain show|hide <x> <y> <radius>" (the elements probe): the terrain in a circle shown or
-    # hidden while the match runs (a core's hole, which the map file marks, filled and opened again).
-    terrain_line = ("        TerrainShowRegion(RegionCircle(Point(StringToFixed(StringWord(hrsCap_cmd, 4)), StringToFixed(StringWord(hrsCap_cmd, 5))),"
-                    " StringToFixed(StringWord(hrsCap_cmd, 6))), (StringWord(hrsCap_cmd, 3) == \"show\"));\n")
-    # "el isolate on <x> <y> <radius>" / "el isolate off", and "el env off|on" (the elements capture):
-    # all the terrain, every doodad and every unit in sight outside the circle hidden, so what is
-    # left (a structure, a camp, the objective) stands alone over the sky, or all shown again (the
-    # cores' holes opened again, the cloud layers hidden again).
-    isolate_function = f"""void hrsCap_Isolate (bool lp_on, fixed lp_x, fixed lp_y, fixed lp_radius) {{
-    if (lp_on) {{
-        TerrainShowRegion({map_region}, false);
-        hrsCap_DoodadsMessage("SetVisibility 0");
-        hrsCap_IsolateUnits(lp_x, lp_y, lp_radius);
-    }}
-    else {{
-        TerrainShowRegion({map_region}, true);
-        hrsCap_OpenHoles();
-        hrsCap_DoodadsMessage("SetVisibility 1");{doodad_lines.replace(chr(10) + "    ", chr(10) + "        ")}
-        hrsCap_RestoreUnits();
-    }}
+void hrsCap_Init () {{
+{created}
+{called}
 }}
 """
-    # The cores' holes as a region: a small circle on each cell's centre (the terrain switch goes by
-    # cells; Blizzard's code builds regions with RegionAddCircle, never RegionAddRect).
-    hole_lines = "".join(f"\n    RegionAddCircle(hrsCap_holes, true, Point({fixed(x + 0.5)}, {fixed(y + 0.5)}), 0.45);" for x, y in hole_cells)
-    values = {
-        "hide_structures": "true" if hide_structures else "false",
-        "distance": fixed(distance),
-        "pitch": fixed(pitch),
-        "tile_count": str(len(tiles)),
-        "map_sky": map_sky.get("fixed") or "",
-        "map_parallax": map_sky.get("parallax") or "",
-        "forward_seconds": "8.0" if opening_timers else "0.0",
-        "status_rows": str(STATUS_ROWS),
-        "status_cells": str(STATUS_CELLS),
-        "status_cell_w": str(STATUS_CELL_W),
-        "status_cell_h": str(STATUS_CELL_H),
-        "map_id": str(map_id),
-        "tile_lines": "\n".join(
-            f"    hrsCap_tileX[{i}] = {fixed(t['x'])}; hrsCap_tileY[{i}] = {fixed(t['y'])};" for i, t in enumerate(tiles)
-        ),
-        "map_width": fixed(map_width),
-        "map_height": fixed(map_height),
-        "lens_lines": lens_lines,
-        "refit_yaw": fixed(refit_yaw),
-        "map_region": map_region,
-        "hero_ui_lines": hero_ui_lines,
-        "ui_lines": ui_lines,
-        "bounds_line": bounds_line,
-        "sky_model": model_id(sky_colour),
-        "sky_state": "2" if sky_colour == "black" else "1",
-        "light_sky": LIGHT_SKY,
-        "light_sky_model": model_id(LIGHT_SKY),
-        "doodad_lines": doodad_lines,
-        "cut_short_lines": "\n".join(f"        hrsCap_CutShort({t});" for t in opening_timers),
-        "event_off_lines": "" if opening_timers else EVENT_OFF_LINES,
-        "skip_intro_line": "" if keep_intro else "    hrsCap_SkipIntro();\n",
-        "arena_quit_line": arena_quit_line,
-        "boss_line": boss_line,
-        "terrain_line": terrain_line,
-        "isolate_function": isolate_function,
-        "hole_lines": hole_lines,
-        "has_holes": "true" if hole_cells else "false",
-    }
-    return Template(TEMPLATE.read_text(encoding="utf-8")).substitute(values)
+    script = "\n".join(header) + "\n\n" + "\n".join(texts) + "\n" + tail
+    check(script)
+    return script
+
+
+_DECLARED = re.compile(r"^(?:void|bool|int|fixed|string|text|unit|trigger) (hrsCap_\w+) \(", re.M)
+
+
+def check(script: str) -> None:
+    """Galaxy is single-pass: a function must be declared before any call to it, and the game gives
+    no error when it isn't, nor for a call to a function nowhere defined; the whole map script
+    silently fails and the map runs with no triggers at all (every interface panel visible at
+    once). Refuse a script where any hrsCap_ function is called before its first declaration, or
+    called and never defined."""
+    declared = {}
+    for m in _DECLARED.finditer(script):
+        declared.setdefault(m.group(1), m.start())
+    bodies = functions(script)
+    for m in re.finditer(r"\b(hrsCap_[A-Za-z]\w*)\s*\(", script):
+        name = m.group(1)
+        line = script[: m.start()].count("\n") + 1
+        if name not in bodies:
+            raise SystemExit(f"capture script: {name} is called at line {line} but no part defines it")
+        if m.start() < declared[name]:
+            raise SystemExit(f"capture script: {name} is used at line {line} before it is declared")

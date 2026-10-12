@@ -1,4 +1,4 @@
-"""A pack served on this computer, for its reference viewer (heroes-capture map view): a browser
+"""A render's folder served on this computer, for its reference viewer (heroes-capture map view): a browser
 reads a PMTiles archive by HTTP range requests, which it won't make to files opened from disk,
 and Python's own file server doesn't answer them. Local only (127.0.0.1)."""
 
@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 class _Handler(http.server.SimpleHTTPRequestHandler):
-    """Files from the pack's folder, with byte ranges ("Range: bytes=a-b") answered."""
+    """Files from the served folder, with byte ranges ("Range: bytes=a-b") answered."""
 
     def send_head(self):
         match = re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range", ""))
@@ -56,11 +56,11 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         pass  # quiet: the viewer asks for many tiles
 
 
-def serve(folder: Path, open_browser: bool = True) -> http.server.ThreadingHTTPServer:
-    """`folder` served on a free local port, in a thread; the browser opened on its index.html.
-    Returns the server (its url is http://127.0.0.1:<server.server_port>/)."""
+def serve(folder: Path, page: str | None = "index.html") -> http.server.ThreadingHTTPServer:
+    """`folder` served on a free local port, in a thread; the browser opened on `page` (None: not
+    opened). Returns the server (its url is http://127.0.0.1:<server.server_port>/)."""
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), partial(_Handler, directory=str(folder)))
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    if open_browser:
-        webbrowser.open(f"http://127.0.0.1:{server.server_port}/index.html")
+    if page:
+        webbrowser.open(f"http://127.0.0.1:{server.server_port}/{page}")
     return server

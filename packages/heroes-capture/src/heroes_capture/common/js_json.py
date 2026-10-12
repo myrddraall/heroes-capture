@@ -2,6 +2,7 @@
 (manifests) come out byte for byte the same: numbers as JavaScript prints them
 (26, not 26.0; 0.00001, not 1e-05) and its indentation."""
 
+import math
 import json
 from decimal import Decimal
 
@@ -59,3 +60,8 @@ def _wrap(open_: str, parts: list[str], close: str, indent: int | None, level: i
         return open_ + ",".join(parts) + close
     inner = "\n" + " " * (indent * (level + 1))
     return open_ + inner + ("," + inner).join(parts) + "\n" + " " * (indent * level) + close
+
+
+def js_round(value: float) -> int:
+    """Math.round: halves go up."""
+    return math.floor(value + 0.5)

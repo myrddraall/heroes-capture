@@ -5,7 +5,8 @@ import time
 import mss
 import numpy as np
 
-from .runlog import warn
+from heroes_capture.common.matching import grey, phase_correlate
+from heroes_capture.common.runlog import warn
 
 
 def _mss():
@@ -18,7 +19,7 @@ class ScreenGrabber:
     Through DXGI desktop duplication (the dxcam package) where it works: it hands over only
     frames the compositor has finished. mss copies the screen with GDI, which can catch the
     game part way through presenting a frame (a band of garbled strips, then black, or all
-    black) though the screen never shows one; those are retaken (see capture.py's whole_frame),
+    black) though the screen never shows one; those are retaken (see tiles.py's whole_frame),
     but a few still got through as all-black tiles. Desktop duplication is the default for
     tiles (HRS_CAPTURE=mss switches); the crash when leaving a match happens with either. After
     losing access (a display transition) dxcam quietly returns its last frame, so the checks
@@ -99,7 +100,7 @@ class ScreenGrabber:
 
     @staticmethod
     def monitor(number: int) -> dict:
-        """An mss monitor's region (capture.py --monitor)."""
+        """An mss monitor's region (capture --monitor)."""
         with _mss() as sct:
             return dict(sct.monitors[number])
 
@@ -131,19 +132,7 @@ def view_shift(a: np.ndarray, b: np.ndarray) -> float:
     """How far the view moved between two shots, in screen pixels (phase correlation at a
     quarter scale). Animation (an animated sky, flickering lights, labels) changes pixels but
     doesn't move the view; a camera move does."""
-
-    def prepare(f: np.ndarray) -> np.ndarray:
-        g = f[::4, ::4].astype(np.float32).mean(axis=2)
-        g -= g.mean()
-        return g * np.hanning(g.shape[0])[:, None] * np.hanning(g.shape[1])[None, :]
-
-    pa, pb = prepare(a), prepare(b)
-    cross = np.fft.rfft2(pa) * np.conj(np.fft.rfft2(pb))
-    cross /= np.abs(cross) + 1e-9
-    corr = np.fft.irfft2(cross, s=pa.shape)
-    y, x = np.unravel_index(int(np.argmax(corr)), corr.shape)
-    h, w = corr.shape
-    dy, dx = (y - h if y > h // 2 else y), (x - w if x > w // 2 else x)
+    dy, dx, _ = phase_correlate(grey(a, 4), grey(b, 4))
     return float(np.hypot(dx, dy)) * 4
 
 
@@ -153,3 +142,5 @@ def disagree(a: np.ndarray, b: np.ndarray) -> bool:
     shows a chat box. Labels and animation change well under 1% of the screen (measured); a
     half-drawn frame about a quarter of it."""
     return changed_share(a, b) > 0.02
+
+
