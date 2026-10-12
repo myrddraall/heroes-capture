@@ -28,6 +28,7 @@ from pmtiles.writer import Writer
 from heroes_capture.capture import minimap_svg
 from heroes_capture.capture import viewer
 from heroes_capture.capture.team_colour import MASK_SCALE, TEAM_COLOURS
+from heroes_capture.common import game_data
 from heroes_capture.common import ui
 from heroes_capture.common.jsonio import read_json, write_json
 from heroes_capture.common.runlog import log, stage, warn
@@ -44,6 +45,11 @@ QUALITY = 90  # the fixed skybox's and the elements' atlases' WebP quality
 TILE_WEBP = {"Q": 85, "alpha_q": 100}
 HAZE_WEBP = {"Q": 90, "alpha_q": 50}
 THUMBNAIL_WIDTH = 512
+# The loading screen's pictures a viewer shows (pack images/): the picture lossy, opaque; its icons
+# exact, with their transparency (small, drawn with sharp edges).
+LOADING_SCREEN_WEBP = {"Q": 85}
+LOADING_SCREEN_ICON_WEBP = {"lossless": True}
+SMALLER = (2, 4)  # each also at a half and a quarter of its size, for a viewer to pick the one it needs
 OVERVIEW_MAP = 2048  # a map layer's overview: its finest pyramid level no longer than this on a side (the opening view)
 OVERVIEW_MAX = 4096  # a sky layer's overview: the level the opening view needs, no longer than this on a side
 ATLAS_WIDTH = 4096  # the elements' atlases are at most this wide
@@ -229,9 +235,11 @@ def _png(data: bytes) -> tuple[bytes, list[int]] | None:
 
 def map_images(stormmap: Path | None, storage, folder: Path) -> dict:
     """The map's own pictures (PACK.md, Images) into `folder` as PNG: those in its archive, the
-    map-select picture DocumentInfo names, and the loading screen and its icons MapInfo names
-    (from the game's textures, through `storage`). Each {file, size, source}; the icons a list.
-    Any the map hasn't (or that can't be read) is left out."""
+    map-select picture DocumentInfo names, and from the game's textures (through `storage`) its
+    loading screen and the icons the loading screen's layout places. The loading screen is the
+    one MapInfo names, or else the picture of the game's map entry it names (game_data.map_entries:
+    Battlefield of Eternity, Towers of Doom, Hanamura Temple). Each {file, size, source}; the icons
+    a list. Any the map hasn't (or that can't be read) is left out."""
     found: dict = {}
     if not stormmap or not stormmap.exists():
         return found
@@ -244,8 +252,11 @@ def map_images(stormmap: Path | None, storage, folder: Path) -> dict:
         (folder / name).write_bytes(converted[0])
         return {"file": f"images/{name}", "size": converted[1], "source": source}
 
+    aliases = game_data.asset_aliases(storage) if storage is not None else {}
+
     def texture(path: str) -> bytes | None:
-        if storage is None:
+        """A game texture, by its path (asset names resolved first: game_data.asset_aliases)."""
+        if storage is None or path.startswith("@"):  # an asset name the game's lists don't have
             return None
         hits = storage.find("*" + Path(path.replace("\\", "/")).name.lower())
         return storage.read(hits[0]) if hits else None
@@ -269,18 +280,64 @@ def map_images(stormmap: Path | None, storage, folder: Path) -> dict:
         if select and archive.has(select) and (entry := keep("mapSelect", "map-select.png", archive.read(select), select)):
             found["mapSelect"] = entry
     screen = re.search(rb"Assets[\\/]Textures[\\/]([\w.-]+\.dds)", info)
-    if screen:
-        name = screen.group(1).decode()
-        if entry := keep("loadingScreen", "loading-screen.png", texture(name), name):
-            found["loadingScreen"] = entry
-    layout = re.search(rb"UI/Layout/LoadingScreens/([\w.-]+\.StormLayout)", info)
+    name = screen.group(1).decode() if screen else None
+    if name is None and storage is not None:
+        # MapInfo names the map's entry instead, as a short string (its length, a zero byte, the id).
+        entries = game_data.map_entries(storage)
+        named = [i for i in entries if bytes([len(i)]) + b"\x00" + i.encode() in info]
+        if named:
+            name = entries[max(named, key=len)]
+    name = aliases.get(name[1:], name) if name and name.startswith("@") else name
+    if name and (entry := keep("loadingScreen", "loading-screen.png", texture(name), name.split("\\")[-1])):
+        found["loadingScreen"] = entry
+    # The loading screen's layout (UI/Layout/LoadingScreens/<map>.StormLayout, or on Towers of Doom
+    # UI/Layout/TowersofDoom_Loading.StormLayout); its first picture is the loading screen itself on some.
+    layout = re.search(rb"(?i)UI/Layout/(?:[\w.-]+/)*([\w.-]*loading[\w.-]*\.StormLayout)", info)
     if layout and storage is not None:
         hits = storage.find("*" + layout.group(1).decode().lower())
         text = (storage.read(hits[0]) or b"").decode("utf-8", errors="replace") if hits else ""
-        icons = list(dict.fromkeys(v for v in re.findall(r'Texture val="([^"]+\.dds)"', text, re.I)))
-        entries = [e for n, icon in enumerate(icons, 1) if (e := keep("loadingScreenIcons", f"loading-screen-icon-{n}.png", texture(icon), icon))]
+        files = (aliases.get(v[1:], v) if v.startswith("@") else v
+                 for v in re.findall(r'Texture val="([^"]+)"', text) if v.lower().endswith(".dds") or v.startswith("@"))
+        screen_file = (found.get("loadingScreen") or {}).get("source", "").lower()
+        icons = [f for f in dict.fromkeys(files) if f.split("\\")[-1].lower() != screen_file]
+        key = re.search(r"(?:homescreenbackground|loadscreen)_(\w+)\.dds$", screen_file)
+        if not icons and key:
+            # The layout MapInfo names isn't in the game's data (Warhead Junction's): the icons by
+            # the loading screen's name, ui_ingame_mapmechanic_loadscreen_<its last part>_icon<n>.
+            icons = sorted(storage.find(f"*\\ui_ingame_mapmechanic_loadscreen_{key.group(1)}_icon*.dds"))
+        entries = [e for n, icon in enumerate(icons, 1)
+                   if (e := keep("loadingScreenIcons", f"loading-screen-icon-{n}.png", texture(icon), icon.split("\\")[-1]))]
         if entries:
             found["loadingScreenIcons"] = entries
+    return found
+
+
+def loading_screen_images(raw: Path, pack: Path, pictures: dict) -> dict:
+    """The loading screen and its icons (map_images' PNGs in raw/) as WebP in the pack's images/,
+    for a viewer: {loadingScreen, loadingScreenIcons} as found, each {file, size, source, smaller}:
+    the picture at its own size, and `smaller`, the same at each of SMALLER's fractions of it
+    (<name>-<width>w.webp), largest first."""
+    def webp(entry: dict, options: dict) -> dict:
+        stem = Path(entry["file"]).stem
+        (pack / "images").mkdir(parents=True, exist_ok=True)
+        picture = rgba(pyvips.Image.new_from_file(str(raw / entry["file"])))
+        if not options.get("lossless"):
+            picture = picture.flatten(background=[0, 0, 0])
+        picture.webpsave(str(pack / "images" / f"{stem}.webp"), keep="none", **options)
+        smaller = []
+        for factor in SMALLER:
+            width, height = max(1, round(picture.width / factor)), max(1, round(picture.height / factor))
+            small = picture.thumbnail_image(width, height=height, size="force")  # transparency premultiplied
+            name = f"{stem}-{small.width}w.webp"
+            small.webpsave(str(pack / "images" / name), keep="none", **options)
+            smaller.append({"file": f"images/{name}", "size": [small.width, small.height]})
+        return {**entry, "file": f"images/{stem}.webp", "smaller": smaller}
+
+    found: dict = {}
+    if "loadingScreen" in pictures:
+        found["loadingScreen"] = webp(pictures["loadingScreen"], LOADING_SCREEN_WEBP)
+    if pictures.get("loadingScreenIcons"):
+        found["loadingScreenIcons"] = [webp(e, LOADING_SCREEN_ICON_WEBP) for e in pictures["loadingScreenIcons"]]
     return found
 
 
@@ -389,8 +446,6 @@ def write(out: Path, manifest: dict, images: list[str], specifics: Specifics) ->
     """The pack and the raw layers for a stitched map in its folder `out` (its stitch's files, named
     by the render's id, and `images`, the ids of its map images), with what its category and the map
     itself add (`specifics`). Returns the pack's folder."""
-    from heroes_capture.common import game_data
-
     variant = variant_folder(out, manifest.get("structures", "keep"))
     pack, raw = variant / "pack", variant / "raw"
     for folder in (pack, raw):
@@ -476,6 +531,7 @@ def write(out: Path, manifest: dict, images: list[str], specifics: Specifics) ->
         if "customMinimap" in pictures and manifest.get("mapSize") and manifest.get("cameraBounds"):
             if entry := minimap_svg_image(raw, pack, pictures["customMinimap"], manifest["mapSize"], manifest["cameraBounds"], specifics.minimap_correction):
                 found_images["customMinimapSvg"] = entry
+        found_images.update(loading_screen_images(raw, pack, pictures))
 
         screen = manifest.get("screen") or {}
         description = {

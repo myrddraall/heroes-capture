@@ -226,6 +226,26 @@ def test_a_map_s_own_pictures(storage, tmp_path):
         assert (tmp_path / entry["file"]).read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+@pytest.mark.parametrize("map_name, screen, icons", [
+    # MapInfo names the game's map entry, not the picture: the entry's DraftIntroImage.
+    ("Battlefield of Eternity", "ui_ingame_mapmechanic_loadscreen_battlefieldofeternity.dds", "eternity_icon"),
+    # The layout outside LoadingScreens/, its icons by asset name (@UI/...).
+    ("Towers of Doom", "ui_ingame_mapmechanic_loadscreen_towersofdoom.dds", "towersofdoom_icon"),
+    # The layout's first picture is the loading screen itself: not an icon.
+    ("Hanamura Temple", "ui_ingame_mapmechanic_loadscreen_hanamura_rework.dds", "hanamura_icon"),
+    # The layout MapInfo names isn't in the game's data: the icons by the loading screen's name.
+    ("Warhead Junction", "Storm_UI_HomeScreenBackground_Warhead.dds", "warhead_icon"),
+])
+def test_a_loading_screen_found_through_the_game_s_data(storage, tmp_path, map_name, screen, icons):
+    """The loading screens MapInfo doesn't name as a texture, and their icons (PACK.md, Images)."""
+    from heroes_capture.capture import pack
+
+    (tmp_path / "map.stormmap").write_bytes(game_data.map_file(storage, map_name)[1])
+    found = pack.map_images(tmp_path / "map.stormmap", storage, tmp_path / "images")
+    assert found["loadingScreen"]["source"] == screen and found["loadingScreen"]["size"] == [1920, 1080]
+    assert [e["source"].lower() for e in found["loadingScreenIcons"]] == [f"ui_ingame_mapmechanic_loadscreen_{icons}{n}.dds" for n in (1, 2, 3)]
+
+
 def test_a_custom_minimap_mapinfo_names_as_a_tga(storage, tmp_path):
     """The custom minimap is the file MapInfo names: on Escape From Braxis, a .tga."""
     from heroes_capture.capture import pack

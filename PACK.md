@@ -49,7 +49,7 @@ maps/battlefield-of-eternity/
     haze.pmtiles              the sky's haze, a tile pyramid, and its overview
     fixed.webp                the fixed skybox: one screen-sized backdrop, not tiled
     thumbnail.webp            the map, small, for a map picker
-    images/                   the custom minimap as SVG (see Images)
+    images/                   the custom minimap as SVG, the loading screen and its icons (see Images)
     elements/                 the elements render's atlases (see Elements)
   raw/                        not part of the pack: full-resolution PNGs of the layers, the game's
                               own pictures of the map, and the reference viewer (index.html)
@@ -111,7 +111,16 @@ illustrative):
   "images": {
     "thumbnail": { "file": "thumbnail.webp", "size": [512, 369] },
     "customMinimapSvg": { "file": "images/custom-minimap.svg", "size": [496, 416], "source": "CustomMiniMap.dds",
-                          "boundsCells": { "left": 0.0, "bottom": -1.25, "right": 248.0, "top": 206.75 } }
+                          "boundsCells": { "left": 0.0, "bottom": -1.25, "right": 248.0, "top": 206.75 } },
+    "loadingScreen": { "file": "images/loading-screen.webp", "size": [1920, 1080],
+                       "source": "ui_ingame_mapmechanic_loadscreen_battlefieldofeternity.dds",
+                       "smaller": [ { "file": "images/loading-screen-960w.webp", "size": [960, 540] },
+                                    { "file": "images/loading-screen-480w.webp", "size": [480, 270] } ] },
+    "loadingScreenIcons": [
+      { "file": "images/loading-screen-icon-1.webp", "size": [292, 184], "source": "ui_ingame_mapmechanic_loadscreen_eternity_icon1.dds",
+        "smaller": [ { "file": "images/loading-screen-icon-1-146w.webp", "size": [146, 92] },
+                     { "file": "images/loading-screen-icon-1-73w.webp", "size": [73, 46] } ] }
+    ]
   },
   "data": {},
   "teamColours": { "order": [101, 159, 255], "chaos": [255, 57, 48], "maskScale": 2.0 },
@@ -269,12 +278,24 @@ Each is in `images` only if the map has what it is made from.
 |---|---|---|
 | `thumbnail` | `thumbnail.webp` | the map layer, 512 px wide, over the dark backdrop |
 | `customMinimapSvg` | `images/custom-minimap.svg` | the custom minimap `MapInfo` names (`CustomMiniMap.dds`, `.tga` on some maps: the drawn minimap the game shows) redrawn as vector shapes (below) |
+| `loadingScreen` | `images/loading-screen.webp` | the map's loading screen picture (the background only), lossy, opaque |
+| `loadingScreenIcons` | `images/loading-screen-icon-<n>.webp` | a list: the pictures the loading screen's layout places on it (the objectives' icons), in the layout's order, exact, with their transparency |
 
-Each entry is `{"file", "size"}`, the SVG's with `source`, the game file it came from. The game's
-other pictures of the map are kept in `raw/images/` as PNG, not in the pack: `minimap.png`
-(`Minimap.tga`), `custom-minimap.png` and `custom-minimap-hover.png`, `replay-preview.png`
+Each entry is `{"file", "size"}`, all but the thumbnail's with `source`, the game file it came
+from (a viewer can match an icon to an objective by its name, e.g.
+`ui_ingame_mapmechanic_loadscreen_eternity_icon1.dds`). The loading screen's and its icons' also
+have `smaller`: the same picture at a half and a quarter of its size (`<name>-<width>w.webp`, each
+`{"file", "size"}`, largest first), so a viewer can take the smallest that is sharp where it draws
+it (an `<img>`'s `srcset`). The loading screen is the texture `MapInfo`
+names, or else the `DraftIntroImage` of the game's map entry (`CMap` in the shared data's
+`MapData.xml`) `MapInfo` names; the icons are the layout's `Texture` values (a texture, or an asset
+name looked up in the game's `Assets.txt` lists), less the loading screen itself; where the layout
+`MapInfo` names isn't in the game's data (Warhead Junction), the textures named after the loading
+screen (`ui_ingame_mapmechanic_loadscreen_<its last part>_icon<n>.dds`). The game's pictures of the
+map are also kept in `raw/images/` as PNG, not in the pack: `minimap.png` (`Minimap.tga`),
+`custom-minimap.png` and `custom-minimap-hover.png`, `replay-preview.png`
 (`ReplaysPreviewImage.tga`), `map-select.png` (the picture `DocumentInfo` names) and
-`loading-screen.png` with its icons (from the game's textures; the background picture only).
+`loading-screen.png` with its icons.
 
 ### The custom minimap as SVG
 

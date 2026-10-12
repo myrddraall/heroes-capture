@@ -292,3 +292,30 @@ def sky_model_file(storage: Storage, file_name: str) -> bytes | None:
     """A skybox model's .m3 (as named in sky.py's PARALLAX_KEYS), or None."""
     stem = file_name.rsplit(".", 1)[0].lower()
     return storage.read(f"{SKY_MODELS}\\{stem}\\{file_name.lower()}")
+
+
+def asset_aliases(storage: Storage) -> dict[str, str]:
+    """The game's named assets (every mod's GameData/Assets.txt: "UI/<name>=Assets\\Textures\\<file>.dds"),
+    as its interface refers to textures ("@UI/<name>"); the shared data's first."""
+    names = sorted(storage.find("*\\gamedata\\assets.txt"), key=lambda n: "heroesdata.stormmod" not in n.lower())
+    aliases: dict[str, str] = {}
+    for name in names:
+        for line in (storage.read(name) or b"").decode("utf-8", errors="replace").splitlines():
+            key, sep, value = line.partition("=")
+            if sep and key.strip() and not key.startswith("//"):
+                aliases.setdefault(key.strip(), value.strip())
+    return aliases
+
+
+def map_entries(storage: Storage) -> dict[str, str]:
+    """The picture each of the game's maps is introduced with (the shared data's MapData: a CMap's
+    DraftIntroImage), by the entry's id: the loading screen of a map whose MapInfo names none (it
+    names its entry instead: Battlefield of Eternity's is "BoE")."""
+    hits = storage.find("*heroesdata.stormmod\\base.stormdata\\gamedata\\mapdata.xml")
+    text = (storage.read(hits[0]) or b"").decode("utf-8", errors="replace") if hits else ""
+    entries = {}
+    for m in re.finditer(r'<CMap id="([^"]+)"[^>]*>(.*?)</CMap>', text, re.S):
+        image = re.search(r'<DraftIntroImage value="([^"]+)"', m.group(2))
+        if image:
+            entries[m.group(1)] = image.group(1)
+    return entries

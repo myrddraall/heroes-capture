@@ -325,6 +325,49 @@ def test_a_pack_stitched_away_from_the_prepared_map_reads_its_pictures_from_the_
     assert json.loads((folder / "pack.json").read_text())["gameBuild"] == 98348
 
 
+def test_the_loading_screen_and_its_icons_are_in_the_pack_as_webp(tmp_path, monkeypatch):
+    """The game's pictures stay in raw/ as PNG; the loading screen and its icons, which a viewer
+    shows, are also in the pack's images/ as WebP: the picture lossy and opaque, the icons exact
+    with their transparency (PACK.md, Images)."""
+    import types
+
+    from heroes_capture.common import game_data
+
+    monkeypatch.setattr(game_data, "game_storage", lambda: types.SimpleNamespace(build=lambda: 1, close=lambda: None))
+    monkeypatch.setattr(game_data, "map_index", lambda s: {})
+    monkeypatch.setattr(game_data, "map_file", lambda s, name: (name, b"the map's archive"))
+
+    def map_images(stormmap, storage_, folder):
+        folder.mkdir(parents=True)
+        Image.new("RGB", (192, 108), (200, 100, 50)).save(folder / "loading-screen.png")
+        icon = Image.new("RGBA", (30, 20), (0, 0, 0, 0))
+        icon.paste((10, 200, 30, 255), (5, 5, 15, 15))
+        icon.save(folder / "loading-screen-icon-1.png")
+        return {"loadingScreen": {"file": "images/loading-screen.png", "size": [192, 108], "source": "screen.dds"},
+                "loadingScreenIcons": [{"file": "images/loading-screen-icon-1.png", "size": [30, 20], "source": "icon1.dds"}]}
+
+    monkeypatch.setattr(pack, "map_images", map_images)
+    out = tmp_path / "maps" / "test-map"
+    folder = pack.write(out, stitched(out), ["test-map-structures"], Specifics("battleground"))
+    images = json.loads((folder / "pack.json").read_text())["images"]
+    # Each also at a half and a quarter of its size, for a viewer to pick from.
+    assert images["loadingScreen"] == {"file": "images/loading-screen.webp", "size": [192, 108], "source": "screen.dds", "smaller": [
+        {"file": "images/loading-screen-96w.webp", "size": [96, 54]}, {"file": "images/loading-screen-48w.webp", "size": [48, 27]}]}
+    assert images["loadingScreenIcons"] == [{"file": "images/loading-screen-icon-1.webp", "size": [30, 20], "source": "icon1.dds", "smaller": [
+        {"file": "images/loading-screen-icon-1-15w.webp", "size": [15, 10]}, {"file": "images/loading-screen-icon-1-8w.webp", "size": [8, 5]}]}]
+    for entry in [images["loadingScreen"], *images["loadingScreenIcons"]]:
+        for version in entry["smaller"]:
+            assert Image.open(folder / version["file"]).size == tuple(version["size"])
+    screen = Image.open(folder / "images" / "loading-screen.webp")
+    assert screen.mode == "RGB" and np.abs(np.asarray(screen)[50, 90].astype(int) - (200, 100, 50)).max() <= 8
+    icon = np.asarray(Image.open(folder / "images" / "loading-screen-icon-1.webp").convert("RGBA"))
+    assert tuple(icon[10, 10]) == (10, 200, 30, 255) and icon[0, 0, 3] == 0  # exact: lossless
+    half = np.asarray(Image.open(folder / "images" / "loading-screen-icon-1-15w.webp").convert("RGBA"))
+    # Shrunk with its transparency premultiplied: the square's colour isn't darkened at its edge.
+    assert np.abs(half[5, 5, :3].astype(int) - (10, 200, 30)).max() <= 3 and half[5, 5, 3] > 200 and half[0, 0, 3] == 0
+    assert (out / "raw" / "images" / "loading-screen.png").exists()
+
+
 def test_a_map_layer_s_team_colour_mask_is_tiled_with_it(tmp_path, monkeypatch):
     """The stitch's team-colour mask of a map image (<image>-team.png: Order's team's amount in red,
     Chaos's in green) becomes the map layer's teamMask: a lossless pyramid tiled and levelled as the
