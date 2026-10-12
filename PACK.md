@@ -286,9 +286,10 @@ from (a viewer can match an icon to an objective by its name, e.g.
 `ui_ingame_mapmechanic_loadscreen_eternity_icon1.dds`). The loading screen's and its icons' also
 have `smaller`: the same picture at a half and a quarter of its size (`<name>-<width>w.webp`, each
 `{"file", "size"}`, largest first), so a viewer can take the smallest that is sharp where it draws
-it (an `<img>`'s `srcset`). The loading screen is the texture `MapInfo`
-names, or else the `DraftIntroImage` of the game's map entry (`CMap` in the shared data's
-`MapData.xml`) `MapInfo` names; the icons are the layout's `Texture` values (a texture, or an asset
+it (an `<img>`'s `srcset`). The loading screen is the `DraftIntroImage` of
+the game's map entry (`CMap` in the shared data's `MapData.xml`) `MapInfo` names, or else the
+texture `MapInfo` names itself (where both are named, the entry's is the map's own: the arenas'
+`MapInfo` names a generic picture or their battleground's); the icons are the layout's `Texture` values (a texture, or an asset
 name looked up in the game's `Assets.txt` lists), less the loading screen itself; where the layout
 `MapInfo` names isn't in the game's data (Warhead Junction), the textures named after the loading
 screen (`ui_ingame_mapmechanic_loadscreen_<its last part>_icon<n>.dds`). The game's pictures of the

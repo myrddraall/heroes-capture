@@ -237,9 +237,10 @@ def map_images(stormmap: Path | None, storage, folder: Path) -> dict:
     """The map's own pictures (PACK.md, Images) into `folder` as PNG: those in its archive, the
     map-select picture DocumentInfo names, and from the game's textures (through `storage`) its
     loading screen and the icons the loading screen's layout places. The loading screen is the
-    one MapInfo names, or else the picture of the game's map entry it names (game_data.map_entries:
-    Battlefield of Eternity, Towers of Doom, Hanamura Temple). Each {file, size, source}; the icons
-    a list. Any the map hasn't (or that can't be read) is left out."""
+    picture of the game's map entry MapInfo names (game_data.map_entries), or else the texture
+    MapInfo names itself: where both are named the entry's is the map's own (the arenas' MapInfo
+    names a generic picture or their battleground's). Each {file, size, source}; the icons a list.
+    Any the map hasn't (or that can't be read) is left out."""
     found: dict = {}
     if not stormmap or not stormmap.exists():
         return found
@@ -279,14 +280,16 @@ def map_images(stormmap: Path | None, storage, folder: Path) -> dict:
         select = next((p for p in pictures if "mapselect" in p.lower()), pictures[0] if pictures else None)
         if select and archive.has(select) and (entry := keep("mapSelect", "map-select.png", archive.read(select), select)):
             found["mapSelect"] = entry
-    screen = re.search(rb"Assets[\\/]Textures[\\/]([\w.-]+\.dds)", info)
-    name = screen.group(1).decode() if screen else None
-    if name is None and storage is not None:
-        # MapInfo names the map's entry instead, as a short string (its length, a zero byte, the id).
+    name = None
+    if storage is not None:
+        # The map's entry, named in MapInfo as a short string (its length, a zero byte, the id).
         entries = game_data.map_entries(storage)
         named = [i for i in entries if bytes([len(i)]) + b"\x00" + i.encode() in info]
         if named:
             name = entries[max(named, key=len)]
+    screen = re.search(rb"Assets[\\/]Textures[\\/]([\w.-]+\.dds)", info)
+    if name is None and screen:
+        name = screen.group(1).decode()
     name = aliases.get(name[1:], name) if name and name.startswith("@") else name
     if name and (entry := keep("loadingScreen", "loading-screen.png", texture(name), name.split("\\")[-1])):
         found["loadingScreen"] = entry

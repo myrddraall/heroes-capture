@@ -78,6 +78,27 @@ class Preparation:
     areas: list[dict] = field(default_factory=list)  # capture areas, each rendered to its own image (none: one, the camera bounds)
 
 
+FOW_OVERRIDE = """<?xml version="1.0" encoding="us-ascii"?>
+<Catalog>
+    <CFoW default="1">
+        <Color value="0,0,0,0"/>
+    </CFoW>
+    <CFoW id="Dark">
+        <Color value="0,0,0,0"/>
+    </CFoW>
+    <CFoW id="Black">
+        <Hidden value="0"/>
+        <Color value="0,0,0,0"/>
+    </CFoW>
+    <CFoW id="BlackNoUnhide">
+        <Hidden value="0"/>
+        <Color value="0,0,0,0"/>
+        <Expand value="0"/>
+    </CFoW>
+</Catalog>
+"""
+
+
 def render_id(map_name: str, structures: str) -> str:
     """The id a preparation's files are named by: <map slug>-structures, -terrain with the
     structures hidden, or -elements."""
@@ -266,6 +287,13 @@ def main(argv: list[str], specifics_for: Callable[[str, str], Specifics]) -> Pat
         )
         parts = [script.PART, capture_script.PART, *specifics.script_parts]
         inject(archive, map_script, script.assemble([p.read_text(encoding="utf-8") for p in parts], values))
+        # EXPERIMENT (run.cmd): the map's last cell row and column, and everything past them, are
+        # drawn black with a one-cell fade (Punisher Arena's north orb, Battlefield of Eternity's
+        # east chain), untouched by VisEnable(c_visTypeMask, false). The map's fog-of-war type
+        # ("BlackNoUnhide" in MapInfo; CFoW in the game's FoWData.xml) given no colour and no hiding,
+        # as the map's own data: if the black is the vision texture's border drawn in that colour,
+        # it goes.
+        archive.write("Base.StormData\\GameData\\FoWData.xml", FOW_OVERRIDE.encode("us-ascii"))
 
         # The solid-colour skyboxes (sky.py): the capture shoots each tile over white and over
         # black, and the stitch turns the difference into transparency.

@@ -2,9 +2,10 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: Dragon Shire (black void; 461 team-coloured doodads: its buildings, hedges, flags
-rem and lamps) and Punisher Arena (an arena: three areas and rounds), each rendered afresh with its
-rem structures kept, packs in format 6 with team colour (the structures' too, shot in the tiles).
+rem Current step: Punisher Arena again, keeping its working files (--keep-tmp), with the map's
+rem fog-of-war type overridden in the prepared map's own data (capture/prepare.py, FOW_OVERRIDE: no
+rem colour, no hiding): does the orb at the north arena's top edge (cells 255-256, x 162) still
+rem come out as a black silhouette? Compared with the last run's tiles.
 rem --monitor <n> puts the game on another monitor first.
 rem A failed run leaves its working files in tmp\ (pip, when it runs, writes tmp\setup.log).
 setlocal
@@ -12,8 +13,7 @@ pushd "%~dp0"
 set "PYTHONPATH=%~dp0src"
 rem The tool's dependencies, installed quietly when missing (pip's output in tmp\setup.log).
 py -c "import heroes_capture.cli, numpy, PIL, pyvips, scipy, mss, pydirectinput, dxcam, typer, rich, pmtiles" 2>nul || call :install || goto :copy
-py -m heroes_capture map render "Dragon Shire" --force
-py -m heroes_capture map render "Punisher Arena" --force
+py -m heroes_capture map render "Punisher Arena" --force --keep-tmp
 popd
 
 :copy
