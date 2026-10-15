@@ -1,5 +1,6 @@
 """The pieces with exact rules, without the game."""
 
+import importlib
 import json
 import os
 import struct
@@ -134,7 +135,8 @@ def test_the_elements_capture_s_commands_are_in_the_script():
     text = script()
     assert 'if ((lp_word == "el")) { return hrsCap_gt_Element; }' in text
     verbs = ("hideall", "kill", "core", "at", "fades", "killall", "clear", "keep", "camp", "copy", "wide", "fadeall",
-             "copykill", "play", "freeze", "holes", "env")
+             "copykill", "play", "freeze", "holes", "env", "pausemsg", "clock", "typemsg", "worldfx", "light", "restart", "hold", "farclip", "water",
+             "paint")
     assert sorted(set(re.findall(r'\(lv_verb == "(\w+)"\)', text))) == sorted(verbs)
     assert 'AbilityCommand("TowerDeadMorph", 0)' in text and 'UnitBehaviorAdd(lp_unit, "TownCannonTowerInvulnerable"' in text
     # A tower by its morph, not the Tower attribute (town halls have it too, and never fell).
@@ -559,6 +561,34 @@ def test_a_town_s_outposts_are_its_structures_beyond_the_hall_s_ring_joined_by_n
     assert [u["outpost"] for u in structures] == [None, None, 1, 1, 1, 2, None, None, None, 3]
 
 
+def test_walls_alone_beyond_the_ring_stay_in_their_town():
+    """Dragon Shire's walls stand 15 to 15.7 from the hall, just past the ring: a group of walls
+    alone isn't an outpost."""
+    from heroes_capture.categories.battleground import elements
+
+    structures = [{"id": 1, "type": "TownTownHallL2", "x": 100, "y": 100, "town": 1},
+                  {"id": 2, "type": "TownWallRadial5L2", "x": 115.4, "y": 100, "town": 1},
+                  {"id": 3, "type": "TownWallRadial3L3", "x": 100, "y": 115.5, "town": 1},
+                  {"id": 4, "type": "TownWallRadial2L3", "x": 100, "y": 70, "town": 1},  # with a tower: an outpost
+                  {"id": 5, "type": "TownCannonTowerL3Standalone", "x": 104, "y": 70, "town": 1}]
+    outposts = elements.group_outposts(structures, [{"town": 1, "lane": 1, "owner": "order", "region": 2, "name": ""}])
+    assert [u["outpost"] for u in structures] == [None, None, None, 1, 1] and len(outposts) == 1
+
+
+def test_a_standalone_tower_outside_the_towns_goes_with_its_fort():
+    """GameLib takes a fort's standalone tower down with it (the nearest within STANDALONE_REACH),
+    so one outside every town region is put in that fort's town; one near no fort stays out."""
+    from heroes_capture.categories.battleground import elements
+
+    structures = [{"id": 1, "type": "TownTownHallL2", "x": 100, "y": 100, "town": 4},
+                  {"id": 2, "type": "TownTownHallL3", "x": 130, "y": 100, "town": 5},  # a keep takes none
+                  {"id": 3, "type": "TownCannonTowerL3Standalone", "x": 113.2, "y": 100, "town": None},
+                  {"id": 4, "type": "TownCannonTowerL3Standalone", "x": 125, "y": 100, "town": None},
+                  {"id": 5, "type": "TownCannonTowerL3Standalone", "x": 100, "y": 140, "town": None}]
+    elements.standalone_towns(structures)
+    assert [u["town"] for u in structures] == [4, 5, 4, None, None]
+
+
 class _Recoverable(Exception):
     def __init__(self, why, resume_at=None):
         super().__init__(why)
@@ -572,7 +602,8 @@ def element_capture(monkeypatch):
                         types.SimpleNamespace(settle=lambda seconds: None, step=lambda action, what: action(), Recoverable=_Recoverable))
     monkeypatch.delitem(sys.modules, "heroes_capture.categories.battleground.element_capture", raising=False)
     monkeypatch.delitem(sys.modules, "heroes_capture.capture.shots", raising=False)
-    from heroes_capture.categories.battleground import element_capture
+    # Through sys.modules: the package's attribute may still be another test's import.
+    element_capture = importlib.import_module("heroes_capture.categories.battleground.element_capture")
 
     monkeypatch.setattr(element_capture, "log", lambda message: None)
     monkeypatch.setattr(element_capture, "warn", lambda message: None)
@@ -581,15 +612,24 @@ def element_capture(monkeypatch):
 
 class _FakeSession:
     """Answers every command, and shows a frame; records what was typed. The frame is black from
-    Order's side and white from Chaos's (after "side 2"): a side switch shows."""
+    Order's side and white from Chaos's (after "side 2"), and white while repainted ("el paint ...
+    SetTeamColor", until "ClearTeamColor"): a side switch and a repaint show."""
 
     def __init__(self, unanswered=()):
-        self.sent, self.unanswered, self.team = [], set(unanswered), 1
+        self.sent, self.unanswered, self.team, self.painted = [], set(unanswered), 1, False
+        self.everything = []  # what was typed, the lighting of the structures' effects too
 
     def send(self, command, timeout=2.0):
-        self.sent.append(command)
+        self.everything.append(command)
+        # Each structure's restart and pause at its standing time ("el restart", "el hold", once
+        # the camera reaches it) left out of `sent`: the tests below are about the shots
+        # (test_each_structure_is_restarted_and_paused_at_its_standing_time).
+        if not command.startswith(("el restart ", "el hold ")):
+            self.sent.append(command)
         if command.startswith("side ") and command not in self.unanswered:
             self.team = int(command.split()[-1])
+        if command.startswith("el paint "):
+            self.painted = "SetTeamColor" in command
         return None if command in self.unanswered else (types.SimpleNamespace(camera_x=1.0, camera_y=2.0), self.grab())
 
     def blank(self, frame):
@@ -603,7 +643,7 @@ class _FakeSession:
         return self.status().camera
 
     def grab(self, dark_ok=False):
-        return np.full((40, 60, 3), 0 if self.team == 1 else 255, np.uint8)
+        return np.full((40, 60, 3), 0 if self.team == 1 and not self.painted else 255, np.uint8)
 
     def status(self):
         return types.SimpleNamespace(camera_x=10.0, camera_y=20.0, camera={"x": 10.0, "y": 20.0})
@@ -612,6 +652,7 @@ class _FakeSession:
 ELEMENTS_MANIFEST = {
     "tiles": [{"index": 0, "x": 0, "y": 0}, {"index": 1, "x": 50, "y": 50}],
     "screen": {"w": 3440, "h": 1440}, "pxPerCell": 48, "distance": 85.0,
+    "teamColours": {"ally": {"diffuse": [36, 92, 255], "emissive": [36, 92, 255]}, "hostile": {"diffuse": [255, 0, 0], "emissive": [178, 0, 0]}},
     "elements": {
         "structures": [{"id": 5, "type": "TownCannonTowerL2", "x": 1, "y": 2, "owner": "order", "town": 1, "core": False, "radius": 6.0},
                        {"id": 6, "type": "KingsCore", "x": 3, "y": 1, "owner": "chaos", "town": None, "core": True, "radius": 6.0}],
@@ -649,18 +690,25 @@ def test_the_elements_capture_shoots_each_element_then_brings_the_structures_dow
     assert records["structure-5-standing"]["chaos"] == "structure-5-standing-chaos" and "chaos" not in records["camp-1-spawned"]
     assert {p.stem for p in (tmp_path / "elements").glob("structure-5-standing*")} >= {
         "structure-5-standing", "structure-5-standing-black", "structure-5-standing-chaos", "structure-5-standing-chaos-black"}
-    assert not any(c.startswith("el isolate") or c.startswith("sky ") for c in sent)
+    # (The only sky: the light one back for a remains' repainted shots, rubble_shots.)
+    assert not any(c.startswith("el isolate") or (c.startswith("sky ") and c != "sky lightgrey 0") for c in sent)
     # Rubble in waves: the tower, then the core in a wave of its own, last (after its hidden
-    # replacement takes its place); each brought down, left for its time, shot centred, cleared
-    # away.
+    # replacement takes its place); each brought down, left for its time, shot centred, repainted
+    # in the other side's team colour and shot again (a fallen structure keeps the colour it died
+    # with, whatever the side), put back, cleared away.
     core, kill = sent.index("el core 2 -1"), sent.index("el kill 1 2 -1")
     # Each brought down with the camera far back over it (a fall gives off its smoke and dust only
     # near the camera).
     assert kill < core and sent[core - 2:core] == ["el wide 3.00 1.00 212.5", "el fades 3 1 1"]
     assert sent[kill - 3:kill] == ["note Rubble wave 1 of 2: waiting for the structures to fall", "el wide 1.00 2.00 212.5", "el fades 1 2 1"]
     assert sent[core - 3] == "note Rubble wave 2 of 2: waiting for the structures to fall"
-    assert sent[core + 1:core + 4] == ["el freeze", "el at 3.00 1.00", "black"]
-    assert sent[kill + 1:kill + 5] == ["el freeze", "el at 1.00 2.00", "black", "el clear"]
+    # As drawn over white and black, the light sky back, repainted, over white and black, put back.
+    assert sent[core + 1:core + 8] == ["el freeze", "el at 3.00 1.00", "black", "sky lightgrey 0",
+                                       "el paint 3 1 22 SetTeamColor~36,92,255~36,92,255", "black",
+                                       "el paint 3 1 22 ClearTeamColor"]  # Chaos's remains: as its ally
+    assert sent[kill + 1:kill + 9] == ["el freeze", "el at 1.00 2.00", "black", "sky lightgrey 0",
+                                       "el paint 1 2 9 SetTeamColor~255,0,0~178,0,0", "black",
+                                       "el paint 1 2 9 ClearTeamColor", "el clear"]  # Order's: as its enemy
     # Clearing: Order's core (not yet replaced) and anything left brought down, the scene shown
     # again, the remains and the fallen structures' own actors cleared, the holes shown, everything
     # let play a moment and paused again (the doodads shown again give off their particles).
@@ -706,12 +754,39 @@ def _lose_focus_at(element_capture, tmp_path, grab: int) -> list[str]:
 
 def test_a_standing_shot_done_again_starts_from_what_is_really_shown(element_capture, tmp_path):
     """The focus lost part way through a structure's shots (its neighbour faded in beside it: the
-    sixth shot, after Order's white, the watch and Chaos's white, the watch and Order's black): the
-    step done again fades that neighbour out in the command that moves the camera back, so the
-    structure's shot alone has nothing else in it."""
-    sent = _lose_focus_at(element_capture, tmp_path, 6)
+    seventh grab, after Order's white and its hold, the watch and Chaos's white held, the watch and
+    Order's black held): the step done again fades that neighbour out in the command that moves the
+    camera back, so the structure's shot alone has nothing else in it."""
+    sent = _lose_focus_at(element_capture, tmp_path, 7)
     assert sent[7:13] == ["el at 1.00 2.00 1 2 1", "side 2", "black", "side 1", "el fades 3 1 1",
                           "el at 1.00 2.00 1 2 0 3 1 0 1 2 1"]
+
+
+class _UnchangingSession(_FakeSession):
+    """A side switch never shows."""
+
+    def grab(self, dark_ok=False):
+        return np.zeros((40, 60, 3), np.uint8)
+
+
+@pytest.mark.parametrize("changes, sides", [(None, 1), (True, 3), (False, 1)])
+def test_a_structure_the_calibration_saw_change_is_shot_again_when_its_switch_isn_t_seen(element_capture, tmp_path, monkeypatch, changes, sides):
+    """Changing with neither switch: nothing on it has team colour, unless the map's calibration
+    saw it change (then the first shots were from the wrong side: shot again, three times at most).
+    Seen never to change, its switches aren't waited on for long. (Its rubble is repainted, not
+    switched: watched for PAINT_CAP.)"""
+    waited = []
+    real = element_capture.recoloured_frame
+    monkeypatch.setattr(element_capture, "recoloured_frame", lambda session, ref, boxes, cap: waited.append(cap) or real(session, ref, boxes, 0.0))
+    manifest = json.loads(json.dumps(ELEMENTS_MANIFEST))
+    manifest["elements"]["structures"] = manifest["elements"]["structures"][:1]
+    manifest["elements"]["camps"] = []
+    if changes is not None:
+        manifest["elements"]["structures"][0]["changesSide"] = changes
+    session = _UnchangingSession()
+    element_capture.capture_elements(session, manifest, tmp_path)
+    assert session.sent.count("side 2") == sides
+    assert set(waited) == {element_capture.UNCHANGING_CAP if changes is False else element_capture.SWITCH_CAP, element_capture.PAINT_CAP}
 
 
 def test_a_standing_shot_done_again_from_chaos_s_side_switches_back_first(element_capture, tmp_path):
@@ -752,11 +827,14 @@ def test_the_elements_capture_prepares_the_rubble_with_copies(element_capture, t
                                      "el wide 140.50 60.50 212.5", "el copykill 1 1", "el freeze"]
     assert sent.index("el fadeall 0") < first < next(i for i, c in enumerate(sent) if c.startswith("el at 1.00 2.00"))
     tower = sent.index("el at 100.00 100.00")
-    assert sent[tower + 1] == "black" and sent[sent.index("el at 140.50 60.50") + 1] == "black"
+    assert sent[tower + 1:tower + 6] == ["black", "sky lightgrey 0", "el paint 100 100 9 SetTeamColor~255,0,0~178,0,0", "black",
+                                         "el paint 100 100 9 ClearTeamColor"]
+    assert sent[sent.index("el at 140.50 60.50") + 3].startswith("el paint 140.5 60.5 ")
     assert not any(c.startswith("el kill ") for c in sent) and "el core 2 -1" in sent
     records = json.loads((tmp_path / "elements" / "elements.json").read_text())
     # The fake camera is at (10, 20) for every shot: as if from the tower's cell, (10 + 1 - 100, 20 + 2 - 100).
     assert records["structure-5-rubble"]["camera"] == {"x": -89.0, "y": -78.0}
+    assert records["structure-5-rubble"]["chaos"] == "structure-5-rubble-chaos"  # its team colour, as standing's
     assert records["structure-5-rubble"]["x"] == 1 and records["structure-7-rubble"]["tile"] == 1  # its structure's tile
     assert "structure-6-rubble" in records
 
@@ -860,6 +938,26 @@ def test_rubble_waves_keep_each_one_s_rubble_out_of_the_others_shots():
     assert [[s["id"] for s in w] for w in waves] == [[1, 4], [2, 5], [3], [9], [10]]
     for w in waves[:-2]:
         assert all(abs(a["x"] - b["x"]) >= 16 for a in w for b in w if a is not b)
+
+
+def test_each_structure_is_restarted_and_paused_at_its_standing_time(element_capture, tmp_path):
+    """Each structure, faded in under the camera, started over ("el restart": its animations from
+    the start, its effects lit by the camera) and paused ("el hold") at its kind's standing time
+    before its shots: the same moment every run."""
+    session = _FakeSession()
+    element_capture.capture_elements(session, ELEMENTS_MANIFEST, tmp_path)
+    seq = session.everything
+    first = seq.index("el at 1.00 2.00 1 2 1")
+    assert seq[first + 1:first + 4] == ["el restart 1 2", "el hold 1 2", "side 2"]
+    assert seq.count("el restart 3 1") == 1
+
+
+def test_a_structure_runs_its_kind_s_picked_standing_time():
+    from heroes_capture.categories.battleground import elements
+
+    tower = {"type": "TownCannonTowerL3", "owner": "chaos"}
+    assert elements.stand_wait(tower, {"TownCannonTowerL3": 3.25}) == 3.25  # by type: both teams alike
+    assert elements.stand_wait(tower) == elements.LIGHT_WAIT
 
 
 def test_the_elements_capture_gives_up_on_a_map_that_stops_answering(element_capture, tmp_path):
@@ -1015,7 +1113,7 @@ def test_each_kind_on_each_team_is_shot_at_its_own_time(element_capture):
     assert w({"type": "TownCannonTowerL3Standalone", "owner": "chaos", "core": False}) == 3.00
     assert w({"type": "TownWallRadial17L2", "owner": "chaos", "core": False}) == 1.33
     assert w({"type": "TownWallRadial14L3", "owner": "chaos", "core": False}) == 2.24
-    assert w({"type": "KingsCore", "owner": "chaos", "core": True}) == element_capture.CORE_WAIT
+    assert w({"type": "KingsCore", "owner": "chaos", "core": True}) == 4.8  # elements.CORE_WAIT
 
 
 def test_the_game_draws_at_most_5_to_4_narrow():
@@ -1075,3 +1173,139 @@ bool libGame_gf_StandaloneTowerDeath (unit lp_unit) {
 """
     assert set(functions(script)) == {"libGame_gf_TownDestroyed", "libGame_gf_TownCount", "libGame_gf_StandaloneTowerDeath"}
     assert functions(script)["libGame_gf_TownCount"].endswith("return 3;\n}")
+
+
+def test_the_game_s_script_names_are_found_in_its_program():
+    from heroes_capture.common import game_data
+
+    program = b"\x00\x12GamePause\x00EnvironmentShow\x00c_actorIntersectAgainstCenter\x00junk\x01AnimSetTimeScaleGlobal\x00ab\x00"
+    assert game_data.script_names(program, "pause|timescale") == ["AnimSetTimeScaleGlobal", "GamePause"]
+    assert game_data.script_names(program, "^c_actor") == ["c_actorIntersectAgainstCenter"]
+
+
+def test_models_the_map_defines_itself_are_frozen_in_their_own_entries():
+    """A second entry with the same id didn't take (Dragon Shire's forts burned on while paused):
+    the freeze settings go into the map's own entry (the first, when several); only the models it
+    doesn't define get entries appended."""
+    from heroes_capture.capture import sky
+
+    catalog = ('<Catalog>\r\n    <CModel id="Fort"><Model value="fort.m3"/></CModel>\r\n    <CModel id="Gate" parent="Building"/>\r\n'
+               '    <CModel id="Fort"><Radius value="2"/></CModel>\r\n    <CModel id="FortDamage"/>\r\n</Catalog>\r\n')
+    frozen, rest = sky.freeze_in_place(catalog, ["Fort", "Gate", "Tower"])
+    assert rest == ["Tower"]
+    assert f'<CModel id="Fort">{sky.FREEZE}<Model value="fort.m3"/></CModel>' in frozen
+    assert f'<CModel id="Gate" parent="Building">{sky.FREEZE}</CModel>' in frozen
+    assert frozen.count(sky.FREEZE) == 2 and '<CModel id="FortDamage"/>' in frozen  # not asked for: untouched
+    files = dict(sky.sky_files("T", "black", lambda name: catalog if name.endswith("ModelData.xml") else None, {"models": [], "files": [], "freeze": ["Fort", "Tower"]}))
+    data = files["Base.StormData\\GameData\\ModelData.xml"].decode()
+    assert f'<CModel id="Fort">{sky.FREEZE}<Model' in data and f'<CModel id="Tower">{sky.FREEZE}</CModel>' in data
+    assert sky.freeze_in_place(None, ["Fort"]) == (None, ["Fort"])
+
+
+
+def _water_files():
+    """A 16 x 8 map: one water (height 7) painted over x 0..8, y 0..8, its terrain 4 (under the
+    water) on x < 4 and 8 elsewhere; t3HeightMap's raw heights as raw * 0.001 - 1."""
+    import struct
+
+    entry = b"PondWater".ljust(32, b"\0") + bytes(8) + struct.pack("<4f", 0, 0, 8, 8)
+    t3water = b"WATR" + struct.pack("<II", 110, 1) + bytes(20) + entry
+    vw, vh = 17, 9
+    heights = np.full((vh, vw), 8.0)
+    heights[:, :5] = 4.0  # corners x 0..4: cells x 0..3 all under, x 4 has two corners under
+    raw = np.rint((heights + 1) / 0.001).astype("<u2")
+    records = np.zeros((vh, vw, 3), "<u2")
+    records[..., 0] = raw
+    heightmap = b"HMAP" + struct.pack("<III", 101, vw, vh) + bytes(16) + records.tobytes()
+    terrain = '<terrain><vertData quantizeBias="1.0" quantizeScale="0.001" standardHeight="8"/></terrain>'
+    water_data = '<Catalog><CWater id="PondWater"><State index="0"><Height value="7.000000"/></State></CWater></Catalog>'
+    return t3water, heightmap, terrain, water_data
+
+
+def test_a_map_s_water_cells_come_from_its_water_rectangles_and_terrain():
+    """A cell is water inside its water's rectangle where its lowest corner is under the water's
+    height (map/water.py); without the height, the whole rectangle."""
+    from heroes_capture.map import water
+
+    t3water, heightmap, terrain, water_data = _water_files()
+    assert water.water_rects(t3water) == [("PondWater", 0, 0, 8, 8)]
+    assert water.water_heights(["<Catalog/>", water_data]) == {"PondWater": 7.0}
+    wet = water.water_cells(t3water, heightmap, terrain, [water_data], 16, 8)
+    assert wet.shape == (8, 16) and wet[:, :5].all() and not wet[:, 5:].any()
+    assert water.water_cells(t3water, heightmap, terrain, [], 16, 8)[:, :8].all()  # no height: the rectangle
+    assert not water.water_cells(None, heightmap, terrain, [water_data], 16, 8).any()
+    assert water.water_runs(wet, grow=0)[:2] == [[0, 0, 5], [1, 0, 5]]
+    assert water.water_runs(wet, grow=1)[0] == [0, 0, 6]
+
+
+def test_in_the_water_only_changes_along_the_team_colours_count():
+    """The water's pixels on the canvas (cell (x, y) at (ax + x * scale, ay - y * scale)); there a
+    change between the sides counts as team colour only along the teams' colours: moving foam
+    (brighter) doesn't, a roof over the water swapping blue for red does."""
+    from heroes_capture.capture import stitch
+    from heroes_capture.capture.team_colour import TEAM_COLOURS
+    from heroes_capture.map import water
+
+    wet = water.water_pixels((40, 60), [[0, 2, 4]], 5.0, 10.0, 40.0)  # cells x 2..3, y 0: pixels x 20..30, y 35..40
+    assert wet[35:40, 20:30].all() and wet.sum() == 50
+    order = np.full((40, 60, 4), 255, np.uint8)
+    order[..., :3] = (80, 90, 100)
+    chaos = order.copy()
+    chaos[36, 22, :3] = (160, 170, 180)  # foam, in the water
+    chaos[36, 40, :3] = (160, 170, 180)  # the same change on land (no water there)
+    order[38, 25, :3], chaos[38, 25, :3] = TEAM_COLOURS["order"], TEAM_COLOURS["chaos"]  # a roof over the water
+    mask = stitch.canvas_team_mask(order, chaos, wet=wet)
+    assert not mask[36, 22].any() and mask[36, 40].any() and mask[38, 25, 0] > 0
+
+
+def test_a_fort_s_standalone_tower_falls_in_a_wave_before_its_fort():
+    """GameLib takes the standalone tower down with its fort: brought down after it, nothing is left."""
+    from heroes_capture.categories.battleground import elements
+
+    fort = {"id": 1, "type": "TownTownHallL2", "x": 100, "y": 100}
+    tower = {"id": 2, "type": "TownCannonTowerL3Standalone", "x": 113.5, "y": 100}
+    far = {"id": 3, "type": "TownCannonTowerL3Standalone", "x": 160, "y": 100}  # near no fort: by its circle
+    radii = {1: 9.2, 2: 7.1, 3: 7.1}
+    waves = elements.rubble_waves([fort, tower, far], radius=lambda u: radii[u["id"]])
+    assert [[u["id"] for u in w] for w in waves] == [[2, 3], [1]]
+
+
+def test_a_copy_that_falls_to_nothing_leaves_its_structure_to_the_waves(element_capture, tmp_path, monkeypatch):
+    """Its remains' circle shows nothing but the light sky: not recorded, and the structure itself is
+    brought down in a wave (Dragon Shire's copies near the map's edges, now and then)."""
+    monkeypatch.delenv(element_capture.COPY_TRYING, raising=False)
+    monkeypatch.delenv(element_capture.COPY_CRASHED, raising=False)
+
+    class _EmptySession(_FakeSession):
+        """The light sky everywhere, on the small screen below, the camera where it was last sent."""
+        at = {"x": 0.0, "y": 0.0}
+
+        def send(self, command, timeout=2.0):
+            if command.startswith("el at "):
+                self.at = {"x": float(command.split()[2]), "y": float(command.split()[3])}
+            return super().send(command, timeout)
+
+        def camera(self, default=None):
+            return dict(self.at)
+
+        def grab(self, dark_ok=False):
+            return np.full((40, 60, 3), int(element_capture.LIGHT_LEVEL), np.uint8)
+
+    manifest = _copies_manifest()
+    manifest["screen"], manifest["pxPerCell"] = {"w": 60, "h": 40}, 2
+    session = _EmptySession()
+    element_capture.capture_elements(session, manifest, tmp_path)
+    assert "el kill 1 2 -1" in session.sent  # the tower (its copy fell to nothing) brought down itself
+    assert sum(c.startswith("note Rubble wave") for c in session.sent) >= 2
+
+
+def test_a_fort_s_standalone_tower_gets_no_copy():
+    """Left standing while its copy falls, it falls with its fort (GameLib), into the fort's shot."""
+    from heroes_capture.categories.battleground import elements
+
+    structures = [{"id": 1, "type": "TownTownHallL2", "x": 60, "y": 60, "radius": 8.0, "core": False},
+                  {"id": 2, "type": "TownCannonTowerL3Standalone", "x": 73.5, "y": 60, "radius": 8.0, "core": False},
+                  {"id": 3, "type": "TownCannonTowerL3Standalone", "x": 60, "y": 120, "radius": 8.0, "core": False}]
+    assert [elements.goes_with_a_fort(u, structures) for u in structures] == [False, True, False]
+    found = elements.copy_candidates(structures, [], {"left": 0, "bottom": 0, "right": 200, "top": 200}, 200, None)
+    assert 2 not in found and 3 in found

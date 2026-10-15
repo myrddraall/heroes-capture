@@ -20,6 +20,14 @@ class Specifics:
     prepare: list[Callable] = field(default_factory=list)
     # before_tiles(session, manifest, base): in the match, the start-up done, before the tiles.
     before_tiles: list[Callable] = field(default_factory=list)
+    # calibrate(session, manifest, base, stages, previous) -> dict: in a calibration's match
+    # (capture/calibration.py), the start-up done: what the named stages measured, for the map's
+    # calibration.json (`previous`: the map's calibration so far, for a stage that builds on another).
+    calibrate: list[Callable] = field(default_factory=list)
+    # The calibration's stages, each with its version (bumped when what it measures changes); and
+    # its probes, run only when named (`map calibrate --only`), which a render doesn't need.
+    calibration_stages: dict[str, int] = field(default_factory=dict)
+    calibration_probes: dict[str, int] = field(default_factory=dict)
     # after_stitch(stitched): the map images written (capture/stitch.Stitched).
     after_stitch: list[Callable] = field(default_factory=list)
     # pack_data(packing) -> dict: entries for the pack's data (capture/pack.Packing; PACK.md).

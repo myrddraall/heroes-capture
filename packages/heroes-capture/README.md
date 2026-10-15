@@ -5,6 +5,8 @@ script injected into the map hides the HUD, the fog of war and the units, points
 straight down and steps it across the map while screenshots are taken, and the screenshots are
 stitched by their known positions. Structures (forts, towers, cores, gates) can be kept or
 hidden, so each map can be rendered both ways.
+It also extracts the game's interface textures and finds them by description
+([Interface textures](#interface-textures)).
 
 Runs on Windows with the game installed. Start Heroes from the Battle.net app first, so it's
 logged in; the capture then hands the prepared map to the running game.
@@ -18,7 +20,7 @@ included; nothing to install), and its `.sha256`. The newest is always at
 ```powershell
 heroes-capture-win-x64.exe map render "Battlefield of Eternity"
 heroes-capture-win-x64.exe map render --category all   # every map the tool can render
-heroes-capture-win-x64.exe map list     # the game's maps by category, and which have been validated
+heroes-capture-win-x64.exe map list     # the game's maps by category, and which are verified
 ```
 
 The output folder is one a render can be run again on: a map already rendered there is skipped
@@ -28,9 +30,10 @@ same command again picks them up.
 
 A render's images go to `maps\<map id>\` in the folder it runs from (`maps\battlefield-of-eternity\`;
 `-o` / `--output-dir` picks another folder for them). Its working files (the screenshots, the
-prepared map, the diagnostic logs) go to `tmp\` and are removed when the render finishes;
-`--keep-tmp` leaves them for diagnosis, and a failed render leaves them too. `heroes-capture
-clean-up` removes them afterwards (only what heroes-capture wrote in `tmp\`).
+prepared map, the diagnostic logs) go to `tmp\` and stay there: a render that stops carries on
+from them when run again (only one left unfinished, by the same version of the tool; a finished
+render is shot afresh). `--clean-up` removes them once the render is done (for a render known to
+work), and `heroes-capture clean-up` removes them any time (only what heroes-capture wrote in `tmp\`).
 
 Two logs:
 
@@ -84,27 +87,59 @@ files in `tmp\`:
 heroes-capture map render "Towers of Doom"                  # structures kept, into maps\towers-of-doom
 heroes-capture map render "Cursed Hollow" --structures hide # bare terrain
 heroes-capture map render "Dragon Shire" -o D:\renders      # into D:\renders\dragon-shire
-heroes-capture map render "Dragon Shire" --keep-tmp         # tmp\ left for diagnosis
+heroes-capture map render "Dragon Shire" --clean-up         # tmp\ cleared once done
 heroes-capture map render --category arena                  # battleground, arena, brawl, other or all
 heroes-capture map render "Dragon Shire" --force            # again, though maps\dragon-shire has it
-heroes-capture clean-up                                     # removes what a failed or --keep-tmp render left in tmp\
+heroes-capture map calibrate "Dragon Shire"                 # measure the map for its elements render (then review it)
+heroes-capture clean-up                                     # removes the working files runs left in tmp\
+heroes-capture job run.yml                                  # the runs a job file lists, in order
+heroes-capture job run.yml --resume                         # carries on a job that stopped
 ```
+
+A job file lists runs in YAML: whole renders, renders of only some parts over the map's last run,
+and calibrations (`heroes_capture/job.py` describes it):
+
+```yaml
+runs:
+  - map: Dragon Shire
+    render: elements          # keep, hide or elements: the whole render
+  - map: Dragon Shire
+    render: elements
+    only: [rubble]            # skies, standing, camps, rubble, tiles: just these, over the kept run
+  - map: Dragon Shire
+    calibrate: [standing]     # calibration stages, or all
+```
+
+A run of some parts builds on the map's kept run of the same render in `tmp\`: what it reshoots is
+removed, the rest kept, and the map is stitched from all of it; the setup those parts need (the map
+prepared and launched, the structures brought down) is done whatever is chosen. The job's progress
+is kept in `tmp\job.json`: `--resume` skips the runs it finished and carries on the one under way.
 
 A map already rendered in the output folder (its viewer is there) is skipped. A render left
 unfinished carries on from its working files when run again with the same options: the capture
 resumes at the first missing screenshot (less the two the saving threads may have left
 half-written), or the stitch runs straight away when they're all there. With other options it
-starts again. Maps not yet validated render too; their line says they may not come out right.
+starts again. Maps not yet verified render too; their line says they may not come out right.
 Options that aren't `map render`'s own go to the preparing step: `heroes-capture prepare --help`
 lists them.
 
+An elements render (`--structures elements`) needs the map's reviewed calibration: a short match
+(`map calibrate`) that measures in the game what the render would otherwise assume from
+Battlefield of Eternity (where each structure's copy can stand and still look like it, which
+structures change with the side, what keeps moving while paused) and films each kind's fall,
+followed by a review of what the numbers can't settle. The render stops when the map has none from
+the current tool. `VERIFICATION.md` has the steps.
+
 (`py -m heroes_capture map render ...` is the same.) `heroes-capture map list` lists the game's
-maps by category and which have been validated: their render reviewed and, where needed, tuned
-for. They're in `maps/validated-maps.json`; add a map there once its render has been looked over. The
+maps by category and which are verified: their render passed the checklist in `VERIFICATION.md`,
+with Battlefield of Eternity as the standard, at the checklist's current version. The record is
+`maps/validated-maps.json`; a change to the render bumps the checklist's version there, and every
+map is unverified until it passes again. The
 categories come from the mods each map builds on: Battleground (the 5v5 maps of the Versus AI /
 Quick Match / Storm League pool, with the custom-game-only ones: the game's data doesn't tell them
 apart), Arena and Brawl (each map needs handling of its own, as Punisher Arena's three arenas and
-rounds did, so only the validated ones are supported; naming another renders it with a warning),
+rounds did, so only the known ones are supported, those in `validated-maps.json` at any checklist
+version; naming another renders it with a warning),
 and Other (the sandboxes, and Try Me Mode and the tutorials, listed as unsupported: the game keeps
 them as folders rather than map archives, and the capture builds on an archive). A category's run
 leaves the unsupported maps out. The steps on their own, which leave their files in place:
@@ -219,6 +254,41 @@ of the map the screenshots show, with the void transparent. Map cells convert to
 the shells are a tilted plane (fitted from the sky shots' overlaps), so they come out as
 trapezoids, transparent in the corners no shot reaches. Every render of a map with its own
 parallax sky also keeps `<id>\sky-layers.json` in its working files, the measured speeds.
+
+## Interface textures
+
+```powershell
+heroes-capture ui extract                                  # the interface's textures into assets\ui\
+heroes-capture ui search "gold hexagonal portrait frame"   # the 40 that fit a description best
+heroes-capture ui search "talent panel background" -n 80
+```
+
+`ui extract` reads the game's data (no need for the game to be running) and writes each of the
+interface's textures as a PNG, at full size and as a thumbnail, into `assets\ui\` (Blizzard's art:
+not in git). The interface's textures are the ones its layouts draw, its asset table names
+(`UI/<name>`), its catalog entries show as pictures (button icons, portraits, loading screens)
+and the ones named with its own prefixes (`storm_ui_`, `ui_`, `hud_`, ...): about 12,400. Sprays
+and banners are left out: they're collectibles drawn in the world.
+
+`assets\ui\catalogue.json` says, for each texture: its size and format, whether it's transparent,
+its asset names, the layout frames that draw it (with the frame's texture type: `Border` and
+`NineSlice` pieces are stretched by their edges) and the catalog entries that show it, with
+their English names. A texture unchanged since the last run isn't decoded again.
+
+`ui search` ranks the textures by how near each picture is to the description, by an image-text
+model ([SigLIP 2](https://arxiv.org/abs/2502.14786) through
+[OpenCLIP](https://github.com/mlfoundations/open_clip), on the CPU), with a little added for the
+description's words in what the catalogue calls the texture. It lists the best and draws them
+on a contact sheet, `assets\ui\searches\<description>.png`. It needs the search extra, which
+the executable leaves out (PyTorch alone is hundreds of megabytes):
+
+```powershell
+uv sync --extra search   # or: pip install -e ".[search]"
+```
+
+The model's weights download once (Hugging Face's cache). The first search looks at every
+picture (`assets\ui\index-<model>.npz`), which takes minutes; after that a search takes seconds,
+and after a game update only the textures it changed are looked at again.
 
 ## How it works
 
@@ -359,8 +429,11 @@ parallax sky also keeps `<id>\sky-layers.json` in its working files, the measure
   featureless screenshots. Neighbours meet along a seam routed through their overlap where the
   two agree best (it goes around things off the ground plane, which shift between views),
   never far from the halfway line, blended over a few pixels so small lighting changes don't
-  show as steps. Then the void is made transparent (see above) and the image is cropped to the
-  map.
+  show as steps. Then the void is made transparent (see above), the game's black at the map's
+  edge is removed (`capture/edge_black.py`: the map's last cell row and column, and anything past
+  them, the game draws black with a one-cell fade, whatever the vision, the fog-of-war data or the
+  camera bounds; a model reaching into the last cell, like Punisher Arena's north orb, gets that
+  black made transparent and the fade before it undone), and the image is cropped to the map.
 
 ## Files
 
@@ -370,12 +443,13 @@ object, `map/specifics.py`'s `Specifics`, which `cli.py` builds for each map.
 
 | Layer | Folder, module | What it does |
 | --- | --- | --- |
-| | `cli.py` | the `heroes-capture` command (Typer, Rich): `map render`, `map list`, `map view`, `prepare`, `capture`, `stitch`; picks a map's category and its own module (`specifics_for`) |
-| 1 everything | `common/` | the game's install and data (`game_data.py`, `casclib.py`, `stormlib.py`, `native.py`, `lighting.py`), its process, window and input (`game_window.py`, `game_control.py`, `monitors.py`), screen grabs and comparisons (`screen.py`, `matching.py`), the game's states and menus (`game_state.py`, `game_menus.py`, `menu-reference/`), images, geometry, DDS textures, JSON and frames on disk, the log and the live view (`runlog.py`, `ui.py`, `watch.py`), the worker pool |
+| | `cli.py` | the `heroes-capture` command (Typer, Rich): `map render`, `map calibrate`, `map list`, `map view`, `ui extract`, `ui search`, `prepare`, `capture`, `stitch`; picks a map's category and its own module (`specifics_for`) |
+| 1 everything | `common/` | the game's install and data (`game_data.py`, `casclib.py`, `stormlib.py`, `native.py`, `lighting.py`, `actors.py`: actor trees and models' moving parts), its process, window and input (`game_window.py`, `game_control.py`, `monitors.py`), screen grabs and comparisons (`screen.py`, `matching.py`), the game's states and menus (`game_state.py`, `game_menus.py`, `menu-reference/`), images, geometry, DDS textures, JSON and frames on disk, the log and the live view (`runlog.py`, `ui.py`, `watch.py`), the worker pool |
+| 2 the interface's textures | `ui/` | which textures the interface uses and what the game's data says about each (`catalogue.py`), their pictures (`extract.py`), the search by description (`search.py`) |
 | 2 inside any map | `map/` | the script assembler and the map's own part (`script.py`, `script.galaxy`), the status strip (`status.py`), the Galaxy reader (`galaxy.py`), launching and leaving a match and the command box (`match.py`), what every preparation reads of a map (`prepare.py`), `specifics.py` |
-| 3 capturing maps | `capture/` | preparing for capture (`prepare.py`), the grid, the capture run (`tiles.py`, `shots.py`), skies (`sky.py`, `sky_layers.py`, `sky_stitch.py`), matting and cut-outs (`matting.py`), the stitch, the pack (`pack.py`, `minimap_svg.py`), the reference viewer and `map view` (`viewer.py`, `viewer.html`, `serve.py`), the capture's script part, `diagnostics/` (the `--probe-*` switches and their helpers) |
-| 4 categories of maps | `categories/` | `battleground/`: towns, outposts, camps, structure holes, the elements capture, stitch and pack, its script part; `arena/`: capture areas and rounds |
-| 5 single maps | `maps/` | one module per map that needs something of its own (Hanamura Temple's opening timers, Volskaya Foundry's minimap placement), `validated-maps.json` |
+| 3 capturing maps | `capture/` | preparing for capture (`prepare.py`), the grid, the capture run (`tiles.py`, `shots.py`), a map's calibration (`calibration.py`), skies (`sky.py`, `sky_layers.py`, `sky_stitch.py`), matting and cut-outs (`matting.py`), the stitch (`stitch.py`, `edge_black.py`), the pack (`pack.py`, `minimap_svg.py`), the reference viewer and `map view` (`viewer.py`, `viewer.html`, `serve.py`), the capture's script part, `diagnostics/` (the `--probe-*` switches and their helpers) |
+| 4 categories of maps | `categories/` | `battleground/`: towns, outposts, camps, structure holes, the elements capture, stitch and pack, the calibration's measurements and its review (`calibrate.py`, `calibration_review.py` and its page), its script part; `arena/`: capture areas and rounds |
+| 5 single maps | `maps/` | one module per map that needs something of its own (Hanamura Temple's opening timers, Volskaya Foundry's minimap placement), `validated-maps.json` (the maps verified against `VERIFICATION.md`, and the checklist's version), `calibration/` (the maps' reviewed calibrations) |
 | | `tools/build_native.py`, `tools/build_exe.py` | fills `native/` with StormLib and CascLib (not in git); builds the one-file `heroes-capture.exe` (PyInstaller) |
 
 ## Tests
@@ -394,6 +468,8 @@ uv run pytest -n auto --dist loadgroup   # or pnpm test from the workspace root
   render.
 - `tests/test_game_menus.py`: the game's menus told from the map at screen sizes from 600 to
   2160 rows and 16:9 to 32:9 (`tests/sim/menus.py` draws them).
+- `tests/test_ui.py`: the interface's textures on a made-up storage (the catalogue, the pictures,
+  the search's ranking) and, marker `game_data`, the game's own interface catalogue.
 - `tests/test_game_data.py` (marker `game_data`): the game's own data from Blizzard's CDN (no
   install needed): the maps by name, the tilesets and light sets, the sky models, and three maps
   prepared from it, whose injected script may use only names Blizzard's own Galaxy code has. The

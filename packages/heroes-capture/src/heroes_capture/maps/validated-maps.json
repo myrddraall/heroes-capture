@@ -1,21 +1,26 @@
 {
-  "_comment": "The maps whose renders have been reviewed and, where needed, tuned for: map name as the game names it -> the heroes-capture version it was validated with, and what was checked. Hand-curated: add a map once its render has been looked over. heroes-capture map list shows the rest as not yet validated.",
+  "_comment": "The maps verified against the checklist (VERIFICATION.md): map name as the game names it -> the checklist version it passed, the heroes-capture version, and a note. `checklist` is the checklist's current version: bumped whenever the render changes (prepare, capture, stitch, pack, the script parts, the pack format), which drops every map to unverified until it passes again. A map at an older number is known (its handling is in place: arenas and brawls render) but not verified.",
+  "checklist": 3,
   "maps": {
     "Battlefield of Eternity": {
+      "checklist": 1,
       "version": "0.1.0",
-      "note": "sky layers (background art, haze), composites, the arches past the top edge"
+      "note": "the standard: elements render, team colour on structures and doodads, sky layers, loading screen and icons, custom minimap, the arches past the top edge, the east chains' edge black"
     },
     "Dragon Shire": {
+      "checklist": 0,
       "version": "0.1.0",
-      "note": "black-terrain void made transparent"
+      "note": "black-terrain void made transparent; elements render: towns, outposts and camps from its differently named hookup functions; copies in its void corners came out black (the calibration checks spots now); forts shot from the wrong side (the shots wait for the switch to be drawn now)"
     },
     "Punisher Arena": {
+      "checklist": 0,
       "version": "0.1.0",
-      "note": "three arenas, one image each without the others' edges; sky layers; quit ends the match"
+      "note": "three arenas, one image each without the others' edges; sky layers; quit ends the match; elements placed on each arena's own image; the viewer switches arenas; the north orb's edge black removed"
     },
     "Volskaya Foundry": {
+      "checklist": 0,
       "version": "0.4.0",
-      "note": "black-terrain void made transparent; the game's camera bounds tighter than the map file's (grid re-planned); custom minimap placement corrected (minimap-placement.json)"
+      "note": "black-terrain void made transparent; the game's camera bounds tighter than the map file's (grid re-planned); custom minimap placement corrected (minimap-placement.json); last rendered at pack format 4"
     }
   }
 }

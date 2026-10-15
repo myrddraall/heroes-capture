@@ -14,14 +14,16 @@ from heroes_capture.common.jsonio import read_json
 # its pixels (halved, and coded in blocks of 4), and would carry a neighbour's into a cut-out's edge.
 ATLAS_GAP = 4
 
-def collect_elements(out: Path, raw: Path, pack: Path, manifest: dict, layer_id: str, small_factor: int) -> dict | None:
+def collect_elements(out: Path, raw: Path, pack: Path, manifest: dict, layer_id: str, small_factor: int,
+                     layers: dict[str, str] | None = None) -> dict | None:
     """The elements render's cut-outs (element_stitch.write_elements: <id>-elements/ and its index) moved
     into raw/elements/, packed into the pack's atlases (PACK.md, Elements): `standing` (the standing
     structures and the camps), `rubble`, `masks` (where a standing neighbour is in front), `small`,
     every state at 1/`small_factor` (the map layer's overview scale) for the zoomed-out view, and
     `team` and `teamSmall`, the team-colour masks of the states shot from both sides. The pack's data.elements: every structure and
     camp the map has, each with its states' places in the atlases and rectangles in the map layer's
-    pixels. None when the render has no elements."""
+    pixels; on a map of several arenas (`layers`: each map image's layer id) an element's `layer`
+    names its arena's, where that isn't `layer_id`. None when the render has no elements."""
     index_path = out / f"{manifest['id']}-elements.json"
     if not index_path.exists():
         return None
@@ -50,7 +52,7 @@ def collect_elements(out: Path, raw: Path, pack: Path, manifest: dict, layer_id:
         atlas = "rubble" if cut["state"] == "rubble" else "standing"
         pictures[atlas].append((cut["key"], picture))
         pictures["small"].append((cut["key"], small(picture)))
-        state = {"rect": cut["rect"], "atlas": atlas, "key": cut["key"]}
+        state = {"rect": cut["rect"], "atlas": atlas, "key": cut["key"], "layer": (layers or {}).get(cut.get("image"), layer_id)}
         # Where a standing neighbour is in front of it: a mask (white: hidden) over the same rect.
         hidden = []
         for mask in cut.get("hiddenBy") or []:
@@ -85,6 +87,10 @@ def collect_elements(out: Path, raw: Path, pack: Path, manifest: dict, layer_id:
             atlas.webpsave(str(pack / "elements" / f"{name}.webp"), Q=QUALITY, alpha_q=100, keep="none")
         atlases[name] = {"file": f"elements/{name}.webp", "size": [atlas.width, atlas.height], "scale": 1 / small_factor if name in ("small", "teamSmall") else 1}
         places[name] = at
+    element_layer: dict[tuple[str, int], str] = {}
+    for which, by_state in states.items():
+        for state in (s for s in by_state.values() if s):
+            element_layer[which] = state.pop("layer")
     for state in (s for by_state in states.values() for s in by_state.values() if s):
         key = state.pop("key")
         state["at"] = list(places[state["atlas"]][key])
@@ -94,10 +100,17 @@ def collect_elements(out: Path, raw: Path, pack: Path, manifest: dict, layer_id:
         if state.pop("teamMask", False):
             state["teamMask"] = {"at": list(places["team"][key]), "small": list(places["teamSmall"][key])}
     found = manifest.get("elements") or {}
+    def on_layer(which: tuple[str, int]) -> dict:
+        """The element's `layer`, when its arena's isn't the elements' own."""
+        layer = element_layer.get(which, layer_id)
+        return {"layer": layer} if layer != layer_id else {}
+
     structures = [{"id": u["id"], "type": u["type"], "cell": [u["x"], u["y"]], "owner": u["owner"], "town": u["town"],
-                   "outpost": u.get("outpost"), "core": u["core"], "states": states.get(("structure", u["id"]), {})}
+                   "outpost": u.get("outpost"), "core": u["core"], **on_layer(("structure", u["id"])),
+                   "states": states.get(("structure", u["id"]), {})}
                   for u in found.get("structures", [])]
-    camps = [{"camp": c["camp"], "type": c["type"], "cell": [c["x"], c["y"]], "states": states.get(("camp", c["camp"]), {})}
+    camps = [{"camp": c["camp"], "type": c["type"], "cell": [c["x"], c["y"]], **on_layer(("camp", c["camp"])),
+              "states": states.get(("camp", c["camp"]), {})}
              for c in found.get("camps", [])]
     outposts = [{"outpost": o["outpost"], "town": o["town"], "lane": o["lane"], "owner": o["owner"], "cell": [o["x"], o["y"]]}
                 for o in found.get("outposts", [])]

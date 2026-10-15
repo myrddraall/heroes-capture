@@ -23,8 +23,9 @@ pytestmark = [pytest.mark.game_data, pytest.mark.xdist_group("cdn")]
 # Names the script uses that Blizzard's code doesn't spell out but the game has accepted.
 # EnvironmentShow and its c_environment* constants: in the game executable's table of script
 # functions and constants, next to TerrainShowRegion (which the game has accepted); so is
-# c_actorIntersectAgainstCenter, beside the c_actorIntersectAgainstRadiusContact Blizzard uses.
-ACCEPTED = {"BoolToInt", "RegionRect", "GameSetBackground", "CutsceneStop", "c_syncFrameTypeTextTag", "TerrainShowRegion",
+# c_actorIntersectAgainstCenter, beside the c_actorIntersectAgainstRadiusContact Blizzard uses;
+# and GameSetGlobalTimeScale (`heroes-capture game-names`, on the user's install, 2026-10-13).
+ACCEPTED = {"GameSetGlobalTimeScale", "BoolToInt", "RegionRect", "GameSetBackground", "CutsceneStop", "c_syncFrameTypeTextTag", "TerrainShowRegion",
             "EnvironmentShow", "c_environmentTerrain", "c_environmentDoodads", "c_environmentWater", "c_actorIntersectAgainstCenter",
             "libMapM_gv_mMIntroCutscene", "libMapM_gv_mMIntroCutsceneFinished", "libMapM_gv_uIJungleCampPanel"}
 KEYWORDS = {"if", "for", "while", "return", "else"}
@@ -114,6 +115,27 @@ def test_every_model_a_map_can_use_gets_its_particles_frozen(storage):
     assert set(game_data.model_ids_in(lootbox)) <= ids
 
 
+def test_gamelib_takes_a_fort_s_standalone_tower_down_with_it(storage):
+    """elements.STANDALONE_*: GameLib's Kill Standalone Towers, as the game has it."""
+    import re
+
+    from heroes_capture.categories.battleground import elements
+
+    gamelib = (storage.read(storage.find("*gamelib.galaxy")[0]) or b"").decode("utf-8", "replace")
+    body = gamelib[gamelib.index("bool libGame_gt_KillStandaloneTowers_Func"):]
+    body = body[:re.search(r"\r?\n}\r?\n", body).start()]
+    assert f'UnitGetType(EventUnit()) == "{elements.STANDALONE_FORT}"' in body
+    assert f'== "{elements.STANDALONE_TOWER}"' in body
+    assert float(re.search(r"UnitGroupSearch\(null, c_playerAny, UnitGetPosition\(EventUnit\(\)\), ([\d.]+)", body).group(1)) == elements.STANDALONE_REACH
+
+
+def test_the_game_s_team_colours_from_our_player_s_view(storage):
+    """GameUIData's OverrideColors, the shared Heroes data's over the core's: an ally's blue, an
+    enemy's red (its glow darker; its diffuse the core's), as the game's own SetTeamColor uses them."""
+    assert game_data.team_colours(storage) == {"ally": {"diffuse": [36, 92, 255], "emissive": [36, 92, 255]},
+                                               "hostile": {"diffuse": [255, 0, 0], "emissive": [178, 0, 0]}}
+
+
 def test_tilesets_light_sets_and_sky_models(storage):
     table = game_data.light_sets(storage)
     assert len(table["terrains"]) > 30 and len(table["lights"]) > 300
@@ -141,9 +163,12 @@ def test_prepared_maps(map_name, sky_mode, arenas, extra, tmp_path, blizzard_gal
         models = archive.read_text("Base.StormData\\GameData\\ModelData.xml")
     # Every model the map can use freezes its particles and ribbons while its animations are
     # paused: those of the shared data (a gate's) and of the map's own mods.
-    frozen = set(re.findall(r'<CModel id="([^"]+)"><Flags index="FreezeParticlesAndRibbonsOnAnimPause" value="1"/>'
-                            r'<PausedParticleSystemBehavior value="FreezeAll"/></CModel>', models))
+    # (In the map's own entry for a model it defines, which may have other attributes; appended otherwise.)
+    frozen = set(re.findall(r'<CModel\b[^>]*\bid="([^"]+)"[^>]*><Flags index="FreezeParticlesAndRibbonsOnAnimPause" value="1"/>'
+                            r'<PausedParticleSystemBehavior value="FreezeAll"/>', models))
     assert "TownGateDamaged" in frozen and len(frozen) > 1000
+    if map_name == "Dragon Shire":  # its forts' model, defined in its own data: frozen in that entry, once
+        assert "TownTownHallL2" in frozen and len(re.findall(r'<CModel id="TownTownHallL2"', models)) == 1
     if map_name == "Battlefield of Eternity":
         assert "TownMoonwellHeaven" in frozen
     capture = script[script.index("// heroes-capture's map script"): script.index("void InitMap () {")]

@@ -39,7 +39,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from heroes_capture.capture import sky_layers
+from heroes_capture.capture import calibration, sky_layers
 from heroes_capture.capture.diagnostics import probes
 from heroes_capture.capture.grid import plan_tiles
 from heroes_capture.capture.shots import SWITCH_CAP, recoloured_frame, shot_over_black, tile_command
@@ -581,7 +581,7 @@ def capture_tiles(session: Session, manifest: dict, start: int, settle_time: flo
         return [side for side, edge in at.items() if (tile["row"] if side in ("top", "bottom") else tile["col"]) == edge]
 
     flagged: list[tuple[dict, str]] = []  # (tile, side): content at that edge
-    saver = ThreadPoolExecutor(max_workers=2)
+    saver = ThreadPoolExecutor(max_workers=SAVERS)
     state = {"previous": None, "cleared": 0, "failures": 0, "done": 0, "advance": lambda n=1: None}
     started = time.time()
 
@@ -718,19 +718,39 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     ap.add_argument("--battlenet", default=os.environ.get("HRS_BATTLENET"), help="the Battle.net app (Battle.net.exe), used to start Heroes when it isn't running; found automatically if not given")
     ap.add_argument("--no-launch", action="store_true", help="the map is already running")
     ap.add_argument("--launch-only", action="store_true", help="launch the map and stop (to try the commands by hand)")
+    ap.add_argument("--calibrate", nargs="?", const="", default=None, metavar="STAGES",
+                    help="the map's calibration instead of the tiles (capture/calibration.py; prepared with --calibrate): "
+                         "every stage, or those named (comma-separated)")
     for name, (_, what) in probes.PROBES.items():
         ap.add_argument(f"--probe-{name}", action="store_true", help=f"diagnostic: {what}")
     ap.add_argument("--settle", type=float, default=0.1, help="least seconds from a move to the kept screenshot (default 0.1: shorter showed differences only where the scene animates anyway)")
     ap.add_argument("--start", type=int, default=0, help="first tile, to resume a run (default 0)")
+    ap.add_argument("--parts", default=",".join(PARTS), help=f"which parts to capture, comma-separated (default all: {', '.join(PARTS)}); "
+                    "elements also brings the structures down before tiles")
+    ap.add_argument("--reuse", action="store_true", help="keep the shots already in the run's folder (a job's run of some parts: "
+                    "it removed what it reshoots; the elements capture shoots only what its record lacks)")
     ap.add_argument("--monitor", help="put the game on this monitor before launching the map (its number as Windows lists them, its device name, or primary); the map then runs at its resolution")
     ap.add_argument("--monitor-region", type=int, help="diagnostic: capture this mss monitor number instead of the game window")
     return ap.parse_args(argv)
 
 
+# A capture's parts, in the order they run: the map's sky layers (while the map gets ready), what its
+# category does before the tiles (the battlegrounds' elements, which bring the structures down: the
+# tiles are the bare terrain), the tiles.
+PARTS = ("skies", "elements", "tiles")
+# The threads saving the tiles' screenshots: a run stopped mid-save may leave this many half-written
+# (cli.SAVERS is the same).
+SAVERS = 2
+
+
 def main(argv: list[str], specifics_of: Callable[[dict], Specifics]) -> None:
     """Capture a prepared map; specifics_of(manifest) gives what its category and the map itself
-    add (cli.specifics_of)."""
+    add (cli.specifics_of). --parts: only some of it (the tiles need the structures down: elements
+    runs with them, shooting only what its record lacks)."""
     args = parse_args(argv)
+    parts = {p for p in args.parts.split(",") if p}
+    if parts - set(PARTS):
+        sys.exit(f"no capture part {', '.join(sorted(parts - set(PARTS)))} (the parts: {', '.join(PARTS)})")
     manifest = read_json(args.manifest)
     specifics = specifics_of(manifest)
     if not manifest.get("status"):
@@ -738,7 +758,7 @@ def main(argv: list[str], specifics_of: Callable[[dict], Specifics]) -> None:
     tiles = manifest["tiles"]
     out = args.manifest.parent / manifest["id"] / "tiles"
     out.mkdir(parents=True, exist_ok=True)
-    if not args.start:
+    if not args.start and not args.reuse:
         # An earlier run's shots would mix into this one (its sky shots and measurement too: the
         # stitch builds sky layers from whatever it finds).
         sky_dir = out.parent / "sky"
@@ -750,7 +770,7 @@ def main(argv: list[str], specifics_of: Callable[[dict], Specifics]) -> None:
     # Where the camera really was for each tile (the status strip's echo), for stitch.py; kept
     # across a resumed run.
     positions_path = args.manifest.parent / manifest["id"] / "positions.json"
-    positions: dict = read_json(positions_path) if args.start and positions_path.exists() else {}
+    positions: dict = read_json(positions_path) if (args.start or args.reuse) and positions_path.exists() else {}
 
     if not args.no_launch:
         game = args.game or find_install()
@@ -764,6 +784,10 @@ def main(argv: list[str], specifics_of: Callable[[dict], Specifics]) -> None:
     probe = next((name for name in probes.PROBES if getattr(args, f"probe_{name.replace('-', '_')}")), None)
     if probe:
         log(f"Probe {probe} on {manifest['map']}: {probes.PROBES[probe][1]}.")
+    elif args.calibrate is not None:
+        only = [n for n in args.calibrate.split(",") if n]
+        log(f"Calibrating {manifest['map']}: {', '.join(calibration.chosen_stages(only, specifics.calibration_stages, specifics.calibration_probes))}. "
+            "Leave the keyboard and mouse alone.")
     else:
         shots = "two shots each (over the light grey, over black)" if (manifest.get("sky") or {}).get("mode") == "matte" else "one shot each (over black; the void is black terrain)"
         resumed = f", carrying on at tile {args.start + 1}" if args.start else ""
@@ -812,22 +836,38 @@ def main(argv: list[str], specifics_of: Callable[[dict], Specifics]) -> None:
                 sky_layers.capture(session, manifest, out.parent, measured, area=area)
 
         # A resumed run (after a recovery) keeps the sky work this run already did.
-        sky_done = args.start and (out.parent / "sky-layers.json").exists() and (out.parent / "sky" / "positions.json").exists()
-        start_up(session, manifest, args.manifest, out, before_ready=None if probe or sky_done else lambda: sky_work(wait_if_hidden=True))
+        sky_done = "skies" not in parts or (args.start and (out.parent / "sky-layers.json").exists() and (out.parent / "sky" / "positions.json").exists())
+        start_up(session, manifest, args.manifest, out, before_ready=None if probe or args.calibrate is not None or sky_done else lambda: sky_work(wait_if_hidden=True))
         if sky_waits:
             sky_work()
         if probe:
             probes.PROBES[probe][0](session, manifest, out)
             return
-        for hook in specifics.before_tiles:
-            hook(session, manifest, out.parent)
-        capture_tiles(session, manifest, args.start, args.settle, out, positions, positions_path, args.manifest)
+        if args.calibrate is not None:
+            found = calibration.run(session, manifest, specifics.calibrate, specifics.calibration_stages,
+                                    [n for n in args.calibrate.split(",") if n], out.parent, specifics.calibration_probes)
+            quit_match(wait=False)
+            log_timings("calibration")
+            done(f"the calibration is in {found}")
+            return
+        if parts & {"elements", "tiles"}:
+            for hook in specifics.before_tiles:
+                hook(session, manifest, out.parent)
+        if "tiles" in parts:
+            start = args.start
+            if args.reuse and not start:  # a job's run carried on: from its first tile still to shoot (the grid as planned now)
+                missing = next((n for n, t in enumerate(manifest["tiles"]) if not frame_exists(tile_stem(out, t["index"]))), len(manifest["tiles"]))
+                start = max(0, missing - SAVERS) if missing < len(manifest["tiles"]) else missing
+            capture_tiles(session, manifest, start, args.settle, out, positions, positions_path, args.manifest)
 
     with stage("leaving"):
         quit_match(wait=False)  # the stitch runs while the game leaves; the next launch waits for the menu
     log(f"camera positions recorded for {len(positions)} screenshots")
     log_timings("capture")
-    done(f"{len(manifest['tiles'])} screenshots in {out}" + (f" ({len(manifest['tiles']) - args.start} of them in this launch)" if args.start else ""))
+    if "tiles" in parts:
+        done(f"{len(manifest['tiles'])} screenshots in {out}" + (f" ({len(manifest['tiles']) - args.start} of them in this launch)" if args.start else ""))
+    else:
+        done(f"captured: {', '.join(p for p in PARTS if p in parts)}")
 
 
 def recover(e: Recoverable, argv: list[str]) -> int:

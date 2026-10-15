@@ -92,6 +92,21 @@ def find_install() -> Path | None:
     return None
 
 
+def game_program(install: Path) -> Path | None:
+    """The game's own program in an install: the newest Versions/Base*/HeroesOfTheStorm_x64.exe."""
+    found = sorted(install.glob("Versions/Base*/HeroesOfTheStorm_x64.exe"), key=lambda p: p.stat().st_mtime)
+    return found[-1] if found else None
+
+
+def script_names(program: bytes, pattern: str) -> list[str]:
+    """The names in the game's program that match a pattern (case ignored): its table of the
+    functions and constants a map script can use lists them as plain text, beside much else
+    (Blizzard's own scripts use only some of them; map/script.py)."""
+    wanted = re.compile(pattern, re.I)
+    names = {m.group(0).decode() for m in re.finditer(rb"[A-Za-z_][A-Za-z0-9_]{3,63}", program)}
+    return sorted(n for n in names if wanted.search(n))
+
+
 def open_storage(install: Path | None) -> Storage:
     """The install's storage, or Blizzard's CDN (cached) when there is no install."""
     if install:
@@ -319,3 +334,20 @@ def map_entries(storage: Storage) -> dict[str, str]:
         if image:
             entries[m.group(1)] = image.group(1)
     return entries
+
+
+def team_colours(storage) -> dict:
+    """The colours the game draws teams in from our player's view (GameUIData's OverrideColors, the
+    shared Heroes data's over the core's, each colour as it last set it): {"ally" and "hostile":
+    {"diffuse", "emissive": [r, g, b], 0..255}}; a team none set is left out."""
+    import re
+
+    files = sorted(storage.find("*gameuidata.xml"), key=lambda n: "core.stormmod" not in n.lower())
+    found: dict[str, dict] = {}
+    for name in files:
+        text = (storage.read(name) or b"").decode("utf-8", "replace")
+        for team, body in re.findall(r'<OverrideColors index="(\w+)">(.*?)</OverrideColors>', text, re.S):
+            for which, value in re.findall(r'<Value index="(\w+)" value="([\d.,]+)"', body):
+                rgb = [round(float(v) * 255) for v in value.split(",")[:3]]
+                found.setdefault(team.lower(), {})[which.lower()] = rgb
+    return {team: found[team] for team in ("ally", "hostile") if team in found}

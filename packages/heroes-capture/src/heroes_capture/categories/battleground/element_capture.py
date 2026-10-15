@@ -5,7 +5,10 @@ element in turn, straight above it in the middle of the screen:
 
 1. standing: every structure faded out by its opacity ("el fadeall 0"), not hidden: it keeps its
    look as the map paused it once ready, its effects built up while the map ran and held still
-   (the prepared map's models freeze their particles and ribbons with their animations); hidden
+   (the prepared map's models freeze their particles and ribbons with their animations; and each
+   structure's animations are started over once the camera is over it and paused at its kind's
+   standing time, "el restart" and "el hold": the same moment every run, its particles lit, as
+   they only run near the camera); hidden
    and shown again, a structure restarts its animations (a level 3 tower's into its birth) and
    gives off no particles until it plays. Then each faded in, shot alone over white and over
    black, from our player's side (Order: the observer's colours) and from Chaos's (switched in
@@ -45,8 +48,18 @@ from pathlib import Path
 
 import numpy as np
 
-from heroes_capture.capture.shots import SWITCH_CAP, recoloured_frame, shot_over_black, tile_command
-from heroes_capture.categories.battleground.elements import rubble_radius, rubble_waves, source_tile, view_groups, view_middle
+from heroes_capture.capture.sky import LIGHT_LEVEL, LIGHT_SKY
+from heroes_capture.capture.shots import SWITCH_CAP, recoloured_frame, shot_over_black, still_frame, tile_command
+from heroes_capture.categories.battleground.elements import (
+    goes_with_a_fort,
+    fall_wait,
+    rubble_radius,
+    rubble_waves,
+    source_tile,
+    stand_wait,
+    view_groups,
+    view_middle,
+)
 from heroes_capture.common import ui
 from heroes_capture.common.frames import save_frame
 from heroes_capture.common.geometry import circle_box, screen_point
@@ -55,35 +68,7 @@ from heroes_capture.common.game_control import Recoverable, settle, step
 from heroes_capture.common.jsonio import read_json, write_json
 from heroes_capture.common.runlog import log, stage, warn
 
-# Real seconds from a structure's fall to its rubble's shot, by kind and team: chosen from the film
-# probe on Battlefield of Eternity (each kind on each team filmed falling, a frame every quarter
-# second: the moment its rubble looked best). The first entry that matches: a type prefix, a
-# suffix ("" any), a team. Hell gates leave nothing once their explosion is over. A structure
-# none matches: FALL_WAIT_OTHER; a core: CORE_WAIT (chosen from its own film: by 6 its debris has
-# settled smaller).
-FALL_WAITS = (
-    ("TownCannonTowerL3Standalone", "", "order", 2.10), ("TownCannonTowerL3", "", "order", 2.02), ("TownCannonTowerL2", "", "order", 2.12),
-    ("TownCannonTowerL3Standalone", "", "chaos", 3.00), ("TownCannonTowerL3", "", "chaos", 2.25), ("TownCannonTowerL2", "", "chaos", 2.21),
-    ("TownGateL3", "", "order", 1.33), ("TownGate", "", "order", 1.23), ("TownGate", "", "chaos", 1.0),
-    ("TownWallRadial", "L3", "order", 2.48), ("TownWallRadial", "L2", "order", 2.46),
-    ("TownWallRadial", "L3", "chaos", 2.24), ("TownWallRadial", "L2", "chaos", 1.33),
-    ("TownMoonwellL3", "", "order", 3.30), ("TownMoonwellL2", "", "order", 2.64),
-    ("TownMoonwellL3", "", "chaos", 1.92), ("TownMoonwellL2", "", "chaos", 1.84),
-    ("TownTownHallL3", "", "order", 3.02), ("TownTownHallL2", "", "order", 2.73),
-    ("TownTownHallL3", "", "chaos", 2.74), ("TownTownHallL2", "", "chaos", 2.62),
-)
-FALL_WAIT_OTHER = 2.0
-CORE_WAIT = 4.8
 KILL_WAIT = 5.0  # the clearing's: everything left standing brought down, its rubble not shot
-
-
-def fall_wait(structure: dict) -> float:
-    """How long a fallen structure is left before its rubble is shot (FALL_WAITS)."""
-    if structure["core"]:
-        return CORE_WAIT
-    kind = structure["type"]
-    return next((wait for prefix, suffix, owner, wait in FALL_WAITS
-                 if kind.startswith(prefix) and kind.endswith(suffix) and structure.get("owner") == owner), FALL_WAIT_OTHER)
 
 
 # Real seconds for a camp's defenders to spawn (a quarter of a second apart) and finish being born.
@@ -100,6 +85,13 @@ NEIGHBOUR_REACH = 10.0
 FADES_A_COMMAND = 4
 # Seconds from a structure shown (or a camp frozen) to its shot: a frame or two to be drawn.
 SHOW_SETTLE = 0.1
+# Seconds a side switch is watched for on a structure the calibration found nothing changes on.
+UNCHANGING_CAP = 0.5
+# Remains repainted (SetTeamColor, no blend time) change at once: watched this long at most.
+PAINT_CAP = 0.5
+# Remains whose circle has less than this share of pixels more than EMPTY_DIFF off the light sky
+# are nothing (a copy that fell to nothing; the least real rubble covers about 0.005).
+EMPTY_SHARE, EMPTY_DIFF = 0.001, 30
 # A fall gives off its particles (smoke, dust, sparks, a core's lava) only near the camera (the
 # in-view probe on Battlefield of Eternity: with the camera far away, or far back over the whole
 # map, a copy's rubble had only its chunks; at the edge of the capture camera's view a wall's had
@@ -136,6 +128,9 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
     records: dict = read_json(record_path, {})
     tiles = manifest["tiles"]
     failures = {"count": 0}
+
+    def wait_of(u: dict) -> float:
+        return fall_wait(u, manifest.get("fallWaits"))
     # The frames saved while the next are shot, as the tiles' are; each on disk before a record
     # lists it (a resumed run skips what is recorded).
     saver = ThreadPoolExecutor(max_workers=2)
@@ -202,19 +197,17 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
     # again after a lost focus starts by switching back.
     side = {"team": 1, "unchanged": 0}
 
-    def switch(team: int, element: dict, camera: dict, reference: np.ndarray | None) -> np.ndarray | None:
+    def switch(team: int, element: dict, camera: dict, reference: np.ndarray | None) -> tuple[np.ndarray | None, bool]:
         """Our player put on the team ("side"), then the frame once the element's circle has changed
-        from `reference` (shots.recoloured_frame)."""
+        from `reference` (shots.recoloured_frame), and whether it did. Not waited on for long when
+        the calibration found nothing on it that changes (UNCHANGING_CAP)."""
         if not send(f"side {team}"):
-            return None
+            return None, False
         side["team"] = team
         shape = reference.shape if reference is not None else (0, 0)
         box = circle_box(screen_point(element, camera, manifest["screen"], manifest["pxPerCell"]),
                          element["radius"] * manifest["pxPerCell"], shape)
-        frame, changed = recoloured_frame(session, reference, [box])
-        if reference is not None and not changed and team == 2:
-            side["unchanged"] += 1
-        return frame
+        return recoloured_frame(session, reference, [box], UNCHANGING_CAP if element.get("changesSide") is False else SWITCH_CAP)
 
     def back_to_order() -> None:
         """Our player back on Order, if a step was left on Chaos (a lost focus mid-structure)."""
@@ -222,22 +215,42 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
             side["team"] = 1
             settle(SWITCH_CAP)
 
-    def pair_both(stem: str, element: dict) -> dict | None:
+    def pair_both(stem: str, element: dict, attempt: int = 1) -> dict | None:
         """The view over white and over black from both sides: Order's saved as <stem> and
         <stem>-black (as pair), Chaos's as <stem>-chaos and <stem>-chaos-black. In the order that
         needs no extra sky swap: white from Order, switch, white from Chaos, black from Chaos,
         switch back, black from Order. The camera's position; None without Order's frames (Chaos's
-        missing: left out of the record, and noted)."""
-        settle(SHOW_SETTLE)
-        white = session.grab(dark_ok=True)
+        missing: left out of the record, and noted).
+
+        Which side the game really draws is read from the screen, not assumed: a structure with
+        team colour changes on one switch and back on the other. Changing on neither: it has none
+        (a gate on some maps), unless the calibration saw it change ("changesSide"): then, as when
+        it changes only on the switch back, the first shots were Chaos's (the game hadn't taken
+        the last switch back when they were shot: Dragon Shire's forts came out in the other
+        side's colours), so they are all taken again."""
         camera = session.camera()
         watched = camera or {"x": element["x"], "y": element["y"]}  # where the circle is watched for the switch
-        chaos_white = switch(2, element, watched, white)
+        # Faded in just now (and just after the last structure's switch back to Order): shot once
+        # it has finished redrawing, its colours Order's side's.
+        first = session.grab(dark_ok=True)
+        shape = first.shape if first is not None else (0, 0)
+        circle = circle_box(screen_point(element, watched, manifest["screen"], manifest["pxPerCell"]),
+                            element["radius"] * manifest["pxPerCell"], shape)
+        white = still_frame(session, [circle], first)
+        chaos_white, to_chaos = switch(2, element, watched, white)
         chaos_black = shot_over_black(session, chaos_white)
-        black = switch(1, element, watched, chaos_black)
+        black, to_order = switch(1, element, watched, chaos_black)
         if white is None or black is None:
             warn(f"  {stem}: no frame")
             return None
+        if not to_chaos and (to_order or element.get("changesSide")):
+            if attempt < 3:
+                log(f"  {stem}: " + ("shot from Chaos's side (the switch back hadn't been drawn)" if to_order
+                                     else "the switch to Chaos wasn't seen, though the calibration saw it change") + "; shot again")
+                return pair_both(stem, element, attempt + 1)
+            warn(f"  {stem}: the side switch isn't drawn as sent; its shots may be from the wrong side")
+        if not to_chaos:
+            side["unchanged"] += 1
         save(stem, white)
         save(f"{stem}-black", black)
         if chaos_white is None or chaos_black is None:
@@ -285,9 +298,9 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
                 look_over(*view_middle(group, at=lambda u: (u["copy"]["x"], u["copy"]["y"])))
             started_at = time.time()
             ends = [started_at, camps_born]
-            longest = max((fall_wait(u) for u in group), default=0.0)
-            for wait in sorted({fall_wait(u) for u in group}, reverse=True):
-                falling = [u for u in group if fall_wait(u) == wait]
+            longest = max((wait_of(u) for u in group), default=0.0)
+            for wait in sorted({wait_of(u) for u in group}, reverse=True):
+                falling = [u for u in group if wait_of(u) == wait]
                 settle(max(0.0, started_at + longest - wait - time.time()))
                 os.environ[COPY_TRYING] = ",".join(sorted({u["type"] for u in falling}))
                 send(f"el copykill {plan[falling[0]['id']]} {plan[falling[-1]['id']]}")
@@ -325,6 +338,11 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         back_to_order()
         tile = go(u, leftovers() + [(u, 1)])
         shown.update(structure=u, neighbour=None)
+        # Its animations started over and paused at its kind's standing time (picked in the
+        # calibration's review): every run catches it at the same moment, its effects lit.
+        send(f"el restart {u['x']:g} {u['y']:g} {(manifest.get('standModels') or {}).get(u['type'], '')}".rstrip())
+        settle(stand_wait(u, manifest.get("standWaits")))
+        send(f"el hold {u['x']:g} {u['y']:g}")
         key = element_key("structure", u, "standing")
         if (shots := pair_both(key, u)) is not None:
             camera = shots["camera"]
@@ -361,15 +379,67 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         send("el keep 0")
         send("clean")  # the camps' defenders removed
 
+    def rubble_shots(u: dict, at: dict) -> dict | None:
+        """A structure's remains (on the cell `at`) over white and black as drawn (Order's side), and
+        as Chaos's side would draw them: a fallen structure keeps the team colour it died with
+        whatever side our player is put on, so its remains are repainted in the other side's colour
+        ("el paint": the game's SetTeamColor, with its hostile or ally colours, manifest
+        "teamColours") and shot again. Both shots as drawn come first (the game's ClearTeamColor
+        doesn't put the colour back: Dragon Shire's keeps stayed repainted), then the light sky back
+        (held still), the repaint, and both repainted. The same remains each time, nothing switched.
+        Remains that don't change when repainted have no team colour: no Chaos shots (Dragon
+        Shire's moonwells': a side switch seemed to change theirs, but what changed was their debris
+        moving). Remains with nothing in their circle are noted ("empty": a copy that fell to nothing)."""
+        stem = element_key("structure", u, "rubble")
+        radius = rubble_radius(u)
+        other = (manifest.get("teamColours") or {}).get("hostile" if u.get("owner") == "order" else "ally")
+        camera = session.camera()
+        first = session.grab(dark_ok=True)
+        shape = first.shape if first is not None else (0, 0)
+        circle = circle_box(screen_point(at, camera or at, manifest["screen"], manifest["pxPerCell"]), radius * manifest["pxPerCell"], shape)
+        white = still_frame(session, [circle], first)
+        black = shot_over_black(session, white)
+        if white is None or black is None:
+            warn(f"  {stem}: no frame")
+            return None
+        save(stem, white)
+        save(f"{stem}-black", black)
+        v0, v1, u0, u1 = circle
+        inside = white[v0:v1, u0:u1, :3]
+        if inside.size and float((np.abs(inside.astype(np.int16) - LIGHT_LEVEL).max(axis=2) > EMPTY_DIFF).mean()) < EMPTY_SHARE:
+            return {"camera": camera, "chaos": None, "empty": True}
+        if not other or not send(f"sky {LIGHT_SKY} 0"):
+            return {"camera": camera, "chaos": None}
+        light = still_frame(session, [circle])
+        paint = f"el paint {at['x']:g} {at['y']:g} {radius:g}"
+        if light is None or not send(f"{paint} SetTeamColor~{','.join(map(str, other['diffuse']))}~{','.join(map(str, other.get('emissive', other['diffuse'])))}"):
+            return {"camera": camera, "chaos": None}
+        chaos_white, changed = recoloured_frame(session, light, [circle], PAINT_CAP)
+        chaos_black = shot_over_black(session, chaos_white) if changed else None
+        send(f"{paint} ClearTeamColor")
+        if chaos_black is None:
+            return {"camera": camera, "chaos": None}
+        save(f"{stem}-chaos", chaos_white)
+        save(f"{stem}-chaos-black", chaos_black)
+        return {"camera": camera, "chaos": f"{stem}-chaos"}
+
+    fell_to_nothing: list[dict] = []
+
     def copy_rubble(u: dict) -> None:
-        """A copy's remains shot on its spot, recorded as if from its structure's cell."""
+        """A copy's remains shot on its spot, recorded as if from its structure's cell; a copy that
+        fell to nothing (Dragon Shire's near the map's edges, now and then) leaves its structure to
+        the waves, brought down itself."""
         spot = u["copy"]
         go({**u, "x": spot["x"], "y": spot["y"]})
         tile = source_tile(u, tiles)
-        if (camera := pair(element_key("structure", u, "rubble"))) is not None:
+        if (shots := rubble_shots(u, spot)) is not None and shots.get("empty"):
+            warn(f"  {u['type']} {u['id']}: its copy at ({spot['x']:g}, {spot['y']:g}) fell to nothing; brought down itself")
+            fell_to_nothing.append(u)
+        elif shots is not None:
+            camera = shots["camera"]
             if camera:
                 camera = {"x": camera["x"] + u["x"] - spot["x"], "y": camera["y"] + u["y"] - spot["y"]}
-            record("structure", {**u, "radius": rubble_radius(u)}, "rubble", tile, camera)
+            record("structure", {**u, "radius": rubble_radius(u)}, "rubble", tile, camera, chaos=shots["chaos"])
 
     def wave(structures_now: list[dict], n: int, waves: int) -> None:
         """A wave brought down (faded in first: faded out after its standing shot), a group at a
@@ -380,21 +450,21 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
             look_over(*view_middle(group))
             fade_all([(u, 1) for u in group])
             # The slowest brought down first, so each has fallen for just its own fall_wait at the pause.
-            started_at, longest, ends = time.time(), max(fall_wait(u) for u in group), []
-            for u in sorted(group, key=lambda u: -fall_wait(u)):
-                settle(max(0.0, started_at + longest - fall_wait(u) - time.time()))
+            started_at, longest, ends = time.time(), max(wait_of(u) for u in group), []
+            for u in sorted(group, key=lambda u: -wait_of(u)):
+                settle(max(0.0, started_at + longest - wait_of(u) - time.time()))
                 if u["core"]:
                     send(f"el core {1 if u['owner'] == 'order' else 2} -1", timeout=5.0)
                     replaced.add(1 if u["owner"] == "order" else 2)
                 else:
                     send(f"el kill {u['x']:g} {u['y']:g} -1")
-                ends.append(time.time() + fall_wait(u))
+                ends.append(time.time() + wait_of(u))
             settle(max(0.0, max(ends) - time.time()))
             send("el freeze")
         for u in structures_now:
             tile = go(u)
-            if (camera := pair(element_key("structure", u, "rubble"))) is not None:
-                record("structure", {**u, "radius": rubble_radius(u)}, "rubble", tile, camera)
+            if (shots := rubble_shots(u, u)) is not None:
+                record("structure", {**u, "radius": rubble_radius(u)}, "rubble", tile, shots["camera"], chaos=shots["chaos"])
         send("el clear")
 
     def plan_copies() -> dict:
@@ -406,11 +476,11 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
             crashed += lost
             os.environ[COPY_CRASHED] = ",".join(crashed)
             warn(f"  copies of {', '.join(lost)} crashed the game: from now on they fall in waves")
-        copied = [u for u in structures if u.get("copy") and u["type"] not in crashed
+        copied = [u for u in structures if u.get("copy") and u["type"] not in crashed and not goes_with_a_fort(u, structures)
                   and element_key("structure", u, "rubble") not in records][:COPY_LIMIT]
         # In groups to bring down under one camera each; numbered by group, then by fall_wait, the
         # slowest first: each set's numbers in a row, for "el copykill".
-        copy_groups[:] = [sorted(g, key=lambda u: -fall_wait(u)) for g in grouped(copied, at=lambda u: (u["copy"]["x"], u["copy"]["y"]))]
+        copy_groups[:] = [sorted(g, key=lambda u: -wait_of(u)) for g in grouped(copied, at=lambda u: (u["copy"]["x"], u["copy"]["y"]))]
         return {u["id"]: n for n, u in enumerate(u for g in copy_groups for u in g)}
 
     replaced: set[int] = set()
@@ -460,13 +530,14 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
             step(prepare, "preparing the rubble")
         copied = [u for u in pending_rubble if u["id"] in plan]
         rest = [u for u in pending_rubble if u["id"] not in plan]
-        waves = rubble_waves(rest, radius=rubble_radius)
         with ui.bar(len(pending_rubble), "rubble") as advance:
             for u in copied:
                 step(lambda: copy_rubble(u), element_key("structure", u, "rubble"))
-                advance()
+                if u not in fell_to_nothing:
+                    advance()
             if copied:
                 send("el clear")  # the copies' remains
+            waves = rubble_waves(rest + fell_to_nothing, radius=rubble_radius)
             for n, structures_now in enumerate(waves, start=1):
                 log(f"  wave {n} of {len(waves)}: {len(structures_now)} structure(s)")
                 step(lambda: wave(structures_now, n, len(waves)), f"rubble wave {n}")

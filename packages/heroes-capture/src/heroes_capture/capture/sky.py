@@ -10,6 +10,7 @@ for the second shot, command "sky <colour>".
 
 import html
 import math
+import re
 
 from heroes_capture.common.dds import clear_dds, solid_dds
 
@@ -175,26 +176,53 @@ def append_to_catalog(existing: str | None, entries: list[str]) -> str:
     return f'<?xml version="1.0" encoding="us-ascii"?>{eol}<Catalog>{eol}{eol.join(entries)}{eol}</Catalog>{eol}'
 
 
+# The two settings that make a model's particles and ribbons hold still while its animations are
+# paused (the capture pauses every animation on the map): without them a model's particles and
+# ribbons run on whatever its animations do, which is what kept the structures' and doodads'
+# effects moving. (Blizzard's data sets them on a few.)
+FREEZE = '<Flags index="FreezeParticlesAndRibbonsOnAnimPause" value="1"/><PausedParticleSystemBehavior value="FreezeAll"/>'
+
+
 def frozen_particle_models(model_ids: list[str]) -> list[str]:
-    """Model entries that make each model's particles and ribbons hold still while its animations are
-    paused (the capture pauses every animation on the map): without them a model's particles and
-    ribbons run on whatever its animations do, which is what kept the structures' and doodads'
-    effects moving. The two settings models have for it (Blizzard's data sets them on a few)."""
-    return [f'    <CModel id="{html.escape(i, quote=True)}"><Flags index="FreezeParticlesAndRibbonsOnAnimPause" value="1"/>'
-            f'<PausedParticleSystemBehavior value="FreezeAll"/></CModel>' for i in model_ids]
+    """Model entries giving each model the FREEZE settings, to append to the map's catalog."""
+    return [f'    <CModel id="{html.escape(i, quote=True)}">{FREEZE}</CModel>' for i in model_ids]
+
+
+def freeze_in_place(catalog: str | None, model_ids: list[str]) -> tuple[str | None, list[str]]:
+    """The map's own model catalog with the FREEZE settings put into each entry it defines for the
+    models (the first, when several), and the models it doesn't define. A second entry with the
+    same id, appended, didn't take: Dragon Shire defines its structures' models in its own data
+    (84 models; Battlefield of Eternity none), and its forts' fires burned on while paused."""
+    if not catalog:
+        return catalog, list(model_ids)
+    wanted, done = set(model_ids), set()
+
+    def freeze(m: re.Match) -> str:
+        model = m.group(2)
+        if model not in wanted or model in done:
+            return m.group(0)
+        done.add(model)
+        if m.group(4):  # <CModel id="..." .../>
+            return f"{m.group(0)[:-2].rstrip()}>{FREEZE}</CModel>"
+        return f"{m.group(0)}{FREEZE}"
+
+    frozen = re.sub(r'<CModel\b([^>]*?)\bid="([^"]+)"([^>]*?)(/?)>', freeze, catalog)
+    return frozen, [i for i in model_ids if i not in done]
 
 
 def sky_files(tileset: str, start: str, read, extra: dict | None = None) -> list[tuple[str, bytes]]:
     """The files to add to the map for the solid-colour skies: model entries, the tileset override
     (sky drawn under the map, starting colour, no parallax layer, no fog) and the textures.
     `read(name)` returns the map's current copy of a file or None; `extra` adds model entries and
-    files (the keyed parallax copies)."""
+    files (the keyed parallax copies) and the models to freeze (freeze: frozen in the map's own
+    entries where it has them, appended otherwise)."""
     extra = extra or {"models": [], "files": []}
     files = list(extra["files"])
     models = [_model_entry(model_id(colour), sky["mesh"]) for colour, sky in SKIES.items()]
     models += extra["models"]
-    files.append(("Base.StormData\\GameData\\ModelData.xml",
-                  append_to_catalog(read("Base.StormData\\GameData\\ModelData.xml"), models).encode("utf-8")))
+    catalog, appended = freeze_in_place(read("Base.StormData\\GameData\\ModelData.xml"), extra.get("freeze", []))
+    models += frozen_particle_models(appended)
+    files.append(("Base.StormData\\GameData\\ModelData.xml", append_to_catalog(catalog, models).encode("utf-8")))
     # (FixedSkyboxModel here never took effect; the script sets the sky with GameSetBackground.
     # HideLowestLevel: the lowest terrain level isn't drawn, so the sky shows there; on a map
     # without a sky of its own the void is that level, drawn black, and would stay opaque.)

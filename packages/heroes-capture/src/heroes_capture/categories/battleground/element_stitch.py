@@ -28,21 +28,42 @@ MASK_CHANGE, MASK_SOLID, MASK_LEAST = 24, 160, 20
 LINGERING_REMAINS = ("TownTownHall", "TownMoonwell")
 
 
-def write_elements(manifest: dict, base: Path, out: Path, layout: Layout, scale: float, ax: float, ay: float, image_id: str) -> int:
+# A team-colour mask's pixels this strong (either channel) count; this many of them in the other
+# team's channel than its owner's: the structure was shot from the wrong side.
+MASK_STRONG, MASK_WRONG_LEAST = 20, 200
+
+
+def mask_team(mask: np.ndarray) -> str | None:
+    """Whose colour a team-colour mask (R: Order's team's amount, G: Chaos's; team_colour.py) says
+    changed: "order" or "chaos" when one team's strong pixels outnumber the other's and there are
+    MASK_WRONG_LEAST of them at least; None when too few changed to tell."""
+    order = int((mask[..., 0] > MASK_STRONG).sum())
+    chaos = int((mask[..., 1] > MASK_STRONG).sum())
+    if max(order, chaos) < MASK_WRONG_LEAST:
+        return None
+    return "order" if order > chaos else "chaos"
+
+
+def write_elements(manifest: dict, base: Path, out: Path, layout: Layout, scale: float, ax: float, ay: float, image_id: str,
+                   area_no: int | None = None) -> int:
     """The elements the capture shot alone over the sky (element_capture.py: elements/), each cut out
     (matting.cut_out: its colour and exact transparency, cropped to its circle and then to what
     shows) and placed in the map image's pixels: where its source tile sits on the canvas, moved by
     the difference between the camera's position for its shot and for the tile's, less the
-    image's crop. Writes <id>-elements/<key>.png and <id>-elements.json (each one's element, state
-    and rectangle in the map image; no file where nothing is left of it in that state), and for a
-    state shot from both sides its team-colour mask, <key>-team.png (team_colour.py). Returns how
-    many states were placed."""
+    image's crop. Writes <id>-elements/<key>.png and <id>-elements.json (each one's element, state,
+    image and rectangle in the map image; no file where nothing is left of it in that state), and
+    for a state shot from both sides its team-colour mask, <key>-team.png (team_colour.py). On a
+    map of several arenas, one call per arena's image (`area_no`: the elements shot from that
+    area's tiles; the index gathers them all). Returns how many states were placed."""
 
     folder = base / "elements"
     record_path = folder / "elements.json"
     if not record_path.exists():
         return 0
     records = read_json(record_path)
+    if area_no is not None:
+        records = {key: r for key, r in records.items()
+                   if layout.by_index.get(r.get("tile"), {}).get("area", 0) == area_no}
     positions_path = base / "positions.json"
     positions = read_json(positions_path, {})
     geo = read_json(out / f"{image_id}.geo.json")
@@ -106,7 +127,7 @@ def write_elements(manifest: dict, base: Path, out: Path, layout: Layout, scale:
         rgba = cut_out(white[part], black[part], local(centre), radius, empty, others, level=level)
         alpha = rgba[..., 3]
         found = nonzero_box(alpha)
-        entry = {"key": key, "kind": record["kind"], "element": record["element"], "state": record["state"]}
+        entry = {"key": key, "kind": record["kind"], "element": record["element"], "state": record["state"], "image": image_id}
         if found is None:
             # Nothing left of it (a moonwell leaves no rubble): the state is "nothing".
             notes.append(("log", f"  element {key}: nothing there"))
@@ -130,6 +151,11 @@ def write_elements(manifest: dict, base: Path, out: Path, layout: Layout, scale:
             chaos_rgba = cut_out(chaos_white[part], chaos_black[part], local(centre), radius, empty, others,
                                  level=light_level(chaos_white, chaos_black) or level)
             mask = team_mask(mine, chaos_rgba[v0 - cv0:v1 - cv0, u0 - cu0:u1 - cu0])
+            # Its own team's colour should be what changed; the other's: the shots were taken from
+            # the wrong side (a switch not yet drawn: element_capture.pair_both waits for it).
+            owner = (by_id.get(record.get("element")) or {}).get("owner")
+            if mask is not None and owner and (changed := mask_team(mask)) and changed != owner:
+                notes.append(("warn", f"  element {key}: {owner.capitalize()}'s, but its team colour changed as {changed.capitalize()}'s (shot from the wrong side)"))
             if mask is not None:
                 rgb = np.dstack([mask, np.zeros(mask.shape[:2], np.uint8)])
                 Image.fromarray(rgb, "RGB").save(target / f"{key}-team.png", compress_level=PNG_COMPRESSION)
@@ -192,7 +218,9 @@ def write_elements(manifest: dict, base: Path, out: Path, layout: Layout, scale:
         masked += len(found)
     if masked:
         log(f"elements: {masked} masks of where a standing neighbour is in front")
-    write_json(out / f"{manifest['id']}-elements.json", {"image": image_id, "cutouts": placed}, indent=1)
+    index_path = out / f"{manifest['id']}-elements.json"
+    earlier = read_json(index_path, {}).get("cutouts", []) if area_no else []  # the other arenas' (this run's first call writes afresh)
+    write_json(index_path, {"image": image_id, "cutouts": earlier + placed}, indent=1)
     nothing = sum(1 for p in placed if p["file"] is None)
     log(f"elements: {len(placed) - nothing} cut-outs placed in {image_id}, {nothing} states with nothing there, {len(shots) - len(placed)} left out")
     return len(placed)

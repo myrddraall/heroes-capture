@@ -51,6 +51,23 @@ def team_mask(order: np.ndarray, chaos: np.ndarray) -> np.ndarray | None:
     return mask if mask.any() else None
 
 
+# Where something else moves between the shots (the water, which can't be paused), a change counts
+# as team colour only when it points this closely along the teams' colours (the cosine): moving
+# foam brightens or darkens, about 0.32 off them; team colour is along them.
+ALIGNED = 0.8
+
+
+def aligned(order: np.ndarray, chaos: np.ndarray) -> np.ndarray:
+    """Which pixels changed between the sides along the teams' colours (ALIGNED), premultiplied
+    colour (RGBA uint8, the same shape)."""
+    po = order[..., :3] * (order[..., 3:4].astype(np.float32) / 255)
+    pc = chaos[..., :3] * (chaos[..., 3:4].astype(np.float32) / 255)
+    diff = pc - po
+    toward = np.array(TEAM_COLOURS["chaos"], np.float32) - np.array(TEAM_COLOURS["order"], np.float32)
+    along = diff @ toward / float(np.linalg.norm(toward))
+    return np.abs(along) >= ALIGNED * np.maximum(np.linalg.norm(diff, axis=2), 1e-6)
+
+
 def recoloured(rgba: np.ndarray, mask: np.ndarray, colours: dict) -> np.ndarray:
     """A picture with its teams in other colours ({"order": rgb, "chaos": rgb}), as a viewer draws
     it (PACK.md, Team colour)."""

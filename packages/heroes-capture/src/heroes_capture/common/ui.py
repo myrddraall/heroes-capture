@@ -130,9 +130,12 @@ def configure(log: bool = False, verbose: bool = False) -> None:
     _s.verbose = verbose
     warnings.showwarning = lambda message, category, filename, lineno, file=None, line=None: warn(
         f"{category.__name__}: {message} ({Path(filename).name}:{lineno})")
-    if _s.handler is None:  # once: configured again (as tests do), it would show each warning twice
+    # Once: configured again (as tests do, putting this module's state back between them), a
+    # second handler would show each warning twice; the root logger is asked, not the state.
+    if not any(getattr(h, "hrs_ui", False) for h in logging.getLogger().handlers):
         _s.handler = logging.Handler(logging.WARNING)
         _s.handler.emit = lambda record: warn(f"{record.name}: {record.getMessage()}")
+        _s.handler.hrs_ui = True
         logging.getLogger().addHandler(_s.handler)
 
 

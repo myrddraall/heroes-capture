@@ -240,6 +240,52 @@ def test_an_element_s_cut_out_lands_on_its_cell_in_the_map_image(tmp_path):
     assert cut.shape == (2, 2, 4) and (cut[..., 3] == 255).all() and (cut[..., :3] == 100).all()
 
 
+def test_on_a_map_of_several_arenas_each_element_lands_on_its_own_arena_s_image(tmp_path):
+    """element_stitch.write_elements, once per arena's image: an element shot from an area's tile is
+    placed on that area's image, in its pixels, and the index gathers them all with their image;
+    element_pack.collect_elements then names each element's layer where it isn't the first's."""
+    from heroes_capture.capture import stitch
+
+    base, out = tmp_path / "run", tmp_path / "out"
+    (base / "elements").mkdir(parents=True)
+    out.mkdir()
+    element_shots(base / "elements", "structure-5-standing", 22, 17)  # on tile 0 (area 0)
+    element_shots(base / "elements", "structure-6-standing", 22, 17)  # on tile 1 (area 1), the same screen spot
+    (base / "elements" / "elements.json").write_text(json.dumps({
+        "structure-5-standing": {"kind": "structure", "element": 5, "state": "standing", "x": 11, "y": 9, "radius": 3, "tile": 0, "camera": {"x": 10, "y": 10}},
+        "structure-6-standing": {"kind": "structure", "element": 6, "state": "standing", "x": 11, "y": 29, "radius": 3, "tile": 1, "camera": {"x": 10, "y": 30}}}))
+    (base / "positions.json").write_text(json.dumps({"0": {"x": 10, "y": 10}, "1": {"x": 10, "y": 30}}))
+    scale, ax, ay = 2.0, 100.0, 85.0
+    # Area 0's image from the canvas's (4, 5), area 1's from (4, 0) (its own crop).
+    (out / "m-a.geo.json").write_text(json.dumps({"originCell": {"x": -(ax - 4) / scale, "y": (ay - 5) / scale}}))
+    (out / "m-b.geo.json").write_text(json.dumps({"originCell": {"x": -(ax - 4) / scale, "y": ay / scale}}))
+    layout = stitch.Layout({0: np.array([100.0, 50.0]), 1: np.array([100.0, 10.0])}, {},
+                           {0: {"index": 0, "x": 10, "y": 10, "area": 0}, 1: {"index": 1, "x": 10, "y": 30, "area": 1}}, 40, 30, 0)
+    assert element_stitch.write_elements({"id": "m"}, base, out, layout, scale, ax, ay, "m-a", 0) == 1
+    assert element_stitch.write_elements({"id": "m"}, base, out, layout, scale, ax, ay, "m-b", 1) == 1
+    index = json.loads((out / "m-elements.json").read_text())
+    assert [(c["key"], c["image"], c["rect"]) for c in index["cutouts"]] == [
+        ("structure-5-standing", "m-a", [118, 62, 2, 2]), ("structure-6-standing", "m-b", [118, 27, 2, 2])]
+    raw, packed = tmp_path / "raw", tmp_path / "pack"
+    manifest = {"id": "m", "elements": {
+        "structures": [{"id": 5, "type": "TownCannonTowerL2", "x": 11, "y": 9, "owner": "order", "town": None, "outpost": None, "core": False},
+                       {"id": 6, "type": "TownCannonTowerL2", "x": 11, "y": 29, "owner": "chaos", "town": None, "outpost": None, "core": False}],
+        "towns": [], "outposts": [], "camps": []}}
+    data = element_pack.collect_elements(out, raw, packed, manifest, "map-a", small_factor=2, layers={"m-a": "map-a", "m-b": "map-b"})
+    assert data["layer"] == "map-a"
+    assert "layer" not in data["structures"][0] and data["structures"][1]["layer"] == "map-b"  # the first arena's is the elements' own
+
+
+def test_whose_team_colour_a_mask_says_changed():
+    """element_stitch.mask_team: the team whose colour changed between the sides (a structure shot
+    from the wrong side changes as the other team's); too little change to tell: None."""
+    order = np.zeros((30, 30, 2), np.uint8); order[..., 0] = 120
+    chaos = np.zeros((30, 30, 2), np.uint8); chaos[..., 1] = 120
+    faint = np.zeros((30, 30, 2), np.uint8); faint[:5, :5, 0] = 120  # 25 pixels: too few
+    assert element_stitch.mask_team(order) == "order" and element_stitch.mask_team(chaos) == "chaos"
+    assert element_stitch.mask_team(faint) is None
+
+
 def test_the_pack_s_elements(tmp_path):
     """element_pack.collect_elements: the cut-outs packed into the pack's atlases (standing, rubble, masks,
     and small: every state at the overview scale), and data.elements listing every structure and

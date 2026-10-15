@@ -2,18 +2,15 @@
 rem What to run right now. Kept current with whatever the next test or render needs, so
 rem update.cmd (which refreshes the files and then calls this) needs no arguments.
 rem
-rem Current step: Punisher Arena again, keeping its working files (--keep-tmp), with the map's
-rem fog-of-war type overridden in the prepared map's own data (capture/prepare.py, FOW_OVERRIDE: no
-rem colour, no hiding): does the orb at the north arena's top edge (cells 255-256, x 162) still
-rem come out as a black silhouette? Compared with the last run's tiles.
+rem Current step: the job in run.yml (it says what it is). run.cmd --resume carries on a job that stopped.
 rem --monitor <n> puts the game on another monitor first.
-rem A failed run leaves its working files in tmp\ (pip, when it runs, writes tmp\setup.log).
+rem Runs leave their working files in tmp\ (heroes-capture clean-up removes them; pip, when it runs, writes tmp\setup.log).
 setlocal
 pushd "%~dp0"
 set "PYTHONPATH=%~dp0src"
 rem The tool's dependencies, installed quietly when missing (pip's output in tmp\setup.log).
-py -c "import heroes_capture.cli, numpy, PIL, pyvips, scipy, mss, pydirectinput, dxcam, typer, rich, pmtiles" 2>nul || call :install || goto :copy
-py -m heroes_capture map render "Punisher Arena" --force --keep-tmp
+py -c "import heroes_capture.cli, numpy, PIL, pyvips, scipy, mss, pydirectinput, dxcam, typer, rich, pmtiles, yaml" 2>nul || call :install || goto :copy
+py -m heroes_capture job run.yml %*
 popd
 
 :copy

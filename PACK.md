@@ -137,7 +137,7 @@ illustrative):
 | `gameBuild` | The game's build number the map and images came from (`null` if unknown). |
 | `map.id`, `map.name` | The folder's id and the map's name as the game shows it (English). |
 | `map.category` | `Battleground`, `Arena`, `Brawl` or `Other` (as `map list` shows them); `null` if unknown. |
-| `map.validated` | The tool's authors have checked this map's render. Information only. |
+| `map.validated` | The map's render passed the tool's checklist (heroes-capture's `VERIFICATION.md`) at its current version. Information only. |
 | `map.structures` | `keep`: structures are in the map layer; `hide`: they aren't; `elements`: the map layer is the bare terrain, and each structure and camp is in `data.elements`. |
 | `map.sizeCells` | The whole map in map cells (width, height). |
 | `map.cameraBounds` | Where the game lets the camera go, in map cells. A viewer can keep its camera inside. |
@@ -356,10 +356,12 @@ amount of a different colour to show the teams in any colours: swapped, or its o
   tiled and levelled exactly as the layer (same `levels`, `tileSize`, overview level, stored
   levels), its tile `(x, y)` at a level over the same pixels; a tile missing from its archive has no
   team colour. Its own overview, as the layer's.
-- **The elements' masks:** a standing state with team colour has `teamMask`, `{"at", "small"}`:
+- **The elements' masks:** a standing or rubble state with team colour has `teamMask`, `{"at", "small"}`:
   its mask's top-left corner in the `team` atlas (the cut-out's size, over the same `rect`) and in
   `teamSmall` (at the `small` atlas's scale, over its `small` picture).
-- The sky layers and rubble have no team colour; neither do the camps.
+- **Rubble** can carry team colour too (a structure's remains keep some of its team's colour): a
+  rubble state with team colour has `teamMask` as a standing one does.
+- The sky layers have no team colour; neither do the camps.
 
 ## Elements
 
@@ -394,12 +396,12 @@ one, or show the map as it stood at a moment of a replay.
 
 | Field | Meaning |
 | --- | --- |
-| `layer` | The map layer the cut-outs belong to (their rectangles are in its pixels). |
-| `atlases` | The cut-outs' pictures, packed: `standing` (the standing structures and the camps), `rubble`, `masks` (see `hiddenBy`), each at the map layer's scale (`scale` 1), `small`, every state's cut-out at the map layer's overview scale (`scale`: 1/8 for a six-level pyramid), and `team` and `teamSmall`, the standing states' [team-colour masks](#team-colour) at those two scales. WebP: the cut-outs' colour lossy at quality 90 with their transparency exact, 4 transparent pixels apart (lossy colour is coarser than the pixels); the masks lossless. `size` in pixels. |
-| `structures` | Every structure the map places: its placed unit's `id`, its unit `type`, its `cell`, its `owner` (`order`, `chaos`), the `town` it belongs to (`null`: the cores and anything outside the towns), the `outpost` it belongs to (`null`: the town hall's ring and whatever belongs to no outpost) and whether it's a `core`. |
+| `layer` | The map layer the cut-outs belong to (their rectangles are in its pixels): the first map layer; an element of another arena names its own `layer`. |
+| `atlases` | The cut-outs' pictures, packed: `standing` (the standing structures and the camps), `rubble`, `masks` (see `hiddenBy`), each at the map layer's scale (`scale` 1), `small`, every state's cut-out at the map layer's overview scale (`scale`: 1/8 for a six-level pyramid), and `team` and `teamSmall`, the standing and rubble states' [team-colour masks](#team-colour) at those two scales. WebP: the cut-outs' colour lossy at quality 90 with their transparency exact, 4 transparent pixels apart (lossy colour is coarser than the pixels); the masks lossless. `size` in pixels. |
+| `structures` | Every structure the map places: its placed unit's `id`, its unit `type`, its `cell`, its `owner` (`order`, `chaos`), the `town` it belongs to (`null`: the cores and anything outside the towns), the `outpost` it belongs to (`null`: the town hall's ring and whatever belongs to no outpost) and whether it's a `core`. On a map of several arenas, `layer`: the map layer of the arena it stands in, where that isn't `elements.layer` (its `rect`s are in that layer's pixels; a viewer draws it with that arena). |
 | `towns` | The map's towns as its script numbers them: lane, owner, and the map's region for it. A town is the game's: the region whose structures its town hall's fall affects (the hall's fountains fall with it). A region can reach far down the lane, so the towers, gate and fountain the map adds there are in the town too. |
 | `outposts` | A town's structures beyond its hall's ring (15 cells: hall, fountain, gate, towers, walls, and the standalone tower a fort takes with it), joined when within 14 cells of one another: the lane's forward towers, gate and fountain as a group of their own. Numbered in town order, nearest the hall first; each with its `town`, `lane`, `owner` and the `cell` in the middle of its structures. |
-| `camps` | The mercenary camps as the script numbers them (the game's own camp numbers), their defender `type` and the `cell` they gather round. |
+| `camps` | The mercenary camps as the script numbers them (the game's own camp numbers), their defender `type` and the `cell` they gather round; `layer` as a structure's. |
 | `states` | Each state the element was shot in: `standing` and `rubble` for a structure (a tower's rubble as the game shows a fallen one), `spawned` for a camp's defenders. `null`: nothing is left of it in that state (a fallen moonwell). A state that couldn't be shot is missing. |
 | `rect` | Where the state's cut-out goes on the map layer: left, top, width, height in its pixels. |
 | `atlas`, `at` | The cut-out's picture: its top-left corner in that atlas (`standing` or `rubble`), `rect`'s width and height in size. |
@@ -410,7 +412,7 @@ Draw the cut-outs over the map layer: every one shown as rubble first, then the 
 structures, camps), each further north first (by `cell` y, larger first), so nearer ones overlap
 further ones as in the game and rubble, which lies on the ground, never covers a standing building; where two standing structures overlap, their `hiddenBy`
 masks settle which is in front, whichever is drawn first. They carry no shadows: each was shot with nothing round
-it. The colours are Order's side's (Order blue); a standing state's `teamMask` recolours it (see
+it. The colours are Order's side's (Order blue); a state's `teamMask` recolours it (see
 [Team colour](#team-colour)).
 
 ## Raw layers

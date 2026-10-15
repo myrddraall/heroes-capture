@@ -1,0 +1,10 @@
+# What run.cmd runs: a job (heroes_capture/job.py describes it). Kept current with whatever the next
+# test or render needs. run.cmd --resume carries on a job that stopped.
+#
+# Now: Dragon Shire's whole elements render (the next ones can build on its kept working files with
+# only: [...]). Each structure's remains shot as drawn, then repainted in the other side's team
+# colour (SetTeamColor) and shot again; a fort's standalone tower brought down itself before its
+# fort; a copy that falls to nothing leaves its structure to the waves.
+runs:
+  - map: Dragon Shire
+    render: elements

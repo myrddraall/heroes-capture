@@ -384,12 +384,12 @@ def _version() -> str:
         return "0.0.0-dev"
 
 
-def collect_raw(out: Path, raw: Path, out_id: str, images: list[str]) -> tuple[list[dict], list[dict] | None]:
+def collect_raw(out: Path, raw: Path, out_id: str, images: list[str]) -> tuple[list[dict], list[dict] | None, dict[str, str]]:
     """The stitch's files moved into raw/ under plain names, the ones the pack doesn't keep
-    removed. The layers (back to front, as pack.json lists them, `file` naming the raw PNG) and
-    the arenas (None on a map of one)."""
+    removed. The layers (back to front, as pack.json lists them, `file` naming the raw PNG), the
+    arenas (None on a map of one), and each map image's layer id."""
     raw.mkdir(parents=True, exist_ok=True)
-    layers, arenas, maps = [], [], []
+    layers, arenas, maps, layer_of = [], [], [], {}
     old_layers = out / f"{out_id}-layers.json"
     sky = read_json(old_layers, {})
     if sky.get("fixed") and (out / sky["fixed"]["image"]).exists():
@@ -408,6 +408,7 @@ def collect_raw(out: Path, raw: Path, out_id: str, images: list[str]) -> tuple[l
         geo = read_json(out / f"{image}.geo.json")
         area = geo.get("area")
         layer_id = "map" if len(images) == 1 or not area else f"map-{area.lower()}"
+        layer_of[image] = layer_id
         shutil.move(out / f"{image}.png", raw / f"{layer_id}.png")
         maps.append({"id": layer_id, "kind": "map", "file": f"{layer_id}.png", "size": [geo["width"], geo["height"]], "rate": 1.0,
                      "originCell": [geo["originCell"]["x"], geo["originCell"]["y"]], "pxPerCell": geo["pxPerCell"]})
@@ -420,7 +421,7 @@ def collect_raw(out: Path, raw: Path, out_id: str, images: list[str]) -> tuple[l
         made = out / f"{out_id}-composite{suffix}.png"
         if made.exists():
             shutil.move(made, raw / f"composite{suffix}.png")
-    return layers + maps, arenas or None
+    return layers + maps, arenas or None, layer_of
 
 
 def remove_leftovers(out: Path, out_id: str) -> None:
@@ -434,8 +435,8 @@ def remove_leftovers(out: Path, out_id: str) -> None:
 @dataclass
 class Packing:
     """A pack being written, for the pack_data hooks (map/specifics.py): the stitch's output
-    folder, the pack's raw/ and pack/ folders, the manifest, the map layer's id and its overview's
-    factor (finest level over overview level)."""
+    folder, the pack's raw/ and pack/ folders, the manifest, the first map layer's id and its
+    overview's factor (finest level over overview level), and every map image's layer."""
 
     out: Path
     raw: Path
@@ -443,6 +444,7 @@ class Packing:
     manifest: dict
     layer_id: str
     small_factor: int
+    layers: dict[str, str]  # each map image's id -> its layer's id (several on a map of several arenas)
 
 
 def write(out: Path, manifest: dict, images: list[str], specifics: Specifics) -> Path:
@@ -455,7 +457,7 @@ def write(out: Path, manifest: dict, images: list[str], specifics: Specifics) ->
         if folder.exists():
             shutil.rmtree(folder)
     with stage("pack"):
-        layers, arenas = collect_raw(out, raw, manifest["id"], images)
+        layers, arenas, layer_of = collect_raw(out, raw, manifest["id"], images)
         if arenas:
             areas = {a["name"].lower(): a["bounds"] for a in manifest.get("areas") or []}
             for arena in arenas:
@@ -499,7 +501,7 @@ def write(out: Path, manifest: dict, images: list[str], specifics: Specifics) ->
         small_factor = 2 ** (map_packed["levels"] - 1 - overview["level"]) if map_packed and overview else 1
         data = {}
         for hook in specifics.pack_data:
-            data.update(hook(Packing(out, raw, pack, manifest, first_map["id"], small_factor)))
+            data.update(hook(Packing(out, raw, pack, manifest, first_map["id"], small_factor, layer_of)))
         remove_leftovers(out, manifest["id"])
         thumbnail = pyvips.Image.thumbnail(str(raw / first_map["file"]), THUMBNAIL_WIDTH)
         thumbnail.flatten(background=BACKDROP).webpsave(str(pack / "thumbnail.webp"), Q=85, keep="none")

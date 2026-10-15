@@ -29,11 +29,13 @@ import numpy as np
 import pyvips
 from PIL import Image
 
+from heroes_capture.capture import edge_black
 from heroes_capture.capture import pack
 from heroes_capture.capture import sky_stitch
 from heroes_capture.capture.matting import light_level, matte, moved_pixels
 from heroes_capture.capture.sky import LIGHT_LEVEL
-from heroes_capture.capture.team_colour import team_mask
+from heroes_capture.capture.team_colour import aligned, team_mask
+from heroes_capture.map import water
 from heroes_capture.common.frames import PNG_COMPRESSION, frame_exists, load_frame, tile_stem
 from heroes_capture.common.game_data import slug
 from heroes_capture.common.imaging import max3, nonzero_box
@@ -689,16 +691,19 @@ def other_areas_removed(rgba: np.ndarray, areas: list, own: int, scale: float, a
     return rgba, int(others.sum())
 
 
-def canvas_team_mask(order: np.ndarray, chaos: np.ndarray, rows: int = 512) -> np.ndarray:
+def canvas_team_mask(order: np.ndarray, chaos: np.ndarray, rows: int = 512, wet: np.ndarray | None = None) -> np.ndarray:
     """The team-colour mask of the composed canvas (team_mask), a strip of rows at a time (the
     whole canvas in floating point would take several GB); the canvas's own transparency for both
-    sides (the void's, made transparent after composing)."""
+    sides (the void's, made transparent after composing). Where `wet` (the water's pixels, which
+    move between the shots), only changes along the teams' colours count (team_colour.aligned)."""
     mask = np.zeros(order.shape[:2] + (2,), np.uint8)
     for y in range(0, order.shape[0], rows):
         o = order[y:y + rows]
         c = np.dstack([chaos[y:y + rows, :, :3], o[..., 3:4]])
         found = team_mask(o, c)
         if found is not None:
+            if wet is not None and wet[y:y + rows].any():
+                found[wet[y:y + rows] & ~aligned(o, c)] = 0
             mask[y:y + rows] = found
     return mask
 
@@ -735,8 +740,17 @@ def write_outputs(manifest: dict, out: Path, shots: Shots, layout: Layout, seams
         if any(shots.has_chaos(i) for i in subset):
             with stage("team colour"):
                 chaos = compose(Shots(manifest, shots.dir.parent, chaos=True), layout, seams, subset)
-                mask = canvas_team_mask(composed, chaos)
-                del chaos
+                # The water moves while paused: there, only a change along the teams' colours counts.
+                wet = water.water_pixels(composed.shape, manifest["water"], scale, ax, ay) if manifest.get("water") else None
+                mask = canvas_team_mask(composed, chaos, wet=wet)
+                del chaos, wet
+        # The game's black at the map's edge (edge_black.py), after the team mask: black from both
+        # sides, it has no team colour, and the fade undone would.
+        if manifest.get("mapSize"):
+            with stage("edge black"):
+                removed, restored = edge_black.edge_black_removed(composed, scale, ax, ay, (manifest["mapSize"]["width"], manifest["mapSize"]["height"]))
+            if removed:
+                log(f"  the game's black at the map's edge removed: {removed} px; the fade before it undone on {restored} px")
         if name is not None:
             with stage("other arenas removed"):
                 composed, removed = other_areas_removed(composed, manifest["areas"], area_no, scale, ax, ay)

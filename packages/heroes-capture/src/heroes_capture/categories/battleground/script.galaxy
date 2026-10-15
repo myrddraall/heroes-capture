@@ -312,6 +312,28 @@ void hrsCap_ClearFallenActors () {
     ActorScopeKill(ActorScopeFromActor(lv_region));
 }
 
+// The pausing probe's messages (calibrate.py's pausing), each sent to every actor in the map's
+// region (by radius contact and by centre) and to every unit's actor scope ("el pausemsg").
+void hrsCap_PauseSend (string lp_message) {
+    actor lv_region;
+    unitgroup lv_g;
+    int lv_u;
+    unit lv_unit;
+
+    ActorRegionCreate(null, "TriggerRegion", ${map_region});
+    lv_region = libNtve_gf_ActorLastCreated();
+    ActorRegionSend(lv_region, c_actorIntersectAgainstRadiusContact, lp_message, null, null);
+    ActorRegionSend(lv_region, c_actorIntersectAgainstCenter, lp_message, null, null);
+    ActorSend(lv_region, "Destroy");
+    lv_g = UnitGroup(null, c_playerAny, RegionEntireMap(), UnitFilter(0, 0, 0, 0), 0);
+    lv_u = UnitGroupCount(lv_g, c_unitCountAll);
+    for (;; lv_u -= 1) {
+        lv_unit = UnitGroupUnitFromEnd(lv_g, lv_u);
+        if (lv_unit == null) { break; }
+        ActorScopeSend(ActorScopeFromUnit(lv_unit), lp_message);
+    }
+}
+
 ${isolate_function}
 // "el <verb> ...", the map's elements (ELEMENTS-PLAN.md; the elements capture):
 // "at <x> <y> [<x> <y> <opacity> ...]" (the camera straight above the cell, its lighting refitted,
@@ -330,16 +352,31 @@ ${isolate_function}
 // (every animation let run again, units left paused: what was shown while paused gives off no
 // particles until it plays);
 // "copy <n> make <x> <y> <to x> <to y>" (copy n of the structure nearest the cell, the same type,
-// owner and facing, standing at the other cell), "copy <n> kill|show|hide|play" (by number, as a
-// copy on its structure's own cell can't be told from it by place); "copykill <from> <to>" (copies
+// owner and facing, standing at the other cell), "copy <n> kill|show|hide|play|remove|msg <message>" (by
+// number, as a copy on its structure's own cell can't be told from it by place; remove: gone, no
+// rubble, the calibration's tries; msg: an actor message, "~" for its spaces, to the copy's scope); "copykill <from> <to>" (copies
 // from..to brought down at once: the rubble, prepared on spare spots while the structures stand);
+// "pausemsg <message>" (an actor message, "~" for its spaces, to every actor and unit scope on the
+// map: the pausing probe); "typemsg <unit type> <message>" (the same to every unit of a type's
+// actor scope); "restart <x> <y> <model>" (the structure nearest the cell swapped to its finished
+// model and let run: its animations from the start) and "hold <x> <y>" (paused again: the standing
+// timing);
+// "farclip <distance>" (the camera's far clip plane moved); "worldfx" (the particles
+// left in the world destroyed); "light <x> <y> <seconds>" (the
+// structure nearest the cell let run that long and paused again: its effects lit by the camera); "clock <scale>" (the game's
+// clock scaled: GameSetGlobalTimeScale, in the game's table of script functions); "water on|off" (the water alone, which no pause stills,
+// hidden or shown again);
 // "wide <x> <y> <distance>" (the camera far back straight above the cell: a fall gives off its
 // particles only near the camera); "holes show|hide" (the holes the cores stand on, filled in the
 // map file: the ground where a core stood, or open as the game draws them); "env off|on" (every
 // unit in sight but the structures hidden with the terrain, doodads and water: the whole scene but
-// what is shown, or all back). (Our player's side: the capture's "side".)
+// what is shown, or all back); "paint <x> <y> <radius> <msg~>" (an actor message, "~" for its
+// spaces, to every model and unit actor round the cell: a structure's remains repainted in the other
+// side's team colour, "SetTeamColor", and back, "ClearTeamColor"). (Our player's side: the capture's
+// "side".)
 bool hrsCap_gt_Element_Func (bool testConds, bool runActions) {
     string lv_verb;
+    actor lv_region;
     unit lv_unit;
     unit lv_core;
     unitgroup lv_g;
@@ -438,6 +475,14 @@ bool hrsCap_gt_Element_Func (bool testConds, bool runActions) {
             else if ((StringWord(hrsCap_cmd, 4) == "play")) {
                 ActorScopeSend(ActorScopeFromUnit(hrsCap_copies[lv_n]), "AnimSetPausedAll 0");
             }
+            else if ((StringWord(hrsCap_cmd, 4) == "remove")) {
+                UnitRemove(hrsCap_copies[lv_n]);
+                hrsCap_copies[lv_n] = null;
+            }
+            else if ((StringWord(hrsCap_cmd, 4) == "msg")) {
+                // An actor message ("~" for its spaces) to the copy's actor scope.
+                ActorScopeSend(ActorScopeFromUnit(hrsCap_copies[lv_n]), StringReplaceWord(StringWord(hrsCap_cmd, 5), "~", " ", c_stringReplaceAll, c_stringCase));
+            }
             else {
                 hrsCap_ShowStructure(hrsCap_copies[lv_n], (StringWord(hrsCap_cmd, 4) == "show"));
             }
@@ -451,6 +496,69 @@ bool hrsCap_gt_Element_Func (bool testConds, bool runActions) {
         CameraSetValue(hrsCap_cmdPlayer, c_cameraValueFarClip, (StringToFixed(StringWord(hrsCap_cmd, 5)) * 2.0), 0.0, -1, 10.0);
         hrsCap_statusPlayer = hrsCap_cmdPlayer;
         hrsCap_WaitCameraStill();
+    }
+    else if ((lv_verb == "pausemsg")) {
+        // The message with "~" for its spaces (the command's words are split at spaces).
+        hrsCap_PauseSend(StringReplaceWord(StringWord(hrsCap_cmd, 3), "~", " ", c_stringReplaceAll, c_stringCase));
+    }
+    else if ((lv_verb == "clock")) {
+        GameSetGlobalTimeScale(StringToFixed(StringWord(hrsCap_cmd, 3)));
+    }
+    else if ((lv_verb == "paint")) {
+        ActorRegionCreate(null, "TriggerRegion", RegionCircle(Point(StringToFixed(StringWord(hrsCap_cmd, 3)), StringToFixed(StringWord(hrsCap_cmd, 4))), StringToFixed(StringWord(hrsCap_cmd, 5))));
+        lv_region = libNtve_gf_ActorLastCreated();
+        ActorRegionSend(lv_region, c_actorIntersectAgainstRadiusContact, StringReplaceWord(StringWord(hrsCap_cmd, 6), "~", " ", c_stringReplaceAll, c_stringCase), "Model", "");
+        ActorRegionSend(lv_region, c_actorIntersectAgainstRadiusContact, StringReplaceWord(StringWord(hrsCap_cmd, 6), "~", " ", c_stringReplaceAll, c_stringCase), "Unit", "");
+        ActorScopeKill(ActorScopeFromActor(lv_region));
+    }
+    else if ((lv_verb == "typemsg")) {
+        // An actor message ("~" for its spaces) to every unit of one type's actor scope.
+        lv_g = UnitGroup(StringWord(hrsCap_cmd, 3), c_playerAny, RegionEntireMap(), UnitFilter(0, 0, 0, 0), 0);
+        lv_u = UnitGroupCount(lv_g, c_unitCountAll);
+        for (;; lv_u -= 1) {
+            lv_unit = UnitGroupUnitFromEnd(lv_g, lv_u);
+            if (lv_unit == null) { break; }
+            ActorScopeSend(ActorScopeFromUnit(lv_unit), StringReplaceWord(StringWord(hrsCap_cmd, 4), "~", " ", c_stringReplaceAll, c_stringCase));
+        }
+    }
+    else if ((lv_verb == "farclip")) {
+        // The camera's far clip plane moved (the stacking probe cuts what is sunk below the ground).
+        CameraSetValue(hrsCap_cmdPlayer, c_cameraValueFarClip, StringToFixed(StringWord(hrsCap_cmd, 3)), 0.0, -1, 10.0);
+    }
+    else if ((lv_verb == "worldfx")) {
+        ActorWorldParticleFXDestroy();
+    }
+    else if ((lv_verb == "restart")) {
+        // One structure swapped to its finished model (the model it shows once built: swapping to a
+        // model starts its animations from the start, and Blizzard's structure template restarts
+        // its global loops on every swap) and let run: the standing timing's fixed start.
+        lv_unit = hrsCap_StructureAt(StringToFixed(StringWord(hrsCap_cmd, 3)), StringToFixed(StringWord(hrsCap_cmd, 4)));
+        if ((lv_unit != null)) {
+            if ((StringWord(hrsCap_cmd, 5) != "")) {
+                ActorScopeSend(ActorScopeFromUnit(lv_unit), ("ModelSwap " + StringWord(hrsCap_cmd, 5)));
+            }
+            ActorScopeSend(ActorScopeFromUnit(lv_unit), "AnimSetPausedAll 0");
+        }
+    }
+    else if ((lv_verb == "hold")) {
+        // One structure's animations paused again.
+        lv_unit = hrsCap_StructureAt(StringToFixed(StringWord(hrsCap_cmd, 3)), StringToFixed(StringWord(hrsCap_cmd, 4)));
+        if ((lv_unit != null)) {
+            ActorScopeSend(ActorScopeFromUnit(lv_unit), "AnimSetPausedAll");
+        }
+    }
+    else if ((lv_verb == "light")) {
+        // One structure's effects lit: its animations let run for the seconds given, with the camera
+        // over it (a model's particles only run near the camera), then paused again.
+        lv_unit = hrsCap_StructureAt(StringToFixed(StringWord(hrsCap_cmd, 3)), StringToFixed(StringWord(hrsCap_cmd, 4)));
+        if ((lv_unit != null)) {
+            ActorScopeSend(ActorScopeFromUnit(lv_unit), "AnimSetPausedAll 0");
+            Wait(StringToFixed(StringWord(hrsCap_cmd, 5)), c_timeReal);
+            ActorScopeSend(ActorScopeFromUnit(lv_unit), "AnimSetPausedAll");
+        }
+    }
+    else if ((lv_verb == "water")) {
+        EnvironmentShow(c_environmentWater, (StringWord(hrsCap_cmd, 3) == "on"));
     }
     else if ((lv_verb == "fadeall")) {
         hrsCap_FadeAllStructures((StringWord(hrsCap_cmd, 3) == "1"));

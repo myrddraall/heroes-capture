@@ -33,6 +33,10 @@ Options:
   --crop-margin <cells>    the stitched image reaches this far past the camera bounds
                            (or past each capture area, see below)           (default 12)
   --out <dir>              working folder                                   (default tmp)
+  --calibrate              prepared for the map's calibration (capture/calibration.py), not a
+                           render; with --structures elements
+  --calibration <file>     the map's calibration.json, for an elements render (map render
+                           passes it, calibrating the map first when it has none)
 """
 
 import math
@@ -43,21 +47,21 @@ from pathlib import Path
 
 from heroes_capture.capture import script as capture_script
 from heroes_capture.capture.grid import plan_tiles
-from heroes_capture.capture.sky import LIGHT_SKY, PARALLAX_KEYS, SKIES, frozen_particle_models, painted_texture_files, parallax_keys, sky_files
-from heroes_capture.common import game_data, js_json
+from heroes_capture.capture.sky import LIGHT_SKY, PARALLAX_KEYS, SKIES, freeze_in_place, painted_texture_files, parallax_keys, sky_files
+from heroes_capture.common import actors, game_data, js_json
 from heroes_capture.common.js_json import js_round
 from heroes_capture.common.jsonio import write_manifest
 from heroes_capture.common.lighting import has_sky, main_light, sky_models, tileset_of
 from heroes_capture.common.runlog import log, warn
 from heroes_capture.common.stormlib import Archive
-from heroes_capture.map import script
+from heroes_capture.map import script, water
 from heroes_capture.map.prepare import inject, model_ids, preparation_id, read_map_info, resolve_map, team_coloured
 from heroes_capture.map.specifics import Specifics
 
 # How many values each option takes (the options without one are switches).
 OPTION_VALUES = {"--structures": 1, "--px-per-cell": 1, "--screen": 1, "--fov": 1, "--pitch": 1, "--refit-yaw": 1,
                  "--distance": 1, "--keep": 1, "--no-lens": 0, "--show-ui": 0, "--paint-texture": 2, "--keep-intro": 0,
-                 "--margin": 1, "--crop-margin": 1, "--out": 1}
+                 "--margin": 1, "--crop-margin": 1, "--out": 1, "--calibrate": 0, "--calibration": 1}
 
 
 @dataclass
@@ -78,27 +82,6 @@ class Preparation:
     areas: list[dict] = field(default_factory=list)  # capture areas, each rendered to its own image (none: one, the camera bounds)
 
 
-FOW_OVERRIDE = """<?xml version="1.0" encoding="us-ascii"?>
-<Catalog>
-    <CFoW default="1">
-        <Color value="0,0,0,0"/>
-    </CFoW>
-    <CFoW id="Dark">
-        <Color value="0,0,0,0"/>
-    </CFoW>
-    <CFoW id="Black">
-        <Hidden value="0"/>
-        <Color value="0,0,0,0"/>
-    </CFoW>
-    <CFoW id="BlackNoUnhide">
-        <Hidden value="0"/>
-        <Color value="0,0,0,0"/>
-        <Expand value="0"/>
-    </CFoW>
-</Catalog>
-"""
-
-
 def render_id(map_name: str, structures: str) -> str:
     """The id a preparation's files are named by: <map slug>-structures, -terrain with the
     structures hidden, or -elements."""
@@ -110,7 +93,7 @@ def parse_args(argv: list[str]) -> dict:
         "map": None, "structures": "keep", "pxPerCell": 48.0, "screen": {"w": 3840.0, "h": 2160.0},
         "fov": 20.0, "distance": None, "pitch": 90.0, "refitYaw": None, "keep": 0.6, "lens": True,
         "showUi": False, "paintTextures": {}, "keepIntro": False, "margin": 0.0, "cropMargin": 12.0,
-        "out": "tmp",
+        "out": "tmp", "calibrate": False, "calibration": None,
     }
     numbers = {"--px-per-cell": "pxPerCell", "--fov": "fov", "--distance": "distance", "--pitch": "pitch",
                "--refit-yaw": "refitYaw", "--keep": "keep", "--margin": "margin", "--crop-margin": "cropMargin"}
@@ -137,6 +120,10 @@ def parse_args(argv: list[str]) -> dict:
             opts["paintTextures"][name] = next(args)
         elif a == "--out":
             opts["out"] = next(args)
+        elif a == "--calibrate":
+            opts["calibrate"] = True
+        elif a == "--calibration":
+            opts["calibration"] = next(args)
         elif not a.startswith("--") and not opts["map"]:
             opts["map"] = a
         else:
@@ -145,6 +132,8 @@ def parse_args(argv: list[str]) -> dict:
         raise SystemExit('usage: heroes-capture prepare "<map name or .stormmap path>" [options]')
     if opts["structures"] not in ("keep", "hide", "elements"):
         raise SystemExit("--structures is keep, hide or elements")
+    if (opts["calibrate"] or opts["calibration"]) and opts["structures"] != "elements":
+        raise SystemExit("--calibrate and --calibration are for --structures elements")
     if not 0 < opts["keep"] <= 1:
         raise SystemExit("--keep is between 0 and 1")
     return opts
@@ -227,12 +216,19 @@ def main(argv: list[str], specifics_for: Callable[[str, str], Specifics]) -> Pat
         # Every model the map can use: each made to freeze its particles and ribbons while its
         # animations are paused (sky.py).
         map_models, map_mods = model_ids(storage, target)
+        # The mods' waters (their heights: the water a comparison leaves out, water.py).
+        water_texts = actors.catalog_texts(storage, map_mods, (b"<CWater",))
+        # The game's team colours (a structure's remains repainted in the other side's: element_capture).
+        team_colours = game_data.team_colours(storage)
 
     with Archive(target) as archive:
         # (Widening the playable bounds in MapInfo, to move the game's boundary fade off the outer
         # walls, made the map unopenable: "Unable to open map".)
         read = archive.read_text
         info = read_map_info(archive.read("MapInfo"))
+        wet = water.water_cells(archive.read("t3Water"), archive.read("t3HeightMap"), read("t3Terrain.xml") or "",
+                                water_texts + [read("Base.StormData\\GameData\\WaterData.xml") or ""], info["width"], info["height"])
+        log(f"water: {int(wet.sum())} cells" if wet.any() else "water: none")
         map_data = {
             "t3Terrain": read("t3Terrain.xml") or "",
             "terrainData": read("Base.StormData\\GameData\\TerrainData.xml"),
@@ -287,13 +283,6 @@ def main(argv: list[str], specifics_for: Callable[[str, str], Specifics]) -> Pat
         )
         parts = [script.PART, capture_script.PART, *specifics.script_parts]
         inject(archive, map_script, script.assemble([p.read_text(encoding="utf-8") for p in parts], values))
-        # EXPERIMENT (run.cmd): the map's last cell row and column, and everything past them, are
-        # drawn black with a one-cell fade (Punisher Arena's north orb, Battlefield of Eternity's
-        # east chain), untouched by VisEnable(c_visTypeMask, false). The map's fog-of-war type
-        # ("BlackNoUnhide" in MapInfo; CFoW in the game's FoWData.xml) given no colour and no hiding,
-        # as the map's own data: if the black is the vision texture's border drawn in that colour,
-        # it goes.
-        archive.write("Base.StormData\\GameData\\FoWData.xml", FOW_OVERRIDE.encode("us-ascii"))
 
         # The solid-colour skyboxes (sky.py): the capture shoots each tile over white and over
         # black, and the stitch turns the difference into transparency.
@@ -307,9 +296,10 @@ def main(argv: list[str], specifics_for: Callable[[str, str], Specifics]) -> Pat
             keys = parallax_keys(map_sky["parallax"], models[key_spec["file"]])
             log(f'keyed copies of {map_sky["parallax"]}: command "sky parallaxlight", "parallaxblack", "parallaxbare", "parallaxlightbare"')
         # The models' particles and ribbons frozen while paused, in the same catalog as the skies.
-        frozen = frozen_particle_models(map_models)
-        log(f"particles and ribbons frozen with their animations: {len(frozen)} models (mods {', '.join(map_mods) or 'none'} and the shared data)")
-        for name, data in sky_files(tileset, sky_start, read, {"models": keys["models"] + frozen, "files": keys["files"]}):
+        own = freeze_in_place(read("Base.StormData\\GameData\\ModelData.xml"), map_models)[1]
+        log(f"particles and ribbons frozen with their animations: {len(map_models)} models (mods {', '.join(map_mods) or 'none'} and the shared data"
+            + (f"; {len(map_models) - len(own)} of them in the map's own entries" if len(own) < len(map_models) else "") + ")")
+        for name, data in sky_files(tileset, sky_start, read, {"models": keys["models"], "files": keys["files"], "freeze": map_models}):
             archive.write(name, data)
         for name, data in painted_texture_files(opts["paintTextures"]):
             archive.write(name, data)
@@ -330,6 +320,8 @@ def main(argv: list[str], specifics_for: Callable[[str, str], Specifics]) -> Pat
         "distance": grid["distance"],
         "mapSize": {"width": info["width"], "height": info["height"]},
         "cameraBounds": info["bounds"],
+        "water": water.water_runs(wet),
+        "teamColours": team_colours,
         "areas": areas or None,
         "unbound": unbound,
         "cropMargin": opts["cropMargin"],

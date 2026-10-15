@@ -42,6 +42,9 @@ SCENARIOS = {
     "probe sky": ("matte", ["--probe-sky"], {}, "finished", "03-none-layer0"),
     "probe monitor": ("matte", ["--probe-monitor", "--monitor", "1"], {}, "finished", ("the game's window is 1920x1080 at (0, 0), monitor 1", "monitor probe at 1920x1080: 6 of 6 checks ok")),
     "launch only": ("matte", ["--launch-only"], {}, "finished", ""),
+    # Some parts only (a job's run): the sky layers alone, no tiles; the tiles alone, the sky left be.
+    "skies only": ("matte", ["--parts", "skies"], {}, "finished", ("sky layer images: 17 positions", "captured: skies")),
+    "tiles only": ("matte", ["--parts", "tiles", "--reuse"], {}, "finished", "28 screenshots in"),  # (the grid and past it)
 }
 
 
