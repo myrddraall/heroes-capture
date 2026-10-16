@@ -64,9 +64,34 @@ def _key_direction(xml: str) -> list[float] | None:
     return [float(v) for v in xyz.groups()] if xyz else None
 
 
+def _xyz(element: str, default: float) -> list[float]:
+    """An <X Y Z> element's values, `default` for a coordinate it leaves out (the catalog's default
+    light sets none of these: a light's own XML gives only what differs from it)."""
+    return [float(m.group(1)) if (m := re.search(rf'\b{axis}="([^"]+)"', element)) else default for axis in "XYZ"]
+
+
+def parse_directional(xml: str) -> list[dict]:
+    """A time of day's directional lights (Key, Fill, Back), each {index, color, multiplier,
+    direction}: the colour times its multiplier is what it lights with, along `direction` (the way
+    the light travels: the Play screen tutorial's key lights all travel the way its camera looks,
+    its back lights the opposite way). A colour channel left out is 1 (white; every one of the
+    game's palettes reads naturally so, and none does as 0), a multiplier left out 1."""
+    lights = []
+    for attrs, body in _entries(xml, "DirectionalLight"):
+        color = re.search(r"<Color\b[^>]*/?>", body)
+        direction = re.search(r"<Direction\b[^>]*/?>", body)
+        lights.append({"index": attrs.get("index", ""),
+                       "color": _xyz(color.group(0), 1.0) if color else [1.0, 1.0, 1.0],
+                       "multiplier": float(attrs.get("ColorMultiplier", "1")),
+                       "direction": _xyz(direction.group(0), 0.0) if direction else [0.0, 0.0, 0.0]})
+    return lights
+
+
 def parse_lights(xml: str, into: dict | None = None) -> dict:
-    """CLight entries: id -> {parent?, key?: [x, y, z], hdrExposure?, hdrWhitePoint?} (the first time
-    of day's Key light and its HDR tone mapping's exposure and white point)."""
+    """CLight entries: id -> {parent?, key?: [x, y, z], ambient?: [r, g, b], directional?: [...],
+    hdrExposure?, hdrWhitePoint?} (the first time of day's Key light, its ambient colour (a channel
+    left out is 0), its directional lights (parse_directional) and its HDR tone mapping's exposure
+    and white point)."""
     into = {} if into is None else into
     for attrs, body in _entries(xml, "CLight"):
         if not attrs.get("id"):
@@ -78,6 +103,12 @@ def parse_lights(xml: str, into: dict | None = None) -> dict:
         key = _key_direction(tod.group(1) if tod else body)
         if key:
             light["key"] = key
+        ambient = re.search(r"<AmbientColor\b[^>]*/?>", tod.group(1) if tod else body)
+        if ambient:
+            light["ambient"] = _xyz(ambient.group(0), 0.0)
+        directional = parse_directional(tod.group(1) if tod else body)
+        if directional:
+            light["directional"] = directional
         for param, field in (("HDRExposure", "hdrExposure"), ("HDRWhitePoint", "hdrWhitePoint")):
             value = re.search(rf'<Param index="{param}" value="([^"]+)"', tod.group(1) if tod else body)
             if value:

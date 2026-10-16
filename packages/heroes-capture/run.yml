@@ -1,19 +1,10 @@
 # What run.cmd runs: a job (heroes_capture/job.py describes it). Kept current with whatever the next
 # test or render needs. run.cmd --resume carries on a job that stopped.
 #
-# Now: Dragon Shire's whole elements render (a whole one: the standing shots and the tiles are taken
-# differently). Standing: each structure shot from Order's side, then its neighbours' shots once every
-# structure stands as it is shot (only those whose models can overlap, from the data), then one pass
-# from Chaos's side (one switch each way; none for structures the calibration or the model data says
-# don't change). Tiles: one pass from Order's side, then the team-coloured ones from Chaos's in one.
-# Remains whose death models draw no team colour aren't repainted.
-runs: a job (heroes_capture/job.py describes it). Kept current with whatever the next
-# test or render needs. run.cmd --resume carries on a job that stopped.
-#
-# Now: Dragon Shire's whole elements render (the next ones can build on its kept working files with
-# only: [...]). Each structure's remains shot as drawn, then repainted in the other side's team
-# colour (SetTeamColor) and shot again; a fort's standalone tower brought down itself before its
-# fort; a copy that falls to nothing leaves its structure to the waves.
+# Now: Battlefield of Eternity, step 2 of a new map: its whole calibration (step 1, `map survey`,
+# was read from the game's data). The data answers whether each structure draws team colour for
+# each team (Heaven and Hell look different), so no side switch is timed; each team's look is
+# filmed standing on its own. The review form follows from what it shoots.
 runs:
-  - map: Dragon Shire
-    render: elements
+  - map: Battlefield of Eternity
+    calibrate: all

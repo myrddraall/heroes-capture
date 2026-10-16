@@ -613,7 +613,7 @@ def element_capture(monkeypatch):
 class _FakeSession:
     """Answers every command, and shows a frame; records what was typed. The frame is black from
     Order's side and white from Chaos's (after "side 2"), and white while repainted ("el paint ...
-    SetTeamColor", until "ClearTeamColor"): a side switch and a repaint show."""
+    SetTeamColor", until the camera moves on): a side switch and a repaint show."""
 
     def __init__(self, unanswered=()):
         self.sent, self.unanswered, self.team, self.painted = [], set(unanswered), 1, False
@@ -630,6 +630,8 @@ class _FakeSession:
             self.team = int(command.split()[-1])
         if command.startswith("el paint "):
             self.painted = "SetTeamColor" in command
+        if command.startswith("el at "):
+            self.painted = False  # (a repaint is of the remains where it was sent: not those the camera moves to)
         return None if command in self.unanswered else (types.SimpleNamespace(camera_x=1.0, camera_y=2.0), self.grab())
 
     def blank(self, frame):
@@ -706,13 +708,12 @@ def test_the_elements_capture_shoots_each_element_then_brings_the_structures_dow
     assert kill < core and sent[core - 2:core] == ["el wide 3.00 1.00 212.5", "el fades 3 1 1"]
     assert sent[kill - 3:kill] == ["note Rubble wave 1 of 2: waiting for the structures to fall", "el wide 1.00 2.00 212.5", "el fades 1 2 1"]
     assert sent[core - 3] == "note Rubble wave 2 of 2: waiting for the structures to fall"
-    # As drawn over white and black, the light sky back, repainted, over white and black, put back.
-    assert sent[core + 1:core + 8] == ["el freeze", "el at 3.00 1.00", "black", "sky lightgrey 0",
-                                       "el paint 3 1 22 SetTeamColor~36,92,255~36,92,255", "black",
-                                       "el paint 3 1 22 ClearTeamColor"]  # Chaos's remains: as its ally
-    assert sent[kill + 1:kill + 9] == ["el freeze", "el at 1.00 2.00", "black", "sky lightgrey 0",
-                                       "el paint 1 2 9 SetTeamColor~255,0,0~178,0,0", "black",
-                                       "el paint 1 2 9 ClearTeamColor", "el clear"]  # Order's: as its enemy
+    # As drawn over white and black, repainted with the sky still black, and (changed) over the
+    # light sky; nothing put back (ClearTeamColor doesn't).
+    assert sent[core + 1:core + 6] == ["el freeze", "el at 3.00 1.00", "black",
+                                       "el paint 3 1 22 SetTeamColor~36,92,255~36,92,255", "sky lightgrey 0"]  # Chaos's remains: as its ally
+    assert sent[kill + 1:kill + 7] == ["el freeze", "el at 1.00 2.00", "black",
+                                       "el paint 1 2 9 SetTeamColor~255,0,0~178,0,0", "sky lightgrey 0", "el clear"]  # Order's: as its enemy
     # Clearing: Order's core (not yet replaced) and anything left brought down, the scene shown
     # again, the remains and the fallen structures' own actors cleared, the holes shown, everything
     # let play a moment and paused again (the doodads shown again give off their particles).
@@ -832,9 +833,8 @@ def test_the_elements_capture_prepares_the_rubble_with_copies(element_capture, t
                                      "el wide 140.50 60.50 212.5", "el copykill 1 1", "el freeze"]
     assert sent.index("el fadeall 0") < first < next(i for i, c in enumerate(sent) if c.startswith("el at 1.00 2.00"))
     tower = sent.index("el at 100.00 100.00")
-    assert sent[tower + 1:tower + 6] == ["black", "sky lightgrey 0", "el paint 100 100 9 SetTeamColor~255,0,0~178,0,0", "black",
-                                         "el paint 100 100 9 ClearTeamColor"]
-    assert sent[sent.index("el at 140.50 60.50") + 3].startswith("el paint 140.5 60.5 ")
+    assert sent[tower + 1:tower + 4] == ["black", "el paint 100 100 9 SetTeamColor~255,0,0~178,0,0", "sky lightgrey 0"]
+    assert sent[sent.index("el at 140.50 60.50") + 2].startswith("el paint 140.5 60.5 ")
     assert not any(c.startswith("el kill ") for c in sent) and "el core 2 -1" in sent
     records = json.loads((tmp_path / "elements" / "elements.json").read_text())
     # The fake camera is at (10, 20) for every shot: as if from the tower's cell, (10 + 1 - 100, 20 + 2 - 100).
@@ -1338,3 +1338,44 @@ def test_the_data_report_says_what_has_team_colour_and_what_can_overlap():
     far = {"type": "Wall", "x": 7, "y": 0}
     assert not elements.may_overlap(fort, far, report, 85.0, 10.0)  # 7 apart: more than both reach
     assert elements.may_overlap(far, {"type": "Tower", "x": 15, "y": 0}, report, 85.0, 10.0)  # unknown: within 10
+
+
+def test_the_survey_reports_what_the_data_says_for_each_team():
+    """Step 1 (categories/battleground/survey.py): each kind's team colour standing and in its
+    remains per team where the data picks each team's model (Battlefield of Eternity's Heaven walls
+    draw team colour, its Hell walls don't), so no side switch to time, and a look filmed per team."""
+    from heroes_capture.categories.battleground import survey
+
+    report = {"names": {"TownWallRadial2L3": "Wall"}, "standModels": {"TownWallRadial2L3": "WallRadialHell2"},
+              "deathModels": {"TownWallRadial2L3": ["WallDeath"]},
+              "teams": {"TownWallRadial2L3": {"order": {"stand": "WallRadialHeaven2", "deaths": ["WallDeath"]},
+                                              "chaos": {"stand": "WallRadialHell2", "deaths": ["WallDeath"]}}},
+              "models": {"WallRadialHeaven2": {"teamColour": {"Stand": True}, "sequences": [{"name": "Stand", "seconds": 1}]},
+                         "WallRadialHell2": {"teamColour": {"Stand": False}, "sequences": [{"name": "GLstand", "seconds": 6.667}]},
+                         "WallDeath": {"teamColour": {"Death": False, "Dead": False}, "sequences": [{"name": "Death", "seconds": 6.667}]}}}
+    walls = [{"id": n, "type": "TownWallRadial2L3", "name": "Wall", "x": 10 + 40 * n, "y": 10, "owner": owner, "town": 1, "core": False, "radius": 3}
+             for n, owner in enumerate(("order", "chaos"))]
+    manifest = {"map": "Test", "mapSize": {"width": 100, "height": 80}, "sky": {"mode": "black"}, "tiles": [{}] * 4, "distance": 85.0,
+                "elements": {"structures": walls, "towns": [{}], "camps": [], "outposts": [], "report": report, "copyCandidates": {"0": [[1, 1]]}}}
+    found = survey.survey(manifest)
+    [wall] = found["kinds"]
+    assert wall["standing"] == {"order": True, "chaos": False} and wall["remains"] == {"order": False, "chaos": False}
+    assert wall["fall"] == [6.7] and wall["byTeam"]
+    text = "\n".join(survey.lines(found))
+    assert "blue yes, red no" in text and "side switch: none to time" in text and "standing filmed: 2 looks" in text
+
+
+def test_a_look_that_differs_by_team_is_filmed_and_timed_per_team():
+    """elements.stand_kind: by type where both teams show the same finished model, by type and team
+    where they differ (Battlefield of Eternity's Heaven and Hell); a standing time or restart model
+    kept that way is found for each structure (by_stand_kind), its type's otherwise."""
+    from heroes_capture.categories.battleground import elements
+
+    report = {"standModels": {"Fort": "HellFort", "Tower": "Tower"},
+              "teams": {"Fort": {"order": {"stand": "HeavenFort", "deaths": []}, "chaos": {"stand": "HellFort", "deaths": []}}}}
+    blue, red, tower = {"type": "Fort", "owner": "order"}, {"type": "Fort", "owner": "chaos"}, {"type": "Tower", "owner": "chaos"}
+    assert [elements.stand_kind(u, report) for u in (blue, red, tower)] == ["Fort|order", "Fort|chaos", "Tower"]
+    assert elements.stand_model(blue, report) == "HeavenFort" and elements.stand_model(tower, report) == "Tower"
+    waits = {"Fort|order": 2.5, "Fort|chaos": 0.0, "Tower": 1.0}
+    assert [elements.stand_wait(u, waits) for u in (blue, red, tower)] == [2.5, 0.0, 1.0]  # (0 s is a time, not none)
+

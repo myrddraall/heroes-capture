@@ -292,7 +292,10 @@ def apply_review(calibration: dict, answers: dict, empty: tuple[list[str], list[
     standing = {f["kind"]: f for f in review["standing"]}
     stand_waits = {kind: round(min(int(frame), standing[kind]["frames"] - 1) * standing[kind]["step"], 2)
                    for kind, frame in (answers.get("standing") or {}).items() if kind in standing and frame is not None}
-    return {"standWaits": stand_waits, "standModels": ((calibration.get("report") or {}).get("standModels") or {}), "version": calibration["version"], "stages": calibration.get("stages") or {}, "map": calibration["map"], "tool": calibration.get("tool"),
+    # Each kind's model as filmed (by type, and team where the teams' differ), over the types'.
+    stand_models = {**((calibration.get("report") or {}).get("standModels") or {}),
+                    **{kind: film["model"] for kind, film in (calibration.get("standing") or {}).items() if film.get("model")}}
+    return {"standWaits": stand_waits, "standModels": stand_models, "version": calibration["version"], "stages": calibration.get("stages") or {}, "map": calibration["map"], "tool": calibration.get("tool"),
             "cameraBounds": calibration.get("cameraBounds"), "copySpots": spots, "structures": structures, "fallWaits": waits,
             "reviewed": {"at": answers.get("at"), "notes": answers.get("notes", ""), "motion": answers.get("motion") or {},
                          "rejectedSpots": sorted(rejected), "unanswered": sorted(set(falls) - set(waits))}}

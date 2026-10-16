@@ -63,6 +63,21 @@ def test_a_light_s_hdr_from_it_or_its_parents():
     assert light_hdr(lights, "Plain") is None
 
 
+def test_a_light_s_ambient_and_directional_lights_with_what_a_channel_left_out_means():
+    lights = parse_lights("""
+      <CLight id="Flyby" parent="default"><ToDInfoArray index="0">
+        <AmbientColor X="0.0" Y="0.0"/>
+        <Param index="HDRExposure" value="1.5"/>
+        <DirectionalLight index="Key" ColorMultiplier="0.676"><Color Y="0.62" Z="0.44"/><Direction X="-0.34" Y="0.16" Z="0.93"/></DirectionalLight>
+        <DirectionalLight index="Back" ColorMultiplier="2.0"><Direction X="0" Y="-1" Z="0"/></DirectionalLight>
+      </ToDInfoArray></CLight>""")
+    light = lights["Flyby"]
+    assert light["ambient"] == [0, 0, 0]  # a channel left out of the ambient is 0
+    key, back = light["directional"]
+    assert key == {"index": "Key", "color": [1.0, 0.62, 0.44], "multiplier": 0.676, "direction": [-0.34, 0.16, 0.93]}
+    assert back["color"] == [1.0, 1.0, 1.0]  # no colour: white
+
+
 def test_tracks_between_their_keys_and_bone_matrices():
     track = Track((0, 200000), ((0.0, 0.0), (0.3333, 4.0)))
     assert track.at(100000) == pytest.approx((0.16665, 2.0))

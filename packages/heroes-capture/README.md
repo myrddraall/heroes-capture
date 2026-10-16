@@ -95,6 +95,7 @@ heroes-capture map render "Dragon Shire" -o D:\renders      # into D:\renders\dr
 heroes-capture map render "Dragon Shire" --clean-up         # tmp\ cleared once done
 heroes-capture map render --category arena                  # battleground, arena, brawl, other or all
 heroes-capture map render "Dragon Shire" --force            # again, though maps\dragon-shire has it
+heroes-capture map survey "Dragon Shire"                    # step 1 of a new map: what the game's data says (no game needed)
 heroes-capture map calibrate "Dragon Shire"                 # measure the map for its elements render (then review it)
 heroes-capture clean-up                                     # removes the working files runs left in tmp\
 heroes-capture job run.yml                                  # the runs a job file lists, in order
@@ -127,6 +128,13 @@ half-written), or the stitch runs straight away when they're all there. With oth
 starts again. Maps not yet verified render too; their line says they may not come out right.
 Options that aren't `map render`'s own go to the preparing step: `heroes-capture prepare --help`
 lists them.
+
+A new map goes through three steps: `map survey` reads what the map's files and the game's data
+say (each structure's team colour standing and in its remains, for each team; how long its death
+plays; which structures can overlap; the water and the sky) and reports what the calibration will
+therefore measure and what the data answers instead, with the odd cases as questions for the
+review; then the calibration and its review, repeated until nothing the render needs is unknown;
+then the render.
 
 An elements render (`--structures elements`) needs the map's reviewed calibration: a short match
 (`map calibrate`) that measures in the game what the render would otherwise assume from
@@ -320,6 +328,23 @@ its camera, the model its actor shows, the light and animation in effect while i
 screen) and that model (`common/m3.py` reads it: its meshes placed by the Stand pose, its
 materials, and the 200-second scrolls of the sequences that run alongside, GLstand).
 
+Beside the scene it exports planets (`planets/`, `ui/planets.py`) for the app to put up in sets
+of its own, each in a file of its own so the app loads only what a set uses: the Play screen's
+three as templates (each in its own space, its body a unit sphere or hemisphere facing -Y, the
+app turning it to face the camera as the game's billboards do; `index.json` says where the game
+puts each and how big); and, from the tutorial's flyby (`tutorial_cutscene_planetflyby`, the
+doodad `Storm_Doodad_Nexus_PlanetsFlyby`), three worlds (Azeroth, Korhal, Sanctuary, with their own
+meshes and layered materials, its space station left out as too heavy) and nine painted spheres
+(their textures on the Play screen's hemisphere, which is smooth where theirs are not). Each is
+taken as the flyby shows it best (largest while wholly in its camera's view: the end of the
+approach to it) under the light the cutscene has on then, which it switches as the camera passes
+each world, so each is seen under the light of its approach; the light goes in the file (ambient,
+the directional lights' directions in the planet's space and colours times their multipliers, the
+HDR exposure) for the app to light it the same way. Each flyby planet also wears the Play screen's
+hex grid and atmosphere, which the game never puts on them, so they belong in the Play screen's
+sky. A model whose entry gives no file is found through its parents' (`Doodad`:
+`Assets\Doodads\##id##\##id##.m3`).
+
 ## How it works
 
 - **Preparing (`capture/prepare.py`, with `map/prepare.py`)** copies the `.stormmap` (an MPQ
@@ -473,9 +498,9 @@ object, `map/specifics.py`'s `Specifics`, which `cli.py` builds for each map.
 
 | Layer | Folder, module | What it does |
 | --- | --- | --- |
-| | `cli.py` | the `heroes-capture` command (Typer, Rich): `map render`, `map calibrate`, `map list`, `map view`, `ui extract`, `ui search`, `ui background`, `prepare`, `capture`, `stitch`; picks a map's category and its own module (`specifics_for`) |
+| | `cli.py` | the `heroes-capture` command (Typer, Rich): `map render`, `map survey`, `map calibrate`, `map list`, `map view`, `ui extract`, `ui search`, `ui background`, `prepare`, `capture`, `stitch`; picks a map's category and its own module (`specifics_for`) |
 | 1 everything | `common/` | the game's install and data (`game_data.py`, `casclib.py`, `stormlib.py`, `native.py`, `lighting.py`, `actors.py`: actor trees and models' moving parts, `m3.py`: model files' meshes, materials, particles and animation tracks), its process, window and input (`game_window.py`, `game_control.py`, `monitors.py`), screen grabs and comparisons (`screen.py`, `matching.py`), the game's states and menus (`game_state.py`, `game_menus.py`, `menu-reference/`), images, geometry, DDS textures, JSON and frames on disk, the log and the live view (`runlog.py`, `ui.py`, `watch.py`), the worker pool |
-| 2 the interface's textures | `ui/` | which textures the interface uses and what the game's data says about each (`catalogue.py`), their pictures (`extract.py`), the search by description (`search.py`), the Play screen's background (`play_background.py`) |
+| 2 the interface's textures | `ui/` | which textures the interface uses and what the game's data says about each (`catalogue.py`), their pictures (`extract.py`), the search by description (`search.py`), the Play screen's background (`play_background.py`) and the planets for it (`planets.py`) |
 | 2 inside any map | `map/` | the script assembler and the map's own part (`script.py`, `script.galaxy`), the status strip (`status.py`), the Galaxy reader (`galaxy.py`), launching and leaving a match and the command box (`match.py`), what every preparation reads of a map (`prepare.py`), `specifics.py` |
 | 3 capturing maps | `capture/` | preparing for capture (`prepare.py`), the grid, the capture run (`tiles.py`, `shots.py`), a map's calibration (`calibration.py`), skies (`sky.py`, `sky_layers.py`, `sky_stitch.py`), matting and cut-outs (`matting.py`), the stitch (`stitch.py`, `edge_black.py`), the pack (`pack.py`, `minimap_svg.py`), the reference viewer and `map view` (`viewer.py`, `viewer.html`, `serve.py`), the capture's script part, `diagnostics/` (the `--probe-*` switches and their helpers) |
 | 4 categories of maps | `categories/` | `battleground/`: towns, outposts, camps, structure holes, the elements capture, stitch and pack, the calibration's measurements and its review (`calibrate.py`, `calibration_review.py` and its page), its script part; `arena/`: capture areas and rounds |
@@ -499,8 +524,11 @@ uv run pytest -n auto --dist loadgroup   # or pnpm test from the workspace root
 - `tests/test_game_menus.py`: the game's menus told from the map at screen sizes from 600 to
   2160 rows and 16:9 to 32:9 (`tests/sim/menus.py` draws them).
 - `tests/test_play_background.py`: the Play screen's background: its cutscene read for the Play
-  screen, the camera, the light's HDR, animation tracks; and, marker `game_data`, the export from
-  the game's own data.
+  screen, the camera, the light's HDR, ambient and directional lights, animation tracks; and,
+  marker `game_data`, the export from the game's own data.
+- `tests/test_planets.py`: the planets: the frames a planet is put in, the light on at a time of
+  the flyby and as the app lights with it; and, marker `game_data`, the export from the game's own
+  data.
 - `tests/test_ui.py`: the interface's textures on a made-up storage (the catalogue, the pictures,
   the search's ranking) and, marker `game_data`, the game's own interface catalogue.
 - `tests/test_game_data.py` (marker `game_data`): the game's own data from Blizzard's CDN (no

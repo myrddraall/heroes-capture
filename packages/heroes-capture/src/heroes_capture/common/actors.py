@@ -79,6 +79,21 @@ def unit_names(storage, map_mods: list[str], own_strings: str, unit_types: list[
     return names
 
 
+# The players each team's structures belong to (Heroes' Order is player 11, Chaos 12): actor events
+# and model aspects name them ("PlayerId 11 11", ModelOwnerHasPlayerId="11").
+TEAM_PLAYERS = {"order": 11, "chaos": 12}
+
+
+def for_player(terms: str, player: int | None) -> bool | None:
+    """Whether an actor event's terms hold for `player`: True or False where they name players
+    ("PlayerId <first> <last>"), None where they name none."""
+    found = re.search(r"\bPlayerId (\d+)(?: (\d+))?", terms)
+    if not found:
+        return None
+    first, last = int(found.group(1)), int(found.group(2) or found.group(1))
+    return player is not None and first <= player <= last
+
+
 class Catalog:
     """The actors and models of a map's data (catalog texts in load order)."""
 
@@ -141,14 +156,16 @@ class Catalog:
                 for t, s in self._events(actor_id)]
 
     def _events(self, actor_id: str) -> list[tuple[str, str]]:
-        found = []
+        found, removed = [], set()
         for entry in self._chain(self.actors, actor_id):
             for el in entry["elements"]:
                 if el.tag == "On":
                     found.append((el.get("Terms", ""), el.get("Send", "")))
+                elif el.tag == "Remove":  # a later catalog's (a map's mod) taking an event out
+                    removed.add((el.get("Terms", ""), el.get("Send", "")))
                 elif el.tag == "Macros" and el.get("value") in self.actors:
                     found += [(e.get("Terms", ""), e.get("Send", "")) for e in self.actors[el.get("value")]["elements"] if e.tag == "On"]
-        return found
+        return [e for e in found if e not in removed]
 
     def actor_model(self, actor_id: str) -> str | None:
         """The model an actor shows (its own or its nearest parent's Model)."""
@@ -187,11 +204,21 @@ class Catalog:
         return {"actor": actor_id, "class": entry["class"].removeprefix("CActor"), "on": how,
                 "models": list(dict.fromkeys(models)), "children": [c for c in children if shows(c)]}
 
-    def death_models(self, actor_id: str) -> list[str]:
+    def death_models(self, actor_id: str, player: int | None = None) -> list[str]:
         """The models an actor's structure leaves when it dies: its normal death's (DeathArray
         Normal, its own or its nearest parent's) and its death variations' (DeathCustoms: a wall's,
-        a gate's), with the templates' ##unitName## filled in; "Invisible" left out."""
+        a gate's), with the templates' ##unitName## filled in; "Invisible" left out. For `player`,
+        the variation its death is customized to for that player when it is ("UnitDeathCustomize;
+        PlayerId" "DeathCustomize <name>": Battlefield of Eternity's Heaven and Hell deaths)."""
         unit = self.actors[actor_id]["unit"] or actor_id
+        if player is not None:
+            names = [send.split()[1] for terms, send in self.events(actor_id)
+                     if "UnitDeathCustomize" in terms and for_player(terms, player) is True and send.startswith("DeathCustomize ")]
+            for entry in self._chain(self.actors, actor_id) if names else ():
+                for el in entry["elements"]:
+                    link = el.get("ModelLink")
+                    if el.tag == "DeathCustoms" and el.get("Name") in names and link and link.replace("##unitName##", unit) in self.models:
+                        return [link.replace("##unitName##", unit)]
         normal, customs = None, []
         for entry in self._chain(self.actors, actor_id):
             for el in entry["elements"]:
@@ -205,13 +232,37 @@ class Catalog:
                     customs.append(link)
         return [m for m in dict.fromkeys(([normal] if normal else []) + customs) if m in self.models]
 
-    def finished_model(self, actor_id: str) -> str | None:
+    def finished_model(self, actor_id: str, player: int | None = None) -> str | None:
         """The model an actor shows once built: the one it swaps to when its build animation ends
         on its birth model ("AnimDone; AnimName Build" ... "ModelSwap <model>": a level 3 tower,
-        a gate, a keep), else its own."""
-        for terms, send in self.events(actor_id):
-            if "AnimDone" in terms and ("AnimName Build" in terms or "AnimName Birth" in terms) and send.startswith("ModelSwap "):
-                return send.split()[1]
+        a gate, a keep), else its own. For `player` (TEAM_PLAYERS), what the actor picks for that
+        player first, as Battlefield of Eternity's Heaven and Hell structures do: such a swap whose
+        terms name the player, its model aspect for the player ("ModelOwnerHasPlayerId": a wall, a
+        moonwell), its model customized for the player as it is made ("AssetPreInit; PlayerId"
+        "ModelLinkCustomize <model>": a fort)."""
+        events = self.events(actor_id)
+
+        def built(mine, names=("AnimName Build", "AnimName Birth")) -> str | None:
+            for terms, send in events:
+                if mine(terms) and "AnimDone" in terms and (names is None or any(n in terms for n in names)) and send.startswith("ModelSwap "):
+                    return send.split()[1]
+            return None
+
+        if player is not None:
+            # (Any animation's end, for the player: a core swaps to its finished model when its
+            # "CoreStart" ends.)
+            if found := built(lambda terms: for_player(terms, player) is True, None):
+                return found
+            for entry in self._chain(self.actors, actor_id):
+                for el in entry["elements"]:
+                    for aspect in el.iter("Aspects") if el.tag == "ModelAspectSets" else ():
+                        if aspect.get("ModelOwnerHasPlayerId") == str(player) and aspect.get("Model"):
+                            return aspect.get("Model")
+            for terms, send in events:
+                if "AssetPreInit" in terms and for_player(terms, player) is True and send.startswith("ModelLinkCustomize "):
+                    return send.split()[1]
+        if found := built(lambda terms: for_player(terms, player) is not False):
+            return found
         model = self.actor_model(actor_id)
         # A template's model, "##unitName##" (a fort's, a moonwell's): the model named for the unit.
         unit = self.actors[actor_id]["unit"] or actor_id
@@ -335,16 +386,24 @@ def model_parts(storage, catalog: Catalog, model_ids: list[str]) -> dict[str, di
 def team_colour(m3: bytes) -> dict[str, bool]:
     """Whether a model draws team colour (common/m3.py has_team_colour) in each of its sequences
     a structure is shot in: Stand (standing), Death (its remains, shot while it plays) and Dead
-    (after it); a sequence the model lacks, or a file the reader can't read, left out."""
+    (after it); a sequence the model lacks, or a file the reader can't read, left out. A model with
+    no team colour in any of its materials draws none in any of them, those it lacks included
+    (Battlefield of Eternity's walls: no Stand sequence, only GLstand)."""
     from heroes_capture.common.m3 import M3
 
     found = {}
     try:
         model = M3(m3)
+        if not model.has_team_colour():
+            return {sequence: False for sequence in ("Stand", "Death", "Dead")}
         groups = model.groups()
         for sequence in ("Stand", "Death", "Dead"):
             if sequence in groups:
                 found[sequence] = model.has_team_colour(sequence)
+        # Standing, a model without a Stand sequence plays its global loop (Battlefield of Eternity's
+        # Hell towers: GLstand only).
+        if "Stand" not in found and "GLstand" in groups:
+            found["Stand"] = model.has_team_colour("GLstand")
     except (ValueError, struct.error, IndexError, KeyError):
         pass
     return found
@@ -356,22 +415,30 @@ def tree_models(tree: list[dict]) -> list[str]:
 
 
 def report(storage, map_mods: list[str], own_texts: list[str], unit_types: list[str], doodad_types: list[str], own_strings: str = "") -> dict:
-    """The calibration's data report: each structure type's actor tree and finished model (the
-    standing timing restarts it), its name as the game shows it (unit_names; `own_strings`: the
-    map's GameStrings), and the moving parts and animations of every model those show and of every
-    doodad type placed (a doodad's type is its model)."""
+    """The calibration's data report: each structure type's actor tree, finished model (the
+    standing timing restarts it) and death models, and each team's where the actor picks them by
+    player ("teams": {type: {team: {stand, deaths}}}), its name as the game shows it (unit_names;
+    `own_strings`: the map's GameStrings), and the moving parts and animations of every model those
+    show and of every doodad type placed (a doodad's type is its model)."""
     catalog = Catalog(catalog_texts(storage, map_mods) + own_texts)
     trees = {t: catalog.tree(t) for t in unit_types}
     # Each type's finished model: its unit actor's (the actor named for the unit, else the first its
     # birth creates).
-    finished, deaths = {}, {}
+    # Each team's, where the actor picks them by player (Battlefield of Eternity's Heaven and Hell).
+    finished, deaths, teams = {}, {}, {}
     for t in unit_types:
         actor = t if t in catalog.actors else next(iter(catalog.born.get(t, [])), None)
-        if actor and (model := catalog.finished_model(actor)) and not model.startswith("##"):
+        if not actor:
+            continue
+        if (model := catalog.finished_model(actor)) and not model.startswith("##"):
             finished[t] = model
-        if actor:
-            deaths[t] = catalog.death_models(actor)
+        deaths[t] = catalog.death_models(actor)
+        for team, player in TEAM_PLAYERS.items():
+            stand, died = catalog.finished_model(actor, player), catalog.death_models(actor, player)
+            if (stand and stand != model and not stand.startswith("##")) or died != deaths[t]:
+                teams.setdefault(t, {})[team] = {"stand": stand if stand and not stand.startswith("##") else finished.get(t), "deaths": died}
+    team_models = [m for by_team in teams.values() for v in by_team.values() for m in [v["stand"], *v["deaths"]] if m]
     models = model_parts(storage, catalog, list(dict.fromkeys([m for t in trees.values() for m in tree_models(t)] + list(finished.values())
-                                                              + [m for d in deaths.values() for m in d] + doodad_types)))
+                                                              + [m for d in deaths.values() for m in d] + team_models + doodad_types)))
     return {"structures": trees, "names": unit_names(storage, map_mods, own_strings, unit_types), "standModels": finished,
-            "deathModels": deaths, "models": models, "doodads": {t: models[t] for t in doodad_types}}
+            "deathModels": deaths, "teams": teams, "models": models, "doodads": {t: models[t] for t in doodad_types}}

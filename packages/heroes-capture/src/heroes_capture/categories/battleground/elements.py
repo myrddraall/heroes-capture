@@ -224,12 +224,42 @@ def group_outposts(structures: list[dict], towns: list[dict]) -> list[dict]:
 # The death model the game's town structures share (a tower's remains are its dead state's and
 # explosions', not in its death list): no say on whether a structure's remains are team-coloured.
 GENERIC_DEATH = "TownStructureDeathAnimation"
+# Cells within which another structure counts as a neighbour that can overlap a structure on screen
+# when the data report can't tell their models' reach (may_overlap): a wall's end on a tower, a gate
+# between its towers.
+NEIGHBOUR_REACH = 10.0
+
+
+def stand_model(u: dict, report: dict) -> str | None:
+    """A structure's finished model: its team's where the data picks one by team (the report's
+    "teams": Battlefield of Eternity's Heaven and Hell), else its type's."""
+    team = ((report.get("teams") or {}).get(u["type"]) or {}).get(u.get("owner")) or {}
+    return team.get("stand") or (report.get("standModels") or {}).get(u["type"])
+
+
+def stand_kind(u: dict, report: dict) -> str:
+    """What a structure's standing film and standing time are kept by: its type, or "<type>|<team>"
+    where the two teams' finished models differ (Battlefield of Eternity's Heaven and Hell)."""
+    stands = {stand_model({**u, "owner": team}, report) for team in ("order", "chaos")}
+    return f"{u['type']}|{u.get('owner')}" if len(stands) > 1 else u["type"]
+
+
+def by_stand_kind(table: dict, u: dict):
+    """A structure's entry in a table kept by stand_kind: its type and team's, else its type's."""
+    found = table.get(f"{u['type']}|{u.get('owner')}")
+    return found if found is not None else table.get(u["type"])
+
+
+def death_models(u: dict, report: dict) -> list[str]:
+    """A structure's death models: its team's where the data picks them by team, else its type's."""
+    team = ((report.get("teams") or {}).get(u["type"]) or {}).get(u.get("owner")) or {}
+    return team.get("deaths") or (report.get("deathModels") or {}).get(u["type"], [])
 
 
 def standing_team_colour(u: dict, report: dict) -> bool | None:
     """Whether a structure's finished model draws team colour standing (the data report's,
     common/m3.py); None when the report can't tell."""
-    model = (report.get("models") or {}).get((report.get("standModels") or {}).get(u["type"]))
+    model = (report.get("models") or {}).get(stand_model(u, report))
     return (model or {}).get("teamColour", {}).get("Stand")
 
 
@@ -238,7 +268,7 @@ def rubble_team_colour(u: dict, report: dict) -> bool | None:
     death plays or after (its remains are shot while it plays). None when the report can't tell
     (no death model of its own, as a tower: it dies into a dead state and explosions)."""
     models = report.get("models") or {}
-    own = [m for m in (report.get("deathModels") or {}).get(u["type"], []) if m != GENERIC_DEATH and m in models]
+    own = [m for m in death_models(u, report) if m != GENERIC_DEATH and m in models]
     if not own:
         return None
     found = [v for m in own for v in (models[m].get("teamColour") or {}).values()]
@@ -249,7 +279,7 @@ def stand_reach(u: dict, report: dict, distance: float) -> float | None:
     """How far a structure's finished model can reach on screen from its cell, in cells: its mesh's
     reach across the ground at its top's height, as the capture camera (`distance` up, straight
     down) sees it: r·d/(d−h). None when the report can't tell."""
-    model = (report.get("models") or {}).get((report.get("standModels") or {}).get(u["type"])) or {}
+    model = (report.get("models") or {}).get(stand_model(u, report)) or {}
     extent = model.get("extent")
     if not extent:
         return None
@@ -464,8 +494,9 @@ LIGHT_WAIT = 2.0
 
 def stand_wait(structure: dict, picked: dict | None = None) -> float:
     """How long a structure runs from its restart before its shots (LIGHT_WAIT, or `picked`: the
-    map's standing times, by type: the animation is the same for both teams)."""
-    return (picked or {}).get(structure["type"], LIGHT_WAIT)
+    map's standing times, by stand_kind: by type, and team where the teams' models differ)."""
+    found = by_stand_kind(picked or {}, structure)
+    return LIGHT_WAIT if found is None else found
 
 
 def rubble_waves(structures: list[dict], radius=lambda u: u["radius"]) -> list[list[dict]]:

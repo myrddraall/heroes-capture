@@ -51,6 +51,8 @@ import numpy as np
 from heroes_capture.capture.sky import LIGHT_LEVEL, LIGHT_SKY
 from heroes_capture.capture.shots import STILL_CAP, STILL_GAP, SWITCH_CAP, differs, shot_over_black, still_frame, tile_command
 from heroes_capture.categories.battleground.elements import (
+    NEIGHBOUR_REACH,
+    by_stand_kind,
     called,
     goes_with_a_fort,
     may_overlap,
@@ -70,7 +72,7 @@ from heroes_capture.common.geometry import circle_box, screen_point
 
 from heroes_capture.common.game_control import Recoverable, settle, step
 from heroes_capture.common.jsonio import read_json, write_json
-from heroes_capture.common.runlog import log, stage, warn
+from heroes_capture.common.runlog import detail, log, stage, warn
 
 KILL_WAIT = 5.0  # the clearing's: everything left standing brought down, its rubble not shot
 
@@ -82,9 +84,6 @@ CAMP_WAIT = 5.0
 # freeze probe on Battlefield of Eternity: a gate's effects there by half a second, a Hell gate's
 # smoke still thickening at 2).
 PLAY_WAIT = 3.0
-# Cells within which another structure is a neighbour whose overlap with a structure is measured
-# (stand): a wall's end on a tower, a gate between its towers.
-NEIGHBOUR_REACH = 10.0
 # Structures faded in one command at most ("<x> <y> <opacity>" each: the script reads 17 words).
 FADES_A_COMMAND = 4
 # Seconds from a structure shown (or a camp frozen) to its shot: a frame or two to be drawn.
@@ -296,7 +295,7 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         shown.update(structure=u, neighbour=None)
         # Its animations started over and paused at its kind's standing time (picked in the
         # calibration's review): every run catches it at the same moment, its effects lit.
-        send(f"el restart {u['x']:g} {u['y']:g} {(manifest.get('standModels') or {}).get(u['type'], '')}".rstrip())
+        send(f"el restart {u['x']:g} {u['y']:g} {by_stand_kind(manifest.get('standModels') or {}, u) or ''}".rstrip())
         settle(stand_wait(u, manifest.get("standWaits")))
         send(f"el hold {u['x']:g} {u['y']:g}")
         key = element_key("structure", u, "standing")
@@ -413,11 +412,13 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         whatever side our player is put on, so its remains are repainted in the other side's colour
         ("el paint": the game's SetTeamColor, with its hostile or ally colours, manifest
         "teamColours") and shot again. Both shots as drawn come first (the game's ClearTeamColor
-        doesn't put the colour back: Dragon Shire's keeps stayed repainted), then the light sky back
-        (held still), the repaint, and both repainted. The same remains each time, nothing switched.
-        Remains that don't change when repainted have no team colour: no Chaos shots (Dragon
-        Shire's moonwells': a side switch seemed to change theirs, but what changed was their debris
-        moving). Remains with nothing in their circle are noted ("empty": a copy that fell to nothing)."""
+        doesn't put the colour back: Dragon Shire's keeps stayed repainted, so none is sent), then
+        the repaint with the sky still black, its shot over black, and only when that differs from
+        the one as drawn the light sky back and its shot over it: remains that don't change have no
+        team colour, no Chaos shots, and no sky swapped back for nothing (the next move puts the
+        light sky back). Remains with nothing in their circle are noted ("empty": a copy that fell
+        to nothing). Each one's step times in the diagnostic log."""
+        started_at = time.time()
         stem = element_key("structure", u, "rubble")
         radius = rubble_radius(u)
         other = (manifest.get("teamColours") or {}).get("hostile" if u.get("owner") == "order" else "ally")
@@ -428,30 +429,38 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         white = held(u, circle, first)
         black = shot_over_black(session, white)
         if white is None or black is None:
-            warn(f"{stem}: the game gave no picture")
+            warn(f"{called(u)}: no picture of its rubble")
             return None
         save(stem, white)
         save(f"{stem}-black", black)
+        drawn_at = time.time()
+
+        def timed(outcome: str) -> None:
+            detail(f"{called(u)} rubble: shots as drawn {drawn_at - started_at:.2f} s, then {time.time() - drawn_at:.2f} s ({outcome})")
+
         v0, v1, u0, u1 = circle
         inside = white[v0:v1, u0:u1, :3]
         if inside.size and float((np.abs(inside.astype(np.int16) - LIGHT_LEVEL).max(axis=2) > EMPTY_DIFF).mean()) < EMPTY_SHARE:
+            timed("empty")
             return {"camera": camera, "chaos": None, "empty": True}
-        if not other or rubble_team_colour(u, report) is False or not send(f"sky {LIGHT_SKY} 0"):
-            return {"camera": camera, "chaos": None}
-        light = held(u, circle)
         paint = f"el paint {at['x']:g} {at['y']:g} {radius:g}"
-        if light is None or not send(f"{paint} SetTeamColor~{','.join(map(str, other['diffuse']))}~{','.join(map(str, other.get('emissive', other['diffuse'])))}"):
+        if not other or rubble_team_colour(u, report) is False or \
+                not send(f"{paint} SetTeamColor~{','.join(map(str, other['diffuse']))}~{','.join(map(str, other.get('emissive', other['diffuse'])))}"):
+            timed("no team colour in its data" if other and rubble_team_colour(u, report) is False else "not repainted")
             return {"camera": camera, "chaos": None}
         # Repainted at once (SetTeamColor has no blend time): drawn a frame or two later.
         settle(SHOW_SETTLE)
-        chaos_white = held(u, circle)
-        changed = chaos_white is not None and differs(light, chaos_white, [circle])
-        chaos_black = shot_over_black(session, chaos_white) if changed else None
-        send(f"{paint} ClearTeamColor")
-        if chaos_black is None:
+        chaos_black = held(u, circle)
+        if chaos_black is None or not differs(black, chaos_black, [circle]):
+            timed("no change repainted")
+            return {"camera": camera, "chaos": None}
+        chaos_white = held(u, circle) if send(f"sky {LIGHT_SKY} 0") else None
+        if chaos_white is None:
+            timed("no picture repainted")
             return {"camera": camera, "chaos": None}
         save(f"{stem}-chaos", chaos_white)
         save(f"{stem}-chaos-black", chaos_black)
+        timed("repainted")
         return {"camera": camera, "chaos": f"{stem}-chaos"}
 
     fell_to_nothing: list[dict] = []

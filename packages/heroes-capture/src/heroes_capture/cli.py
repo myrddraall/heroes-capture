@@ -764,6 +764,36 @@ def render(
     cleaned_up(work, clean)
 
 
+@map_app.command("survey")
+def survey(
+    map_name: Annotated[str, typer.Argument(metavar="MAP", help="The map as the game names it (case and punctuation don't matter).")],
+    output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Where the maps' folders go: the survey goes in <output-dir>/<map id>/survey.json.")] = MAPS,
+) -> None:
+    """Step 1 of a new map: what its files and the game's data say about it, and so what its calibration will measure and what the data answers instead (no game needed: the data comes from the install, or Blizzard's servers).
+
+    Its odd cases come out as questions for the calibration's review.
+    """
+    import tempfile
+
+    from heroes_capture.capture import prepare
+    from heroes_capture.categories.battleground import survey as surveying
+    from heroes_capture.common import game_data
+    from heroes_capture.common.jsonio import write_json
+
+    (map_spec, name), = maps_to_render(map_name, None, known_maps())[0]
+    log_to(TMP)
+    with tempfile.TemporaryDirectory() as work:
+        with ui.folder(f"{name}: survey", section=True), ui.step("Reading the map and the game's data"):
+            manifest_path = prepare.main([map_spec, "--structures", "elements", "--calibrate", "--out", work], specifics_of_map)
+        found = surveying.survey(read_json(manifest_path))
+    target = output_dir / game_data.slug(name) / "survey.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    write_json(target, found, indent=1)
+    for line in surveying.lines(found):
+        ui.show(line)
+    ui.done(f"survey saved in {target}")
+
+
 @map_app.command("calibrate", context_settings=PASS_THROUGH, options_metavar="[OPTIONS] MAP")
 def calibrate(
     ctx: typer.Context,
@@ -1001,18 +1031,20 @@ def ui_extract(
 def ui_background(
     output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Where the scene and its textures go.")] = Path("assets") / "backgrounds" / "play",
 ) -> None:
-    """Export the Play screen's background for a browser to draw: for now its sky, the energy drifting towards the horizon and the twinkling stars.
+    """Export the Play screen's background for a browser to draw: its sky, the energy drifting towards the horizon, the twinkling stars and the planets, and more planets for the app to put up in sets of its own.
 
-    From the game's data: the camera, light and animation of the cutscene the Play screen runs, and its model's meshes, materials and particles (scene.json), with the textures they use as WebP.
+    From the game's data: the camera, light and animation of the cutscene the Play screen runs, and its model's meshes, materials and particles (scene.json), with the textures they use as WebP; and the planets (planets/), the Play screen's own and the tutorial flyby's, each in a file of its own.
     """
     from heroes_capture.common.game_data import game_storage
+    from heroes_capture.ui.planets import export as export_planets
     from heroes_capture.ui.play_background import export
 
     log_to(TMP)
     with kept_on_failure(TMP), ui.step("Exporting the Play screen's background"):
         with game_storage() as storage:
             scene = export(storage, output_dir)
-    size = sum(f.stat().st_size for f in output_dir.iterdir() if f.is_file())
+            export_planets(storage, output_dir)
+    size = sum(f.stat().st_size for f in output_dir.rglob("*") if f.is_file())
     ui.done(f"The Play screen's background in {output_dir} ({size / 1e3:.0f} kB, game build {scene['source']['build']})")
     clean_up([ui.log_file()], False)
 

@@ -90,15 +90,34 @@ def camera(attrs: dict) -> dict:
 
 
 def model_file(storage: Storage, model_id: str) -> bytes:
-    """A CModel's .m3 file, by its id (its Model field, in the game's GameData)."""
-    for name in storage.find("*\\gamedata\\*modeldata.xml"):
-        text = (storage.read(name) or b"").decode("utf-8-sig", errors="replace")
-        entry = re.search(rf'<CModel\b[^>]*\bid="{re.escape(model_id)}"[^>]*>(.*?)</CModel>', text, re.S)
-        path = entry and re.search(r'<Model value="([^"]+)"', entry.group(1))
-        if path:
-            hits = storage.find("*\\" + path.group(1).lower().replace("/", "\\"))
+    """A CModel's .m3 file, by its id: its Model field, in the game's GameData, or the first of its
+    parents' (a doodad's parent Doodad says Assets\\Doodads\\##id##\\##id##.m3), ##id## being the
+    model's own id."""
+    catalogs = [(storage.read(n) or b"").decode("utf-8-sig", errors="replace") for n in storage.find("*\\gamedata\\*modeldata.xml")]
+
+    def entry(id_: str):
+        for text in catalogs:
+            found = re.search(rf'<CModel\b([^>]*)\bid="{re.escape(id_)}"([^>]*?)(/>|>(.*?)</CModel>)', text, re.S)
+            if found:
+                return found
+        return None
+
+    seen: set[str] = set()
+    current: str | None = model_id
+    while current and current not in seen:
+        seen.add(current)
+        found = entry(current)
+        if not found:
+            break
+        value = re.search(r'<Model value="([^"]+)"', found.group(4) or "")
+        if value:
+            path = value.group(1).replace("##id##", model_id)
+            hits = storage.find("*\\" + path.lower().replace("/", "\\"))
             if hits:
                 return storage.read(hits[0]) or b""
+            break
+        parent = re.search(r'\bparent="([^"]+)"', (found.group(1) or "") + (found.group(2) or ""))
+        current = parent.group(1) if parent else None
     raise SystemExit(f"the game's data has no model file for {model_id}")
 
 
@@ -110,7 +129,7 @@ class Export:
         self.materials: dict[str, dict] = {}
         self.textures: dict[str, str] = {}  # key -> the texture's file name
         self.alpha_read: set[str] = set()  # the textures a layer reads the alpha of
-        self.keys: dict[int, str] = {}  # material record (its offset in the file) -> its key
+        self.keys: dict[tuple[int, int], str] = {}  # material record (its model, its offset in the file) -> its key
 
     def value(self, animated, at: int = 0) -> tuple:
         """An animated value as the played sequences have it (at the start), else its initial one."""
@@ -156,8 +175,8 @@ class Export:
         return out
 
     def material(self, record) -> str:
-        if record.at in self.keys:
-            return self.keys[record.at]
+        if (id(self.m3), record.at) in self.keys:
+            return self.keys[(id(self.m3), record.at)]
         name = record.text("name")
         key = base = re.sub(r"[^a-zA-Z0-9]+", "", name[:1].lower() + name[1:])
         # Names can differ only in characters a key drops ("Material #6~DUP", "Material #6~DUP\x04~").
@@ -165,7 +184,7 @@ class Export:
             if key not in self.materials:
                 break
             key = f"{base}{n}"
-        self.keys[record.at] = key
+        self.keys[(id(self.m3), record.at)] = key
         if key not in self.materials:
             flags = record["flags"]
             masks = [self.layer(record[k]) for k in ("alphaMaskLayer", "alphaMask2Layer")]

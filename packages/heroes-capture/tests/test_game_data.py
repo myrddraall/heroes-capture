@@ -152,6 +152,16 @@ def test_a_model_s_team_colour_is_read_from_its_materials(storage):
     assert model("*storm_building_kingscrest_fort_death.m3").has_team_colour("Dead")
     moonwell_death = model("*storm_building_ds19kingscrest_manawell_death.m3")
     assert moonwell_death.has_team_colour("Death") and not moonwell_death.has_team_colour("Dead")
+    # A model with no team colour anywhere draws none in the sequences it lacks either: Battlefield
+    # of Eternity's walls have no Stand sequence (only GLstand; their variations numbered).
+    from heroes_capture.common.actors import team_colour
+
+    wall = storage.read(storage.find("*storm_building_hell_wall_00.m3")[0])
+    assert team_colour(wall) == {"Stand": False, "Death": False, "Dead": False}
+    # A model with no Stand sequence, standing, plays its global loop: the Hell tower's GLstand.
+    assert team_colour(storage.read(storage.find("*storm_building_hell_tower_00.m3")[0])) == {"Stand": True}
+    # An older model version (MODL 28, the Hell keep's death) read as well: no team colour in it.
+    assert team_colour(storage.read(storage.find("*storm_building_hell_keep_death.m3")[0])) == {"Stand": False, "Death": False, "Dead": False}
 
 
 def test_structures_are_named_as_the_game_shows_them(storage):

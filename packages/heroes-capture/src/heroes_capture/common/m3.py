@@ -22,6 +22,12 @@ LAYOUTS: dict[tuple[str, int], dict[str, tuple[int, str]]] = {
                    "vFlags": (96, "u32"), "vertices": (100, "ref"), "divisions": (112, "ref"), "boneLookup": (124, "ref"),
                    "materialReferences": (300, "ref"), "standardMaterials": (312, "ref"), "compositeMaterials": (336, "ref"),
                    "particles": (444, "ref"), "billboards": (816, "ref"), "inverseBoneRest": (648, "ref")},
+    # Version 28 (Battlefield of Eternity's Hell keep's death): one reference fewer before the
+    # particles (attachmentVolumes), the rest the same (structures.xml).
+    ("MODL", 28): {"sequences": (16, "ref"), "stc": (28, "ref"), "stg": (40, "ref"), "bones": (80, "ref"),
+                   "vFlags": (96, "u32"), "vertices": (100, "ref"), "divisions": (112, "ref"), "boneLookup": (124, "ref"),
+                   "materialReferences": (300, "ref"), "standardMaterials": (312, "ref"), "compositeMaterials": (336, "ref"),
+                   "particles": (432, "ref"), "billboards": (804, "ref"), "inverseBoneRest": (636, "ref")},
     ("DIV_", 2): {"faces": (0, "ref"), "regions": (12, "ref"), "batches": (24, "ref")},
     ("REGN", 5): {"firstVertex": (8, "u32"), "vertices": (12, "u32"), "firstFace": (16, "u32"), "faces": (20, "u32"),
                   "firstBoneLookup": (26, "u16"), "boneLookups": (28, "u16"), "uvwMult": (40, "f32"), "uvwOffset": (44, "f32")},
@@ -326,7 +332,7 @@ class M3:
         raise ValueError(f"m3 material type {kind}: not one this tool reads")
 
 
-RECORD_SIZES = {("MODL", 29): 856, ("DIV_", 2): 52, ("REGN", 5): 48, ("BAT_", 1): 14, ("MATM", 0): 8, ("BONE", 1): 160,
+RECORD_SIZES = {("MODL", 28): 844, ("MODL", 29): 856, ("DIV_", 2): 52, ("REGN", 5): 48, ("BAT_", 1): 14, ("MATM", 0): 8, ("BONE", 1): 160,
                 ("BBSC", 0): 48, ("CMP_", 2): 28, ("CMS_", 0): 24, ("STC_", 4): 204, ("STG_", 0): 24, ("SEQS", 2): 92, ("MAT_", 19): 340,
                 ("LAYR", 26): 464, ("PAR_", 24): 1496}
 SEQUENCE_DATA_SIZE = {(t, 0): 32 for t in ("SD2V", "SD3V", "SD4Q", "SDR3", "SDS6", "SDCC", "SDU3", "SDFG")}

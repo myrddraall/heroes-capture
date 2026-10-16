@@ -51,7 +51,7 @@ from PIL import Image
 from scipy import ndimage
 
 from heroes_capture.capture.shots import still_frame, tile_command
-from heroes_capture.categories.battleground.elements import called, rubble_radius, standing_team_colour
+from heroes_capture.categories.battleground.elements import called, rubble_radius, stand_kind, stand_model, standing_team_colour
 from heroes_capture.common import ui
 from heroes_capture.common.game_control import Recoverable, settle, step
 from heroes_capture.common.geometry import circle_box, screen_point
@@ -450,25 +450,30 @@ def pausing_probe(session, manifest: dict, folder: Path, motion: list[dict], sen
 STAND_LEAST, STAND_MARGIN, STAND_MOST, STAND_FRAMES = 4.0, 3.0, 30.0, 48
 
 
-def standing_sequences(structure_type: str, report: dict) -> list[dict]:
-    """A type's finished model's standing sequences (Stand, GLstand; not its Stand Work ones)."""
-    model = (report.get("standModels") or {}).get(structure_type)
+def _structure(u: dict | str) -> dict:
+    return u if isinstance(u, dict) else {"type": u}
+
+
+def standing_sequences(u: dict | str, report: dict) -> list[dict]:
+    """A structure's (or a type's) finished model's standing sequences (Stand, GLstand; not its
+    Stand Work ones): its team's where the teams' differ (elements.stand_model)."""
+    model = stand_model(_structure(u), report)
     return [q for q in ((report.get("models") or {}).get(model) or {}).get("sequences", [])
             if q["name"].lower().startswith(("stand", "glstand")) and "work" not in q["name"].lower()]
 
 
-def stand_seconds(structure_type: str, report: dict) -> float:
+def stand_seconds(structure_type: dict | str, report: dict) -> float:
     """How long a type's standing film runs: its finished model's longest standing sequence and
     STAND_MARGIN more (see the note above)."""
     standing = [q["seconds"] for q in standing_sequences(structure_type, report)]
     return min(STAND_MOST, max(STAND_LEAST, max(standing, default=0.0) + STAND_MARGIN))
 
 
-def stand_extent(structure_type: str, report: dict) -> tuple[float, float] | None:
+def stand_extent(structure_type: dict | str, report: dict) -> tuple[float, float] | None:
     """How far a type's finished model reaches across the ground from the structure's spot
     (whichever way it faces) and how high, in cells: its mesh's (actors.m3_extent), at its largest
     size."""
-    model = ((report.get("models") or {}).get((report.get("standModels") or {}).get(structure_type)) or {})
+    model = ((report.get("models") or {}).get(stand_model(_structure(structure_type), report)) or {})
     if not model.get("extent"):
         return None
     scale = model.get("scale", 1.0)
@@ -511,14 +516,15 @@ def thinned(frames: list, most: int) -> tuple[list, int]:
 
 
 def standing_films(session, manifest: dict, folder: Path, send) -> dict:
-    """Each type's standing film (see the note above), by type: its strip, its step and how many
-    frames, how long it ran, and the structure filmed."""
+    """Each type's standing film (see the note above), by elements.stand_kind (by type, and team
+    where the teams' finished models differ: Battlefield of Eternity's Heaven and Hell): its strip,
+    its step and how many frames, how long it ran, the model and the structure filmed."""
     structures = (manifest.get("elements") or {}).get("structures", [])
+    report = (manifest.get("elements") or {}).get("report") or {}
     chosen: dict[str, dict] = {}
     for u in structures:
-        chosen.setdefault(u["type"], u)
+        chosen.setdefault(stand_kind(u, report), u)
     screen, ppc = manifest["screen"], manifest["pxPerCell"]
-    report = (manifest.get("elements") or {}).get("report") or {}
     films: dict[str, dict] = {}
     shown: dict | None = None
     send(tile_command(manifest["tiles"][0]))
@@ -532,14 +538,14 @@ def standing_films(session, manifest: dict, folder: Path, send) -> dict:
                 send(f"el at {u['x']:.2f} {u['y']:.2f} " + " ".join(f"{s['x']:g} {s['y']:g} {v}" for s, v in fading))
                 shown = u
                 # In closer (the capture's view straight down, nearer), as far as its model still fits.
-                extent = stand_extent(u["type"], report)
+                extent = stand_extent(u, report)
                 distance = stand_distance(extent, manifest)
                 closer = manifest["distance"] / distance
                 send(f"el wide {u['x']:.2f} {u['y']:.2f} {distance:g}", timeout=6.0)
                 camera = session.camera({"x": u["x"], "y": u["y"]})
                 crop = None
-                seconds = stand_seconds(u["type"], report)
-                send(f"el restart {u['x']:g} {u['y']:g} {(report.get('standModels') or {}).get(u['type'], '')}".rstrip())
+                seconds = stand_seconds(u, report)
+                send(f"el restart {u['x']:g} {u['y']:g} {stand_model(u, report) or ''}".rstrip())
                 started, frames = time.time(), []
                 while len(frames) * FILM_STEP < seconds:
                     settle(max(0.0, started + len(frames) * FILM_STEP - time.time()))
@@ -551,8 +557,8 @@ def standing_films(session, manifest: dict, folder: Path, send) -> dict:
                     frames.append(frame[v0:v1, u0:u1].copy())
                 send(f"el hold {u['x']:g} {u['y']:g}")
                 kept, every = thinned(frames, STAND_FRAMES)
-                films[kind] = {"id": u["id"], "model": (report.get("standModels") or {}).get(u["type"]), "closer": round(closer, 3),
-                               "extent": extent, "film": _film_strip(folder, f"stand-{u['type']}", kept), "columns": film_columns(len(kept)),
+                films[kind] = {"id": u["id"], "model": stand_model(u, report), "closer": round(closer, 3),
+                               "extent": extent, "film": _film_strip(folder, f"stand-{kind.replace('|', '-')}", kept), "columns": film_columns(len(kept)),
                                "step": FILM_STEP * every, "frames": len(kept), "seconds": seconds}
             step(film, f"filming {kind} standing")
             advance()
