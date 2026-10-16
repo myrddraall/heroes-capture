@@ -27,7 +27,7 @@ def start_watch(region: dict, folder: Path) -> None:
     def run() -> None:
         started = time.time()
         with _mss() as sct, open(folder / "index.txt", "a", encoding="utf-8") as index:
-            while not stop.is_set() and current["stage"] != "tiles" and time.time() - started < WATCH_LIMIT:
+            while not stop.is_set() and current["stage"] != "Tiles (blue)" and time.time() - started < WATCH_LIMIT:
                 at = time.time() - started
                 shot = sct.grab(region)
                 image = Image.frombytes("RGB", shot.size, shot.rgb)

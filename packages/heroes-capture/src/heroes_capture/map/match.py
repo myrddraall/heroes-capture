@@ -20,7 +20,7 @@ from heroes_capture.common.game_control import (
 )
 from heroes_capture.common.game_state import IN_MAP, LOADING, MAP_FAILED, MENU, NOT_RUNNING, game_state
 from heroes_capture.common.game_window import foreground_is_game, game_region, game_running, hold_key, type_unicode
-from heroes_capture.common.runlog import log, warn
+from heroes_capture.common.runlog import detail, log, warn
 from heroes_capture.common.screen import ScreenGrabber
 from heroes_capture.map.status import StatusStrip
 
@@ -73,7 +73,7 @@ def launch_map(manifest: dict, game: str, battlenet: str | None, monitor: str | 
         except OSError:
             pass  # still open in a running game
     stormmap = str(shutil.copy(manifest["stormmap"], local / f"{manifest['id']}-{int(time.time())}.stormmap"))
-    log(f"launching {manifest['map']} ({len(manifest['tiles'])} tiles) ...")
+    log(f"launching {manifest['map']}")
     subprocess.Popen([str(switcher), stormmap])
 
 
@@ -85,7 +85,7 @@ def wait_for_map_load(launched: bool) -> None:
     wait_for_game()
     if not launched:
         return
-    log("waiting for the map to load ...")
+    log("waiting for the map to load")
     started, failed_since = time.time(), None
     with ScreenGrabber(game_region(), duplication=False) as screen:
         while time.time() - started < 60:
@@ -116,7 +116,7 @@ def quit_match(wait: bool = True) -> None:
         grabber.release_duplication()  # nothing holds the game's screen while it leaves
     try:
         step(lambda: send_command("quit 0"), "sending quit")
-        log("leaving the match ...")
+        detail("quit sent")
         wait_for_menu(quit_sent=True, until_leaving=not wait)
     except Exception as e:  # a failed check must not cost the run its stitch
         warn(f"couldn't watch for the menu ({type(e).__name__}: {e}); waiting 45 s instead")
@@ -141,7 +141,7 @@ def wait_for_menu(quit_sent: bool = False, until_leaving: bool = False) -> None:
             # the window where its settings say): the reading follows it, or it would look at the
             # wrong part of the desktop and never see the menu.
             if foreground_is_game() and (region := game_region()) != screen.region:
-                log(f"  the game's window is now {region['width']}x{region['height']} at ({region['left']}, {region['top']}); following it")
+                detail(f"the game's window is now {region['width']}x{region['height']} at ({region['left']}, {region['top']}); following it")
                 screen.region = region
             seen = game_state(screen.grab() if foreground_is_game() else None, strip)
             if seen == IN_MAP and not resent and time.time() - started > 3:
@@ -156,10 +156,10 @@ def wait_for_menu(quit_sent: bool = False, until_leaving: bool = False) -> None:
                 dumped = True
                 dump_unrecognised(screen.grab() if foreground_is_game() else None, "menu-unseen")
             if until_leaving and state not in (IN_MAP, None):
-                log(f"  the match is ending ({state}); the next launch waits for the menu")
+                log("leaving the match")
                 return
             if state == NOT_RUNNING:
-                log("  the game closed while leaving the match (did it crash?)")
+                warn("the game closed while leaving the match (did it crash?)")
                 break
             if state == MAP_FAILED:
                 hold_key("enter")
@@ -168,10 +168,10 @@ def wait_for_menu(quit_sent: bool = False, until_leaving: bool = False) -> None:
                 break
             time.sleep(0.25)
         else:
-            log("  the game hadn't come back to the menu after 2 minutes; carrying on")
+            warn("the game hadn't come back to the menu after 2 minutes; carrying on")
         if phases[1:] or quit_sent:  # more than "menu" from the start: there was a match to leave
-            log("  leaving: " + ", ".join(phases))
+            detail("leaving: " + ", ".join(phases))
             if menu_looks >= 2:
-                log(f"left the match after {time.time() - started:.1f} s (back at the menu)")
+                log(f"left the match after {time.time() - started:.0f} s; back at the menu")
             elif state != NOT_RUNNING:
                 warn(f"gave up waiting for the menu after {time.time() - started:.0f} s: the match may still be running")

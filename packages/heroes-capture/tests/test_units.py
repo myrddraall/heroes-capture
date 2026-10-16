@@ -778,12 +778,9 @@ class _UnchangingSession(_FakeSession):
 @pytest.mark.parametrize("changes, sides", [(None, 1), (True, 1), (False, 0)])
 def test_a_structure_is_shot_from_chaos_s_side_unless_the_calibration_saw_it_unchanged(element_capture, tmp_path, monkeypatch, changes, sides):
     """One switch to Chaos's side for the whole pass (none when nothing in it can change): a
-    structure the calibration saw change watched for its change at length (SWITCH_CAP), one it
-    didn't measure briefly (the switch long drawn), one it saw unchanged not shot from Chaos's
-    side at all. (Its rubble is repainted, not switched: watched for PAINT_CAP.)"""
-    waited = []
-    real = element_capture.recoloured_frame
-    monkeypatch.setattr(element_capture, "recoloured_frame", lambda session, ref, boxes, cap: waited.append(cap) or real(session, ref, boxes, 0.0))
+    structure shot as from Order, with no wait for its colours to change (the switch long drawn);
+    one the calibration saw unchanged not shot from Chaos's side at all. Its rubble is repainted,
+    not switched, and shot the same way."""
     manifest = json.loads(json.dumps(ELEMENTS_MANIFEST))
     manifest["elements"]["structures"] = manifest["elements"]["structures"][:1]
     manifest["elements"]["camps"] = []
@@ -792,8 +789,6 @@ def test_a_structure_is_shot_from_chaos_s_side_unless_the_calibration_saw_it_unc
     session = _UnchangingSession()
     element_capture.capture_elements(session, manifest, tmp_path)
     assert session.sent.count("side 2") == sides
-    standing = {None: {element_capture.UNCHANGING_CAP}, True: {element_capture.SWITCH_CAP}, False: set()}[changes]
-    assert set(waited) == standing | {element_capture.PAINT_CAP}
     record = json.loads((tmp_path / "elements" / "elements.json").read_text())["structure-5-standing"]
     assert record["chaos"] is None  # (nothing changed on this screen)
 

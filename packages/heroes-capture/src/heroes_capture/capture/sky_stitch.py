@@ -344,7 +344,7 @@ def build(manifest: dict, base: Path, out: Path, images: list[str], composites: 
         return np.dstack([rgba, defined.astype(np.float32)])
 
     placements = {}
-    with stage("sky layer images"):
+    with stage("Sky layer images"):
         greys = list(ordered_map(grey, names))
         matches = {}
         for layer in sources:  # shots matched only with shots through the same lens
@@ -471,7 +471,7 @@ def build(manifest: dict, base: Path, out: Path, images: list[str], composites: 
         return img.affine([1 / a, 0, 0, 1 / c], odx=-b / a, ody=-d / c, oarea=[0, 0, mw, mh],
                           interpolate=pyvips.Interpolate.new("bilinear"), extend="background", background=[0, 0, 0, 0])
 
-    with stage("composites"):
+    with stage("Composites"):
         # Each composite rendered into memory once, then its files written in parallel.
         map_image = pyvips.Image.new_from_file(str(map_png))
         haze_and_map = at_map_scale("haze").composite2(map_image, "over").copy_memory()

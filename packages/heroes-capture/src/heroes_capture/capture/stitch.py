@@ -41,7 +41,7 @@ from heroes_capture.common.game_data import slug
 from heroes_capture.common.imaging import max3, nonzero_box
 from heroes_capture.common.jsonio import read_json, write_json
 from heroes_capture.common.matching import phase_correlate
-from heroes_capture.common.runlog import log, warn, log_timings, set_log_file, stage
+from heroes_capture.common.runlog import detail, log, warn, log_timings, set_log_file, stage
 from heroes_capture.common.workers import ordered_map
 from heroes_capture.map.specifics import Specifics
 
@@ -117,7 +117,7 @@ class Shots:
             if self.light_level is None:
                 self.light_level = light_level(load_frame(self.stem(i)), load_frame(self.black_stem(i)))
                 if self.light_level is not None:
-                    log(f"  light sky level {self.light_level:.1f}")
+                    detail(f"light sky level {self.light_level:.1f}")
             levels[i] = self.light_level or LIGHT_LEVEL
         return levels
 
@@ -146,7 +146,7 @@ def read_anchors(base: Path, by_index: dict, shots: Shots, present: list) -> dic
         i = int(key)
         if i in by_index and shots.exists(i):
             anchored[i] = (pos["x"], pos["y"])
-    log(f"camera positions: {len(anchored)} of {len(present)} screenshots anchored")
+    detail(f"camera positions: {len(anchored)} of {len(present)} screenshots anchored")
     if not anchored:
         raise SystemExit(f"{positions_path} has no position for any screenshot there is")
     return anchored
@@ -195,7 +195,7 @@ def scale_from_matches(edges: list, anchored: dict, planned: float) -> float:
             if abs(ey) >= 4:
                 estimates.append(dy / ey)
     scale = float(np.median(estimates)) if len(estimates) >= 6 else float(planned)
-    log(f"  scale {scale:.3f} px/cell from {len(estimates)} matched offsets (planned {planned})")
+    detail(f"scale {scale:.3f} px/cell from {len(estimates)} matched offsets (planned {planned})")
     return scale
 
 
@@ -634,7 +634,7 @@ def void_terrain_transparent(rgba: np.ndarray, px_per_cell: float) -> np.ndarray
             ys, xs = np.nonzero(in_band)
             out[ys, xs, :3] = np.clip(rgb[ys, xs].astype(np.float32) / k_px[:, None], 0, 255).astype(np.uint8)
             out[ys, xs, 3] = (k_px * 255).astype(np.uint8)
-            log(f"  edge blend corrected over {band} px: k from {k[0]:.2f} at the void to 1.0")
+            detail(f"edge blend corrected over {band} px: k from {k[0]:.2f} at the void to 1.0")
     # The game draws the terrain's edge against the void without anti-aliasing (a hard, stepped
     # line). In a narrow band along the edge, colour (premultiplied) and alpha are blurred
     # together and the colour un-premultiplied again: the steps smooth out along the edge and
@@ -646,7 +646,7 @@ def void_terrain_transparent(rgba: np.ndarray, px_per_cell: float) -> np.ndarray
         pm = ndimage.gaussian_filter(out[:, :, ch].astype(np.float32) * a_f, sigma=1.5)
         out[rim, ch] = np.clip(pm[rim] / np.maximum(a_soft[rim], 1 / 255), 0, 255).astype(np.uint8)
     out[rim, 3] = (a_soft[rim] * 255).round().astype(np.uint8)
-    log(f"  void terrain made transparent: {void.mean() * 100:.1f}% of the image")
+    log(f"outside the map made transparent: {void.mean() * 100:.0f}% of the image")
     return out
 
 
@@ -724,21 +724,21 @@ def write_outputs(manifest: dict, out: Path, shots: Shots, layout: Layout, seams
         y0 = max(0, int(np.floor(-scale * (bounds["top"] + margin) + ay)))
         y1 = min(height, int(np.ceil(-scale * (bounds["bottom"] - margin) + ay)))
         if x1 - x0 < 16 or y1 - y0 < 16:
-            warn(f"{name or manifest['id']}: nothing placed inside its bounds; skipped")
+            warn(f"{name or manifest['map']}: nothing placed inside its bounds; left out")
             continue
         out_id = f"{manifest['id']}-{name.lower()}" if name else manifest["id"]
         # Each arena's image from its own screenshots only: the next arena's rows overlap this
         # one's edge, from other camera positions (parallax), and the two areas have no seams
         # between them.
         subset = {i for i in layout.placed if name is None or layout.by_index[i].get("area", 0) == area_no}
-        with stage("composing"):
+        with stage("Composing"):
             composed = compose(shots, layout, seams, subset)
-        with stage("void transparency"):
+        with stage("Transparency outside the map"):
             composed = void_terrain_transparent(composed, manifest["pxPerCell"])
         # The team colour: the same canvas from Chaos's side, where tiles were shot from there.
         mask = None
         if any(shots.has_chaos(i) for i in subset):
-            with stage("team colour"):
+            with stage("Team colour"):
                 chaos = compose(Shots(manifest, shots.dir.parent, chaos=True), layout, seams, subset)
                 # The water moves while paused: there, only a change along the teams' colours counts.
                 wet = water.water_pixels(composed.shape, manifest["water"], scale, ax, ay) if manifest.get("water") else None
@@ -747,14 +747,14 @@ def write_outputs(manifest: dict, out: Path, shots: Shots, layout: Layout, seams
         # The game's black at the map's edge (edge_black.py), after the team mask: black from both
         # sides, it has no team colour, and the fade undone would.
         if manifest.get("mapSize"):
-            with stage("edge black"):
+            with stage("The black edge"):
                 removed, restored = edge_black.edge_black_removed(composed, scale, ax, ay, (manifest["mapSize"]["width"], manifest["mapSize"]["height"]))
             if removed:
-                log(f"  the game's black at the map's edge removed: {removed} px; the fade before it undone on {restored} px")
+                log(f"the game's black at the map's edge removed ({removed} px), and the fade before it undone ({restored} px)")
         if name is not None:
-            with stage("other arenas removed"):
+            with stage("Other arenas removed"):
                 composed, removed = other_areas_removed(composed, manifest["areas"], area_no, scale, ax, ay)
-            log(f"  {out_id}: {removed} pieces of the arenas next to it removed")
+            log(f"{removed} pieces of the arenas next to it removed")
         # The crop follows the map, not the camera bounds. A map's terrain can run well past
         # its camera bounds (Cursed Hollow: 25 cells), and the edge screenshots see it; the
         # output takes in everything that isn't void. (Faint pixels don't count, so a blurred
@@ -770,12 +770,12 @@ def write_outputs(manifest: dict, out: Path, shots: Shots, layout: Layout, seams
             y1 = max(y1, min(height, r1 * 4 + pad))
         image = pyvips.Image.new_from_array(composed, interpretation="srgb").crop(x0, y0, x1 - x0, y1 - y0)
         out_png = out / f"{out_id}.png"
-        with stage("writing the map image"):
+        with stage("Writing the map image"):
             image.write_to_file(str(out_png), compression=PNG_COMPRESSION)
             if mask is not None:
                 rgb = np.dstack([mask[y0:y1, x0:x1], np.zeros((y1 - y0, x1 - x0), np.uint8)])
                 pyvips.Image.new_from_array(rgb, interpretation="srgb").write_to_file(str(out / f"{out_id}-team.png"), compression=PNG_COMPRESSION)
-                log(f"  team colour on {float((rgb[..., :2].max(axis=2) > 0).mean()) * 100:.2f}% of it -> {out_id}-team.png")
+                log(f"team colour on {float((rgb[..., :2].max(axis=2) > 0).mean()) * 100:.1f}% of the image")
         geo = {
             "map": manifest["map"],
             "area": name,
@@ -787,7 +787,8 @@ def write_outputs(manifest: dict, out: Path, shots: Shots, layout: Layout, seams
             "toPixel": "px = (x - originCell.x) * pxPerCell; py = (originCell.y - y) * pxPerCell",
         }
         write_json(out / f"{out_id}.geo.json", geo, indent=2)
-        log(f"{x1 - x0}x{y1 - y0} px -> {out_png}")
+        log(f"map image: {x1 - x0}×{y1 - y0} px")
+        detail(f"written to {out_png}")
         written.append(out_id)
     return written
 
@@ -813,7 +814,7 @@ def main(argv: list[str], specifics_of: Callable[[dict], Specifics]) -> None:
     out = output_folder(args.output_dir, manifest)
     out.mkdir(parents=True, exist_ok=True)
     set_log_file(base / "log.txt")
-    log(f"stitch {manifest['id']}")
+    detail(f"stitch {manifest['id']}")
     shots = Shots(manifest, base)
     tiles = manifest["tiles"]
 
@@ -826,7 +827,7 @@ def main(argv: list[str], specifics_of: Callable[[dict], Specifics]) -> None:
     # A screenshot that is entirely black is a failed grab; it would be pasted as a black box.
     black = [t["index"] for t in present if (g := shots.small(t["index"])) is not None and g.max() < 12]
     if black:
-        log(f"  skipped {len(black)} all-black screenshots: {black}")
+        log(f"{len(black)} all-black screenshots left out (tiles {', '.join(str(i + 1) for i in black)})")
         present = [t for t in present if t["index"] not in black]
         tiles = [t for t in tiles if t["index"] not in black]
     by_pos = {(t["row"], t["col"]): t for t in tiles}
@@ -837,7 +838,7 @@ def main(argv: list[str], specifics_of: Callable[[dict], Specifics]) -> None:
     # 2. Anchors, matches, the scale, the solve.
     planned = manifest["pxPerCell"]
     anchored = read_anchors(base, by_index, shots, present)
-    with stage("matching neighbours"):
+    with stage("Matching neighbours"):
         edges = measure_matches(tiles, by_pos, usable, shots, lambda t: anchored.get(t["index"], (t["x"], t["y"])), planned)
     anchor_scale = scale_from_matches(edges, anchored, planned)
     # Anchor positions: the tile's top-left in a frame of anchor_scale px per cell, x east and y
@@ -845,18 +846,19 @@ def main(argv: list[str], specifics_of: Callable[[dict], Specifics]) -> None:
     # offset uses the shared scale, so any difference from the tile's own scale is spread evenly
     # either side of the centre, where the kept part of the screenshot is.
     anchors = {i: (anchor_scale * cx - screen_w / 2, -anchor_scale * cy - screen_h / 2) for i, (cx, cy) in anchored.items()}
-    with stage("solving positions"):
+    with stage("Placing the screenshots"):
         placed, kept = solve_positions(edges, anchors, anchored)
-    log(f"placed {len(placed)} of {len(tiles)} screenshots from {len(kept)} matches ({len(edges)} measured)")
+    log(f"{len(placed)} of {len(tiles)} screenshots placed")
+    detail(f"from {len(kept)} matches ({len(edges)} measured)")
     unplaced = [t["index"] for t in present if t["index"] not in placed]
     if unplaced:
-        warn(f"not placed (no position, no match): {len(unplaced)} screenshots: {unplaced[:20]}{' ...' if len(unplaced) > 20 else ''}")
+        warn(f"{len(unplaced)} screenshots not placed (no camera position, no match): tiles {', '.join(str(i + 1) for i in unplaced[:20])}{' …' if len(unplaced) > 20 else ''}")
 
     # 3. Map cells -> pixels: the anchors put the frame at anchor_scale px per cell with the map
     # origin at (0, 0).
     scale, ax, ay = anchor_scale, 0.0, 0.0
     held_back = sum(1 for i, (cx, cy) in anchored.items() if np.hypot(cx - by_index[i]["x"], cy - by_index[i]["y"]) > 0.5)
-    log(f"scale {scale:.3f} px/cell from the camera positions (planned {planned}); {held_back} screenshots had the camera held back")
+    log(f"{scale:.2f} px per cell (planned {planned})" + (f"; the game held the camera back for {held_back} screenshots" if held_back else ""))
 
     # 4. The canvas covers every placed screenshot.
     shift = -np.floor(np.min([p for p in placed.values()], axis=0))
@@ -868,9 +870,9 @@ def main(argv: list[str], specifics_of: Callable[[dict], Specifics]) -> None:
     layout = Layout(placed, by_pos, by_index, screen_w, screen_h, page_x0)
 
     # 5. Seams, then each output.
-    with stage("routing seams"):
+    with stage("Routing the seams"):
         seams = route_seams(shots, layout, manifest["pxPerCell"])
-    log(f"  seams routed between {len(seams)} pairs of neighbours")
+    detail(f"seams routed between {len(seams)} pairs of neighbours")
     if os.environ.get("HRS_STITCH_DEBUG"):
         write_json(base / "seams.json", {f"{i}-{j}": {"kind": k, "start": st, "path": p.tolist(), "placed": [placed[i].tolist(), placed[j].tolist()]}
                                          for (i, j), (k, st, p) in seams.items()}, indent=None)

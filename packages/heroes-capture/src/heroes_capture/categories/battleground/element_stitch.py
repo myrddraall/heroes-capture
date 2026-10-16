@@ -16,7 +16,8 @@ from heroes_capture.common.frames import PNG_COMPRESSION, frame_exists, load_fra
 from heroes_capture.common.geometry import circle_box, screen_point
 from heroes_capture.common.imaging import nonzero_box
 from heroes_capture.common.jsonio import read_json, write_json
-from heroes_capture.common.runlog import log, warn
+from heroes_capture.categories.battleground.elements import called
+from heroes_capture.common.runlog import detail, log, warn
 from heroes_capture.common.workers import ordered_map
 
 # A standing structure's masks of where a neighbour is in front of it (write_elements): a pixel
@@ -79,7 +80,7 @@ def write_elements(manifest: dict, base: Path, out: Path, layout: Layout, scale:
             empty_shot = load_frame(folder / key)
             residue.append(float((empty_shot[:, layout.page_x0:].min(axis=2) < 200).mean()))
     if residue:
-        log(f"elements: what couldn't be hidden: {max(residue) * 100:.2f}% of the pixels at most of {len(residue)} tiles' empty shots"
+        log(f"what couldn't be hidden in the empty shots: {max(residue) * 100:.2f}% of the pixels at most, over {len(residue)} tiles"
             f" ({sum(r > 0.0005 for r in residue)} with anything there)")
 
     by_id = {u["id"]: u for u in (manifest.get("elements") or {}).get("structures", [])}
@@ -130,14 +131,14 @@ def write_elements(manifest: dict, base: Path, out: Path, layout: Layout, scale:
         entry = {"key": key, "kind": record["kind"], "element": record["element"], "state": record["state"], "image": image_id}
         if found is None:
             # Nothing left of it (a moonwell leaves no rubble): the state is "nothing".
-            notes.append(("log", f"  element {key}: nothing there"))
+            notes.append(("detail", f"{called(record)}: nothing there"))
             return {**entry, "file": None, "rect": None}, None, notes
         # In the whole shot's pixels.
         v0, v1, u0, u1 = cv0 + found[0], cv0 + found[1], cu0 + found[2], cu0 + found[3]
         # Reaching the circle's edge: the circle may have cut it short (a radius to widen).
         yy, xx = np.nonzero(alpha)
         if np.hypot(xx + cu0 - centre[0], yy + cv0 - centre[1]).max() > radius - 2:
-            notes.append(("warn", f"  element {key}: its cut-out reaches the edge of its circle ({record['radius']:g} cells); it may be cut short"))
+            notes.append(("warn", f"{called(record)}: its cut-out reaches the edge of its circle ({record['radius']:g} cells) and may be cut short"))
         x = layout.placed[tile][0] + u0 + (camera["x"] - tile_camera["x"]) * scale - crop_x0
         y = layout.placed[tile][1] + v0 - (camera["y"] - tile_camera["y"]) * scale - crop_y0
         mine = rgba[v0 - cv0:v1 - cv0, u0 - cu0:u1 - cu0]
@@ -200,10 +201,10 @@ def write_elements(manifest: dict, base: Path, out: Path, layout: Layout, scale:
     placed = []
     cropped: dict[str, dict] = {}
     # On every core (workers.ordered_map: in order, so the log reads as it did one at a time).
-    with ui.bar(len(shots), "elements cut out") as advance:
+    with ui.bar(len(shots), "Cut-outs") as advance:
         for (key, _), (entry, kept, notes) in zip(shots, ordered_map(lambda item: place(*item), shots)):
             for level, text in notes:
-                (warn if level == "warn" else log)(text)
+                {"warn": warn, "detail": detail}.get(level, log)(text)
             if entry is not None:
                 placed.append(entry)
             if kept is not None:
@@ -217,10 +218,10 @@ def write_elements(manifest: dict, base: Path, out: Path, layout: Layout, scale:
         entry["hiddenBy"] = found
         masked += len(found)
     if masked:
-        log(f"elements: {masked} masks of where a standing neighbour is in front")
+        log(f"{masked} masks of where a neighbour stands in front")
     index_path = out / f"{manifest['id']}-elements.json"
     earlier = read_json(index_path, {}).get("cutouts", []) if area_no else []  # the other arenas' (this run's first call writes afresh)
     write_json(index_path, {"image": image_id, "cutouts": earlier + placed}, indent=1)
     nothing = sum(1 for p in placed if p["file"] is None)
-    log(f"elements: {len(placed) - nothing} cut-outs placed in {image_id}, {nothing} states with nothing there, {len(shots) - len(placed)} left out")
+    log(f"{len(placed) - nothing} cut-outs placed" + (f", {nothing} with nothing there" if nothing else "") + (f", {len(shots) - len(placed)} left out" if len(shots) > len(placed) else ""))
     return len(placed)

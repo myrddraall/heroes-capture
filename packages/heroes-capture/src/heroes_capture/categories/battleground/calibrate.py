@@ -51,7 +51,7 @@ from PIL import Image
 from scipy import ndimage
 
 from heroes_capture.capture.shots import still_frame, tile_command
-from heroes_capture.categories.battleground.elements import rubble_radius, standing_team_colour
+from heroes_capture.categories.battleground.elements import called, rubble_radius, standing_team_colour
 from heroes_capture.common import ui
 from heroes_capture.common.game_control import Recoverable, settle, step
 from heroes_capture.common.geometry import circle_box, screen_point
@@ -362,7 +362,7 @@ def pausing_probe(session, manifest: dict, folder: Path, motion: list[dict], sen
              for t in targets]
     looks: list[dict] = [{} for _ in targets]
     stopped = None
-    with ui.bar(len(PAUSE_STEPS) * len(targets), "pausing tried") as advance:
+    with ui.bar(len(PAUSE_STEPS) * len(targets), "Ways of pausing tried") as advance:
         for k, (name, commands) in enumerate(PAUSE_STEPS):
             for command in commands:
                 if command.startswith("wait "):
@@ -524,7 +524,7 @@ def standing_films(session, manifest: dict, folder: Path, send) -> dict:
     send(tile_command(manifest["tiles"][0]))
     send("el fadeall 0")
     send("el env off", timeout=10.0)
-    with ui.bar(len(chosen), "standing filmed") as advance:
+    with ui.bar(len(chosen), "Standing filmed") as advance:
         for kind, u in sorted(chosen.items()):
             def film() -> None:
                 nonlocal shown
@@ -961,34 +961,32 @@ def calibrate(session, manifest: dict, base: Path, stages: list[str] = ("motion"
 
     result: dict = {"report": found.get("report") or {}}
     if "motion" in stages:
-        with stage("calibration (what moves while paused)"):
-            with ui.bar(len(manifest["tiles"]), "tiles looked at") as advance:
-                for tile in manifest["tiles"]:
-                    step(lambda: look_at_tile(tile), f"looking at tile {tile['index'] + 1}")
-                    advance()
+        with stage("What moves while paused", len(manifest["tiles"])) as counter:
+            for tile in manifest["tiles"]:
+                step(lambda: look_at_tile(tile), f"looking at tile {tile['index'] + 1}")
+                counter.advance()
         motion = same_patches(motion)
         kinds = Counter(p["what"]["kind"] for p in motion)
-        log(f"calibration: {len(motion)} patches move while paused ({', '.join(f'{n} {k}' for k, n in kinds.most_common()) or 'none'})")
+        log(f"{len(motion)} patches move while paused ({', '.join(f'{n} {k}' for k, n in kinds.most_common()) or 'none'})")
         result["motion"] = motion
     if "structures" in stages:
         order = calibration_order(structures, candidates)
-        with stage("calibration (structures)"):
+        with stage("Structures", len(order)) as counter:
             hide_scene()
-            with ui.bar(len(order), "structures calibrated") as advance:
-                for u in order:
-                    step(lambda: one(u), f"calibrating {u['type']} {u['id']}")
-                    advance()
+            for u in order:
+                step(lambda: one(u), f"calibrating {called(u)}")
+                counter.advance()
         for entry in falls.values():
             entry["settle"] = round(statistics.median(entry["settles"]), 2) if entry["settles"] else None
         changing = [s for s in measured.values() if s["changes"]]
         slowest = max((max(s["toChaos"], s["toOrder"]) for s in changing if s["toChaos"] is not None and s["toOrder"] is not None), default=0.0)
         reasons = Counter(t["failed"] for t in tries if t["failed"])
-        log(f"calibration: {len(changing)} of {len(measured)} structures change with the side (the slowest switch {slowest:.2f} s), "
+        log(f"{len(changing)} of {len(measured)} structures change with the side (the slowest switch {slowest:.2f} s), "
             f"{sum(s['moves'] > MOVING_SHARE for s in measured.values())} move while paused; "
             f"{len(spots)} of {len(candidates)} copied structures have a checked spot, {sum(reasons.values())} spots failed"
             + (f" ({', '.join(f'{n} {why}' for why, n in reasons.most_common())})" if reasons else ""))
         if falls:
-            log("  falls: " + ", ".join(f"{k} settled {v['settle']:g} s" + (" (filmed)" if v.get("film") else "")
+            log("falls: " + ", ".join(f"{k} settled {v['settle']:g} s" + (" (filmed)" if v.get("film") else "")
                                         for k, v in sorted(falls.items()) if v["settle"] is not None))
         result.update(structures=measured, copySpots=spots, falls=falls, tries=tries)
     if "standing" in stages:
@@ -1009,16 +1007,15 @@ def calibrate(session, manifest: dict, base: Path, stages: list[str] = ("motion"
             falls.update(previous.get("falls") or {})
         homes: dict[str, dict] = {}
         at_home = home_order(structures)
-        with stage("calibration (rubble at home)"):
+        with stage("Rubble at home", len(at_home)) as counter:
             if "structures" not in stages:
                 hide_scene()
-            with ui.bar(len(at_home), "rubble shot at home") as advance:
-                for u in at_home:
-                    step(lambda: rubble_at_home(u), f"bringing down {u['type']} {u['id']} at home")
-                    advance()
+            for u in at_home:
+                step(lambda: rubble_at_home(u), f"bringing down {called(u)} at home")
+                counter.advance()
         darker = [k for k, h in homes.items() if h["ratio"] is not None and h["ratio"] < HIDDEN_DARKER]
         copies_darker = [k for k, h in homes.items() if h.get("copyRatio") is not None and h["copyRatio"] < HIDDEN_DARKER]
-        log(f"calibration: rubble at home for {len(homes)} kinds; hiding the scene darkens {len(darker)}"
+        log(f"rubble at home for {len(homes)} kinds; hiding the scene darkens {len(darker)}"
             + (f" ({', '.join(f'{k} {homes[k]["ratio"]:.0%}' for k in darker)})" if darker else "")
             + f"; copies' rubble darker than at home for {len(copies_darker)}"
             + (f" ({', '.join(f'{k} {homes[k]["copyRatio"]:.0%}' for k in copies_darker)})" if copies_darker else ""))

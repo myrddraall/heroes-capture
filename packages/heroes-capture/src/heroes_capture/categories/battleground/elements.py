@@ -513,3 +513,10 @@ def source_tile(element: dict, tiles: list[dict]) -> dict:
     """The grid tile an element is shot from: the one whose centre is nearest it (the least
     perspective lean), so its cut-out drops into the map where that tile's pixels are used."""
     return min(tiles, key=lambda t: math.dist((t["x"], t["y"]), (element["x"], element["y"])))
+
+
+def called(element: dict) -> str:
+    """An element (or its record) as the run's log names it: its name in the game (a structure's,
+    from the data report) and where it is."""
+    kind = "camp" if element.get("kind") == "camp" or "camp" in element else "structure"
+    return f"{element.get('name') or element.get('type') or kind} ({element['x']:g}, {element['y']:g})"

@@ -1,31 +1,31 @@
-"""The tool's output: a running log as a tree, in one of two modes, with everything also written to
-two log files.
+"""The tool's output: what the run does as a tree, in one of two modes, with everything also
+written to two log files.
 
-The tree: what the run does is in folders (a job, its runs, their steps, a step's stages and
-passes), each with what happened in it, line by line, indented under it. A folder opens with its
-title (once something is shown in it) and closes with a line of its own: ✓ (✗ if it failed), its
-title again, its bar and count when it counts something, and how long it took; a folder with
-nothing in it is that one line. Lines stay where they are printed: a long run, or the run before,
-is scrolled back to.
+The tree: a job, its runs, their steps (preparing, capturing, stitching and packing), a step's
+stages and passes are folders (folder), each counting what it does when it counts something; a
+run plans its folders as it starts (plan), pending until each opens.
 
-pretty (the default on a terminal): the tree, with a live footer below it: each folder still open
-with its bar (a folder's count: its own, or what the folders in it count, those planned included),
-how long it has run, the deepest one's time left, what is planned next, and a pause while it
-lasts. Python warnings and library logging show as warnings; anything a library prints straight to
-stdout or stderr shows dimmed in the tree.
+pretty (the default on a terminal): a live view with Rich: the deepest open section (a run) as its
+tree, a line a folder: its mark (a spinner on the one running), title, bar, count and time (greyed
+until it starts); one in progress has its latest status (a routine message in it) on a second
+line under it; the folders it is in a line each above it; a pause while it lasts. Warnings, outcomes, Python warnings,
+library logging and what libraries print straight to stdout or stderr print above the view. When
+a section closes, its finished tree is printed: earlier runs are a scroll back. Too tall for the
+screen, the view leaves out what is in the finished folders.
 
-log (--log; the default when CI is set or the output isn't a terminal): the same tree, as plain
-text, without the footer.
+log (--log; the default when CI is set or the output isn't a terminal): every message on its own
+line, as plain text, indented under its folder's title, each folder closed by a line with its
+count and time.
 
 --verbose adds the detail messages in both modes.
 
-The plain log (set_plain_log) gets the tree as log mode prints it, whatever the mode on screen: the
-run to read back. The diagnostic log (set_log_file) gets every message, detail included, and every
-line libraries printed, each with a time stamp and its kind. Listeners (add_listener) get each line
-of the tree as plain text, detail included: a run's own log (runlog.py).
+The plain log (set_plain_log) gets the output as log mode prints it, whatever the mode on screen:
+the run to read back. The diagnostic log (set_log_file) gets every message, detail included, and
+every line libraries printed, each with a time stamp and its kind. Listeners (add_listener) get
+each line as plain text, detail included: a run's own log (runlog.py).
 
 A process started to carry on the run (a restarted capture) draws its tree at the depth the parent
-had (HRS_UI_DEPTH), so its lines sit under the parent's open folders.
+had (HRS_UI_DEPTH).
 """
 
 import io
@@ -52,13 +52,16 @@ class Folder:
     """A folder of the tree: what it counts (total, None: nothing), how far it is, and the folders
     in it (those planned and not opened yet included)."""
 
-    def __init__(self, title: str, total: int | None = None, completed: int = 0, planned: bool = False):
-        self.title, self.total, self.completed = title, total, completed
+    def __init__(self, title: str, total: int | None = None, completed: int = 0, planned: bool = False, section: bool = False):
+        self.title, self.total, self.completed, self.section = title, total, completed, section
+        self.status = ""  # its latest message, under it in the live view
+        self.own = False  # what it counts stays in its own bar, out of the folders it is in (keep_count)
         self.state = "planned" if planned else "running"
         self.children: list[Folder] = []
         self.started = time.time()
         self.seconds = 0.0
         self.opened = False  # its title line printed (once something is shown in it)
+        self.told = False  # and given to the logs and listeners (once anything is, detail included)
 
     def advance(self, n: int = 1) -> None:
         self.completed += n
@@ -68,14 +71,29 @@ class Folder:
         self.total = total
         _refresh()
 
+    def plan(self, title: str, total: int | None = None) -> "Folder":
+        """A folder it will open later (folder, by the same title), pending until then: in the live
+        view from now, and counted in its bar. Planned again, the same one (its count updated).
+        Returns it, to plan what goes in it."""
+        node = next((c for c in self.children if c.title == title), None)
+        if node is None:
+            node = Folder(title, total, planned=True)
+            self.children.append(node)
+        elif node.state == "planned" and total is not None:
+            node.total = total
+        _refresh()
+        return node
+
     def units(self) -> tuple[int, int]:
         """(done, total) of what it counts: its own, or the sum of the folders in it."""
         if self.total is not None:
             if self.state == "planned":
                 return 0, self.total
-            return (self.total if self.state == "done" else min(self.completed, self.total)), self.total
+            return min(self.completed, self.total), self.total
         done = total = 0
         for child in self.children:
+            if child.own:
+                continue
             d, t = child.units()
             done, total = done + d, total + t
         return done, total
@@ -292,30 +310,47 @@ def _line_out(level: int, kind: str, plain: str, styled: Text, shown: bool = Tru
     """One line of the tree at `level`: in the logs, to the listeners, and on screen (`shown`):
     `plain` as log mode prints it (the plain log reads the same in either mode), `styled` in the
     live view."""
-    text = _guides(level) + plain
     _record(kind, "  " * level + plain)
-    _tell(text)
-    if not shown:
-        return
+    _tell(_guides(level) + plain)
+    if shown:
+        _screen(level, plain, styled, kind)
+
+
+def _screen(level: int, plain: str, styled: Text, kind: str) -> None:
+    """A line of the tree in the plain log (which reads as log mode prints it) and, in log mode, on
+    screen. In the live view the folders are drawn by the view itself and a routine message (or
+    the end of a pause) is its folder's status, under it; the rest (warnings, outcomes, what
+    libraries print, detail with --verbose) prints above the view."""
+    text = _guides(level) + plain
     _plain_log(text)
     if _s.mode == "log":
         _plain(text)
-    else:
-        _console().print(Text(_guides(level), style="dim") + styled, soft_wrap=True)
+        return
+    if kind == "folder":
+        return
+    if kind in ("info", "paused") and _s.open:
+        _s.open[-1].status = plain
+        _refresh()
+        return
+    _console().print(styled, soft_wrap=True)
 
 
-def _open_titles() -> None:
-    """The title lines of the open folders not printed yet (nothing was shown in them so far)."""
+def _open_titles(shown: bool = True) -> None:
+    """The title lines of the open folders not out yet: to the logs and listeners (anything in it,
+    detail included, was), and on screen when `shown` (something shown in it)."""
     for i, folder in enumerate(_s.open):
-        if not folder.opened:
+        level, plain = _s.base + i, f"▾ {folder.title}"
+        if not folder.told:
+            folder.told = True
+            _line_out(level, "folder", plain, Text(), shown=False)
+        if shown and not folder.opened:
             folder.opened = True
-            _line_out(_s.base + i, "folder", f"▾ {folder.title}", Text("▾ ", style="cyan") + Text(folder.title, style="bold"))
+            _screen(level, plain, Text("▾ ", style="cyan") + Text(folder.title, style="bold"), "folder")
 
 
 def _emit(kind: str, plain: str, styled: Text, shown: bool = True) -> None:
     """A line in the deepest open folder."""
-    if shown:
-        _open_titles()
+    _open_titles(shown)
     _line_out(_s.base + len(_s.open), kind, plain, styled, shown)
 
 
@@ -346,30 +381,37 @@ def _close_line(folder: Folder, level: int) -> None:
     _open_titles()  # the folders it is in, if nothing was shown in them yet
     marks = {"done": ("✓", "green bold"), "failed": ("✗", "red bold"), "stopped": ("✗", "red bold")}
     mark, style = marks.get(folder.state, ("✓", "green bold"))
-    lead = "└ " if folder.opened else ""
     title = f"{mark} {folder.title}"
-    pad = " " * max(2, BAR_AT - len(_guides(level)) - len(lead) - len(title))
     bar_plain, bar_styled = _counted(folder)
     when = _duration(folder.seconds) + (" (stopped)" if folder.state == "stopped" else " (failed)" if folder.state == "failed" else "")
-    plain = f"{lead}{title}{pad}{bar_plain}{'  ' if bar_plain else ''}{when}"
-    styled = (Text(lead, style="dim") + Text(mark + " ", style=style) + Text(folder.title) + Text(pad) + bar_styled
-              + Text(("  " if bar_plain else "") + when, style="dim"))
-    _line_out(level, "folder", plain, styled)
+
+    def line(lead: str) -> tuple[str, Text]:
+        pad = " " * max(2, BAR_AT - len(_guides(level)) - len(lead) - len(title))
+        return (f"{lead}{title}{pad}{bar_plain}{'  ' if bar_plain else ''}{when}",
+                Text(lead, style="dim") + Text(mark + " ", style=style) + Text(folder.title) + Text(pad) + bar_styled
+                + Text(("  " if bar_plain else "") + when, style="dim"))
+
+    told, _ = line("└ " if folder.told else "")
+    _line_out(level, "folder", told, Text(), shown=False)
+    _screen(level, *line("└ " if folder.opened else ""), "folder")
 
 
 @contextmanager
-def folder(title: str, total: int | None = None, done: int = 0):
+def folder(title: str, total: int | None = None, done: int = 0, section: bool = False):
     """A folder of the tree, open while the block runs (see the module's note): yields it, to count
     what it does (advance; set_total). A folder planned under the same name (plan) is the one
-    opened. On an exception it closes failed (stopped: interrupted) and the exception goes on."""
+    opened. On an exception it closes failed (stopped: interrupted) and the exception goes on.
+    `section` (a run): the live view draws the deepest open one as its tree, and once it closes
+    its tree is printed for good (as is any folder outside every other)."""
     parent = _s.open[-1] if _s.open else None
     node = next((c for c in parent.children if c.state == "planned" and c.title == title), None) if parent else None
     if node is None:
-        node = Folder(title, total, done)
-        if parent:
-            parent.children.append(node)
+        node = Folder(title, total, done, section=section)
+        if parent:  # before those planned: they come after it
+            ahead = next((i for i, c in enumerate(parent.children) if c.state == "planned"), len(parent.children))
+            parent.children.insert(ahead, node)
     else:
-        node.state, node.started, node.completed = "running", time.time(), done
+        node.state, node.started, node.completed, node.section = "running", time.time(), done, section
         if total is not None:
             node.total = total
     level = _s.base + len(_s.open)
@@ -391,18 +433,25 @@ def folder(title: str, total: int | None = None, done: int = 0):
             _s.open.remove(node)
         node.children = [c for c in node.children if c.state != "planned"]  # planned, never opened: left out
         _close_line(node, level)
+        if _s.mode == "pretty" and (section or parent is None):
+            _console().print(Group(*_tree(node, level - _s.base, time.time())))
         if not _s.open:
             _stop_live()
         else:
             _refresh()
 
 
-def plan(title: str, total: int | None = None) -> None:
-    """A folder the open one will open later (folder, by the same title): in the footer as what is
-    next, and counted in the open folders' bars from now."""
-    if _s.open:
-        _s.open[-1].children.append(Folder(title, total, planned=True))
-        _refresh()
+def keep_count(node: Folder | None) -> Folder | None:
+    """A folder whose count stays in its own bar, out of the bars of the folders it is in (the
+    stitch's cut-outs and picture tiles aren't the run's shots, and take seconds)."""
+    if node is not None:
+        node.own = True
+    return node
+
+
+def plan(title: str, total: int | None = None) -> Folder | None:
+    """A folder the open one will open later (Folder.plan); None outside every folder."""
+    return _s.open[-1].plan(title, total) if _s.open else None
 
 
 @contextmanager
@@ -483,43 +532,79 @@ def notice(text: str, after: str | None = None):
 # The live footer
 # ------------------------------------------------------------------------------------------------
 
-class _Footer:
-    """The folders still open, each with its bar and time; the deepest's time left; what is
-    planned next; a pause while it lasts."""
+MARKS = {"done": ("✓", "green bold"), "failed": ("✗", "red bold"), "stopped": ("✗", "red bold"), "planned": ("·", "grey50")}
+PENDING, STATUS = "grey50", "cyan"  # a folder not started yet; the status under one in progress
+
+
+def _row(node: Folder, indent: int, now: float, spinning: bool = False, left: bool = False) -> Text:
+    """A folder's line in the live view: its mark (a spinner on the folder running deepest), its
+    title, its bar and count, its time (and the time left: `left`)."""
+    if node.state == "running":
+        mark, style = (SPINNER[int(now * 10) % len(SPINNER)], "cyan") if spinning else ("▾", "cyan")
+    else:
+        mark, style = MARKS.get(node.state, ("✓", "green bold"))
+    title = "  " * indent + f"{mark} {node.title}"
+    row = Text("  " * indent) + Text(mark + " ", style=style) + Text(node.title, style=PENDING if node.state == "planned" else "bold" if spinning else "")
+    row.append(" " * max(2, BAR_AT - len(title)))
+    done, total = node.units()
+    if total:
+        full, rest = _bar(done, total)
+        row.append(full, style="green" if node.state == "done" else "cyan")
+        row.append(rest, style="dim")
+        row.append(f"  {done}/{total}", style=PENDING if node.state == "planned" else "")
+    if node.state != "planned":
+        seconds = now - node.started if node.state == "running" else node.seconds
+        row.append(f"  {_duration(seconds)}", style="dim")
+        if left and total and done:
+            row.append(f"  ~{_duration(seconds / done * max(0, total - done))} left", style="dim")
+    row.no_wrap, row.overflow = True, "ellipsis"
+    return row
+
+
+def _tree(node: Folder, indent: int, now: float, quiet: int = 0) -> list[Text]:
+    """A folder and everything in it, a line each (pending ones greyed); one in progress has its
+    status on a second line under it. A finished section inside it is its one line (its tree was
+    printed when it closed). `quiet`, to fit the screen: 1 leaves out what is in the finished
+    folders."""
+    deepest = _s.open[-1] if _s.open else None
+    rows = [_row(node, indent, now, spinning=node is deepest, left=node is deepest)]
+    finished = node.state not in ("running", "planned")
+    if node.state == "running" and node.status:
+        rows.append(Text("  " * (indent + 1) + node.status, style=STATUS, no_wrap=True, overflow="ellipsis"))
+    if finished and quiet:
+        return rows
+    for child in node.children:
+        if child.section and child.state not in ("running", "planned") and child is not node:
+            rows.append(_row(child, indent + 1, now))
+        else:
+            rows += _tree(child, indent + 1, now, quiet)
+    return rows
+
+
+class _View:
+    """The live view: the deepest open section (a run) as its tree, the folders it is in a line
+    each above it, and a pause while it lasts; the finished folders' statuses, then their
+    folders, left out when it doesn't fit the screen."""
 
     def __rich__(self):
         now = time.time()
-        rows = []
-        for i, node in enumerate(_s.open):
-            deepest = i == len(_s.open) - 1
-            mark = SPINNER[int(now * 10) % len(SPINNER)] if deepest else "▸"
-            title = "  " * i + f"{mark} {node.title}"
-            row = Text(title, style="bold" if deepest else "")
-            row.append(" " * max(2, BAR_AT - len(title)))
-            done, total = node.units()
-            if total:
-                full, rest = _bar(done, total)
-                row.append(full, style="cyan")
-                row.append(rest, style="dim")
-                row.append(f"  {done}/{total}")
-            elapsed = now - node.started
-            row.append(f"  {_duration(elapsed)}", style="dim")
-            if deepest and total and done:
-                row.append(f"  ~{_duration(elapsed / done * max(0, total - done))} left", style="dim")
-            row.no_wrap, row.overflow = True, "ellipsis"
-            rows.append(row)
-            planned = [c for c in node.children if c.state == "planned"]
-            if planned:
-                ahead = " · ".join(c.title + (f" {c.total}" if c.total else "") for c in planned)
-                rows.append(Text("  " * (i + 1) + f"next: {ahead}", style="dim", no_wrap=True, overflow="ellipsis"))
-        if _s.notice:
-            rows.append(Text(f"⏸ {_s.notice}  {_duration(now - _s.notice_started)}", style="yellow bold", no_wrap=True, overflow="ellipsis"))
-        return Group(Text("─" * min(_console().width, 100), style="dim"), *rows)
+        opens = _s.open
+        if not opens:
+            return Text()
+        root = max((i for i, f in enumerate(opens) if f.section), default=0)
+        height = max(5, _console().size.height - 2)
+        for quiet in (0, 1):
+            rows = [_row(f, i, now) for i, f in enumerate(opens[:root])] + _tree(opens[root], root, now, quiet)
+            if _s.notice:
+                rows.append(Text(f"⏸ {_s.notice}  {_duration(now - _s.notice_started)}", style="yellow bold", no_wrap=True, overflow="ellipsis"))
+            if len(rows) <= height:
+                break
+        return Group(*rows[-height:])
 
 
 def _start_live() -> None:
     if _s.mode == "pretty" and _s.live is None:
-        _s.live = Live(_Footer(), console=_console(), refresh_per_second=8, transient=True,
+        _s.live = Live(_View(), console=_console(), refresh_per_second=8, transient=True,
                        redirect_stdout=False, redirect_stderr=False)  # _Tee puts those in the tree
         _s.live.start()
 

@@ -19,23 +19,23 @@ SCENARIOS = {
     # sky shots (17 positions through three lenses): tile 1 at 40.3 s, one every 0.56-0.61 s (tile
     # 9 from 44.98).
     "matte": ("matte", [], {}, "finished", ("sky layer images: 2x2 camera positions, near clip 257; 2x2 through 16 degrees; 3x3 through 32 degrees", "sky layer images: 17 positions")),
-    "black": ("black", [], {}, "finished", "tile 74/74"),  # the black void's terrain runs on: three rings past the grid
-    "resume": ("matte", ["--no-launch", "--start", "9"], {"FAKE_START": "map"}, "finished", "Test Map: 24 tiles, carrying on at tile 10"),
+    "black": ("black", [], {}, "finished", "tile 74 of 74"),  # the black void's terrain runs on: three rings past the grid
+    "resume": ("matte", ["--no-launch", "--start", "9"], {"FAKE_START": "map"}, "finished", "24 tiles, two shots each, over light grey and over black; carrying on at tile 10"),
     "focus": ("matte", [], {"FAKE_FAULT": "focus", "FAKE_FAULT_AT": "46.7"}, "finished", "focus lost during tile"),
-    "edges": ("matte", [], {"FAKE_BOUNDS": "22,26,42,38"}, "finished", "more beyond them (ring 1)"),
-    "hidden world": ("matte", [], {"FAKE_HIDDEN": "1"}, "finished", "the sky work waits until the map is ready"),
+    "edges": ("matte", [], {"FAKE_BOUNDS": "22,26,42,38"}, "finished", "the map runs on past the grid's edge: "),
+    "hidden world": ("matte", [], {"FAKE_HIDDEN": "1"}, "finished", "the sky waits until the map is ready"),
     "wrong map": ("matte", [], {"FAKE_FAULT": "wrongmap"}, f"error RuntimeError: {RELAUNCH} (HRS_RECOVERIES=1)", "another map is running"),
     "silent strip": ("matte", [], {"FAKE_FAULT": "silent", "FAKE_FAULT_AT": "45.12"}, f"error RuntimeError: {RELAUNCH} --start 10", "lost the match"),
     "crash": ("matte", [], {"FAKE_FAULT": "crash", "FAKE_FAULT_AT": "43.5"}, f"error RuntimeError: {RELAUNCH} --start ", "lost the match"),  # carries on at the lost tile
     "game menu": ("matte", [], {"FAKE_FAULT": "menu", "FAKE_FAULT_AT": "41.5"}, "finished", "a game menu is open"),  # waited out, not a lost match
-    "box focus": ("matte", [], {"FAKE_FAULT": "boxfocus", "FAKE_FAULT_AT": "41.5"}, "finished", ("giving the command box the keyboard back", "tile 28/28")),
+    "box focus": ("matte", [], {"FAKE_FAULT": "boxfocus", "FAKE_FAULT_AT": "41.5"}, "finished", ("giving the command box the keyboard back", "tile 28 of 28")),
     "broken script": ("matte", [], {"FAKE_FAULT": "broken"}, "error ScriptBroken: the map's script failed to compile", ""),  # stops at once, no relaunch
     # Other screens, each for what it takes a different way: the strip's cells come out at the
     # game's interface scale (fakegame CELL_W), the capture measures them and blanks a column to
     # fit. Ultrawide: more of the map across, fewer tiles. Narrow (5:4): the interface scaled to the
     # width, not the height, and the main menu's narrow layout. 4K: everything bigger.
-    "ultrawide": ("matte", [], {"FAKE_SCREEN": "3440x1440"}, "finished", ("15 tiles, screen 3440x1440", "status strip: 30x18 px cells at (0, 0)", "64 px blanked at the left edge")),
-    "narrow": ("matte", [], {"FAKE_SCREEN": "1280x1024"}, "finished", ("42 tiles, screen 1280x1024", "status strip: 20x12 px cells at (0, 0)", "44 px blanked at the left edge")),
+    "ultrawide": ("matte", [], {"FAKE_SCREEN": "3440x1440"}, "finished", ("capture test-map: 15 tiles", "screen 3440×1440", "status strip: 30x18 px cells at (0, 0)", "64 px blanked at the left edge")),
+    "narrow": ("matte", [], {"FAKE_SCREEN": "1280x1024"}, "finished", ("capture test-map: 42 tiles", "screen 1280×1024", "status strip: 20x12 px cells at (0, 0)", "44 px blanked at the left edge")),
     "2160p": ("matte", [], {"FAKE_SCREEN": "3840x2160"}, "finished", ("status strip: 45x27 px cells at (0, 0)", "94 px blanked at the left edge")),
     # The game put on a monitor before the launch (the fake desktop has one).
     "monitor": ("matte", ["--monitor", "1"], {}, "finished", ("monitors: 1 \\\\.\\DISPLAY1 1920x1080 at (0, 0) primary", "the game is on monitor 1 \\\\.\\DISPLAY1")),
@@ -44,7 +44,7 @@ SCENARIOS = {
     "launch only": ("matte", ["--launch-only"], {}, "finished", ""),
     # Some parts only (a job's run): the sky layers alone, no tiles; the tiles alone, the sky left be.
     "skies only": ("matte", ["--parts", "skies"], {}, "finished", ("sky layer images: 17 positions", "captured: skies")),
-    "tiles only": ("matte", ["--parts", "tiles", "--reuse"], {}, "finished", "28 screenshots in"),  # (the grid and past it)
+    "tiles only": ("matte", ["--parts", "tiles", "--reuse"], {}, "finished", "28 screenshots\n"),  # (the grid and past it)
 }
 
 
@@ -66,7 +66,7 @@ def test_tiles_with_team_coloured_doodads_are_also_shot_from_chaos_s_side(tmp_pa
 
     run = simulate(tmp_path, "matte", FAKE_TEAM="1")
     assert run["outcome"] == "finished", run["outcome"]
-    assert "tiles shot again from Chaos's side, in one pass" in run["log"], run["log"][-3000:]
+    assert "tiles shot again as red, in one pass" in run["log"], run["log"][-3000:]
     tiles = tmp_path / "test-map" / "tiles"
     chaos = sorted(p.name for p in tiles.glob("tile_*-chaos.npy"))
     assert chaos and len(chaos) < len(list(tiles.glob("tile_????.npy")))

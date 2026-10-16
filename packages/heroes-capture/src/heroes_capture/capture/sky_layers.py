@@ -26,7 +26,7 @@ from heroes_capture.common.frames import save_frame
 from heroes_capture.common.game_control import settle, step
 from heroes_capture.common.jsonio import write_json
 from heroes_capture.common.matching import grey, phase_correlate
-from heroes_capture.common.runlog import log, warn
+from heroes_capture.common.runlog import detail, log, warn
 
 SKY_SETTLE = 0.1  # real seconds for a sky swap to be drawn before its shot (was 1; the waits probe found shots within one level down to 0.05)
 MAP_SETTLE = 0.1  # real seconds after a camera move before a shot of the map (as the tiles' settle)
@@ -75,7 +75,7 @@ def measure(session, manifest: dict, out_dir: Path, area: dict | None = None) ->
         layers["haze"] = "sky parallaxblack 1"
     area = area or manifest["area"]  # the camera bounds the game applies, when the caller measured them
     centre = ((area["left"] + area["right"]) / 2, (area["bottom"] + area["top"]) / 2)
-    log(f"measuring the sky layers' parallax ({', '.join(layers)}; near clip {clip}) ...")
+    detail(f"measuring the sky layers' parallax ({', '.join(layers)}; near clip {clip})")
 
     def shoot(x: float, y: float) -> dict | None:
         """The map and each sky layer, with the camera at (x, y). Each layer is put up anew at
@@ -136,7 +136,7 @@ def measure(session, manifest: dict, out_dir: Path, area: dict | None = None) ->
     result["mapPxPerCell"] = scale
     path = out_dir / "sky-layers.json"
     write_json(path, result, indent=2)
-    log("  sky layers: " + "; ".join(f"{n} rate {result['layers'][n]['rate']}" for n in layers) + f" -> {path.name}")
+    log("sky layers' speeds against the map: " + "; ".join(f"{n} {result['layers'][n]['rate']}" for n in layers))
     return result
 
 
@@ -234,7 +234,7 @@ def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep:
     # Every position, lens by lens, each grid north first like the tiles.
     positions = [(f"{prefix}{k:03d}", fov, x, y) for prefix, fov, xs, ys in grids
                  for k, (y, x) in enumerate((y, x) for y in reversed(ys) for x in xs)]
-    with ui.bar(len(positions), "sky positions") as advance:
+    with ui.bar(len(positions), "Sky positions") as advance:
         for n, (name, fov, x, y) in enumerate(positions):
             def one() -> None:
                 camera = at(x, y, clip)
@@ -261,4 +261,4 @@ def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep:
     step(lambda: session.send("sky mapparallax 1"), "putting the map's own parallax back")
     saver.shutdown(wait=True)
     write_json(folder / "positions.json", record, indent=2)
-    log(f"  sky layer images: {len(record['positions'])} positions -> {folder.name}/")
+    detail(f"sky layer images: {len(record['positions'])} positions in {folder.name}/")

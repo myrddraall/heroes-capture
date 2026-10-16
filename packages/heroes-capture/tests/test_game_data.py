@@ -154,6 +154,19 @@ def test_a_model_s_team_colour_is_read_from_its_materials(storage):
     assert moonwell_death.has_team_colour("Death") and not moonwell_death.has_team_colour("Dead")
 
 
+def test_structures_are_named_as_the_game_shows_them(storage):
+    """GameStrings' Unit/Name entries (common/actors.py unit_names), for the run's log: the moonwell
+    is the game's Healing Fountain, a level 2 town hall its Fort, a level 3 one its Keep; the map's
+    own strings win over the mods'."""
+    from heroes_capture.common.actors import unit_names
+
+    types = ["KingsCore", "TownCannonTowerL3", "TownMoonwellL3", "TownTownHallL2", "TownTownHallL3", "TownWallRadial14L3"]
+    assert unit_names(storage, ["dragonshire.stormmod"], "", types) == {
+        "KingsCore": "Core", "TownCannonTowerL3": "Cannon Tower", "TownMoonwellL3": "Healing Fountain",
+        "TownTownHallL2": "Fort", "TownTownHallL3": "Keep", "TownWallRadial14L3": "Wall"}
+    assert unit_names(storage, [], "Unit/Name/KingsCore=Dragon Core\r\n", ["KingsCore"]) == {"KingsCore": "Dragon Core"}
+
+
 def test_tilesets_light_sets_and_sky_models(storage):
     table = game_data.light_sets(storage)
     assert len(table["terrains"]) > 30 and len(table["lights"]) > 300

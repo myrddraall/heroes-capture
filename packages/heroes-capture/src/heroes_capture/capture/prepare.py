@@ -52,7 +52,7 @@ from heroes_capture.common import actors, game_data, js_json
 from heroes_capture.common.js_json import js_round
 from heroes_capture.common.jsonio import write_manifest
 from heroes_capture.common.lighting import has_sky, main_light, sky_models, tileset_of
-from heroes_capture.common.runlog import log, warn
+from heroes_capture.common.runlog import detail, log, warn
 from heroes_capture.common.stormlib import Archive
 from heroes_capture.map import script, water
 from heroes_capture.map.prepare import inject, model_ids, preparation_id, read_map_info, resolve_map, team_coloured
@@ -144,10 +144,10 @@ def resolve_refit_yaw(map_data: dict, light_sets: dict) -> int:
     with a warning when the light can't be found."""
     light = main_light(map_data, light_sets)
     if light["yaw"] is None:
-        warn(f"the map's main light wasn't found (tileset {light['tileset']}, light set {light['lighting']}); "
-            "the refit look faces yaw 180. Pass --refit-yaw.")
+        warn(f"no main light in the game data (light set {light['lighting']}): lighting refitted facing 180°; --refit-yaw sets it")
         return 180
-    log(f"main light: tileset {light['tileset']}, light set {light['lighting']}, from {light['yaw']:.0f} degrees (the refit look faces it)")
+    log(f"main light from {light['yaw']:.0f}°")
+    detail(f"light set {light['lighting']}; the lighting is refitted facing it")
     return js_round(light["yaw"])
 
 
@@ -205,7 +205,7 @@ def main(argv: list[str], specifics_for: Callable[[str, str], Specifics]) -> Pat
     out.mkdir(parents=True, exist_ok=True)
     install = game_data.find_install()
     if install:
-        log(f"game data from the install in {install}")
+        log(f"game data: {install}")
     with game_data.open_storage(install) as storage:
         map_name, map_bytes = resolve_map(opts["map"], storage)
         light_sets = game_data.light_sets(storage)
@@ -228,7 +228,7 @@ def main(argv: list[str], specifics_for: Callable[[str, str], Specifics]) -> Pat
         info = read_map_info(archive.read("MapInfo"))
         wet = water.water_cells(archive.read("t3Water"), archive.read("t3HeightMap"), read("t3Terrain.xml") or "",
                                 water_texts + [read("Base.StormData\\GameData\\WaterData.xml") or ""], info["width"], info["height"])
-        log(f"water: {int(wet.sum())} cells" if wet.any() else "water: none")
+        log(f"water: {int(wet.sum())} cells (ignored for team colour)" if wet.any() else "water: none")
         map_data = {
             "t3Terrain": read("t3Terrain.xml") or "",
             "terrainData": read("Base.StormData\\GameData\\TerrainData.xml"),
@@ -242,14 +242,15 @@ def main(argv: list[str], specifics_for: Callable[[str, str], Specifics]) -> Pat
         sky_start = LIGHT_SKY if sky_mode == "matte" else "black"
         # The map's own sky models, for the sky layers' shots (command "sky mapsky" / "sky mapparallax").
         map_sky = sky_models(map_data, light_sets)
-        log(f"map's own sky: fixed {map_sky['fixed'] or 'none'}, parallax {map_sky['parallax'] or 'none'}")
-        log("void: sky (each tile shot over the light grey and black)" if sky_mode == "matte" else "void: black terrain (one shot over black)")
+        if map_sky["fixed"] or map_sky["parallax"]:
+            log("the map's own sky: " + ", ".join(f"{kind} {model}" for kind, model in (("fixed", map_sky["fixed"]), ("parallax", map_sky["parallax"])) if model))
+        log("outside the map: sky (two shots a tile)" if sky_mode == "matte" else "outside the map: black terrain (one shot a tile)")
         # Cloud layers are doodads placed in the map (Battlefield of Eternity: 20
         # Storm_Doodad_Heaven_Clouds); the script hides every doodad type with "cloud" in its name.
         objects = read("Objects") or ""
         hide_doodads = list(dict.fromkeys(re.findall(r'<ObjectDoodad [^>]*Type="([^"]*[Cc]loud[^"]*)"', objects)))
         if hide_doodads:
-            log(f"cloud doodads hidden: {', '.join(hide_doodads)}")
+            log(f"clouds hidden: {', '.join(hide_doodads)}")
         # The doodads drawn in a team's colours: a tile with one in view is also shot from Chaos's
         # side (tiles.team_boxes), for the team-colour mask.
         coloured = team_coloured(objects)
@@ -258,13 +259,14 @@ def main(argv: list[str], specifics_for: Callable[[str, str], Specifics]) -> Pat
 
         # What the map's category and the map itself add (map/specifics.py).
         specifics = specifics_for(map_name, map_script)
-        log(f"category: {specifics.category}")
+        detail(f"category: {specifics.category}")
         prep = Preparation(opts=opts, archive=archive, info=info, map_script=map_script, objects=objects, regions=read("Regions") or "",
                            hide_doodads=hide_doodads, values=script.map_values(map_id, info["width"], info["height"]),
                            team_coloured=list(coloured))
         for hook in specifics.prepare:
             hook(prep)
-        log(f"team-coloured: {len(coloured)} doodads" + (f", {len(prep.team_coloured) - len(coloured)} structures" if len(prep.team_coloured) > len(coloured) else ""))
+        log(f"team-coloured: {len(coloured)} doodads" + (f", {len(prep.team_coloured) - len(coloured)} structures" if len(prep.team_coloured) > len(coloured) else "")
+            + " (their tiles shot again as red)")
         # One grid per capture area; the camera bounds are lifted (unbound) so the camera can
         # reach every area.
         areas = prep.areas
@@ -272,7 +274,8 @@ def main(argv: list[str], specifics_for: Callable[[str, str], Specifics]) -> Pat
         unbound = opts["margin"] > 0 or bool(areas)
         # The map's opening timers (its own module, maps/).
         opening_timers = specifics.opening_timers
-        log(f"opening timers cut short: {len(opening_timers)}" if opening_timers else "opening timers: none known for this map")
+        if opening_timers:
+            log(f"opening timers cut short: {len(opening_timers)}")
         # Far clip well past the camera.
         lens = {"fov": opts["fov"], "farClip": max(800, math.ceil(grid["distance"] * 3))} if opts["lens"] else None
         values = prep.values | capture_script.values(
@@ -294,18 +297,19 @@ def main(argv: list[str], specifics_for: Callable[[str, str], Specifics]) -> Pat
         key_spec = PARALLAX_KEYS.get(map_sky["parallax"])
         if key_spec and models.get(key_spec["file"]):
             keys = parallax_keys(map_sky["parallax"], models[key_spec["file"]])
-            log(f'keyed copies of {map_sky["parallax"]}: command "sky parallaxlight", "parallaxblack", "parallaxbare", "parallaxlightbare"')
+            detail(f'keyed copies of {map_sky["parallax"]}: command "sky parallaxlight", "parallaxblack", "parallaxbare", "parallaxlightbare"')
         # The models' particles and ribbons frozen while paused, in the same catalog as the skies.
         own = freeze_in_place(read("Base.StormData\\GameData\\ModelData.xml"), map_models)[1]
-        log(f"particles and ribbons frozen with their animations: {len(map_models)} models (mods {', '.join(map_mods) or 'none'} and the shared data"
-            + (f"; {len(map_models) - len(own)} of them in the map's own entries" if len(own) < len(map_models) else "") + ")")
+        log(f"particles and ribbons frozen on {len(map_models)} models")
+        detail(f"(mods {', '.join(map_mods) or 'none'} and the shared data"
+               + (f"; {len(map_models) - len(own)} of them in the map's own entries" if len(own) < len(map_models) else "") + ")")
         for name, data in sky_files(tileset, sky_start, read, {"models": keys["models"], "files": keys["files"], "freeze": map_models}):
             archive.write(name, data)
         for name, data in painted_texture_files(opts["paintTextures"]):
             archive.write(name, data)
         for name, paint in opts["paintTextures"].items():
             log(f"texture {name} painted {paint}")
-        log(f"skyboxes: {', '.join(SKIES)} (tileset {tileset})")
+        detail(f"skyboxes: {', '.join(SKIES)} (tileset {tileset})")
 
     manifest = {
         "map": map_name,
@@ -343,15 +347,14 @@ def main(argv: list[str], specifics_for: Callable[[str, str], Specifics]) -> Pat
     write_manifest(manifest_path, manifest)
 
     bounds = info["bounds"]
-    log(f"{map_name}: {info['width']}x{info['height']} cells, camera bounds "
-        f"{{ left: {js_json.number(bounds['left'])}, bottom: {js_json.number(bounds['bottom'])}, "
-        f"right: {js_json.number(bounds['right'])}, top: {js_json.number(bounds['top'])} }}")
+    log(f"map: {info['width']}×{info['height']} cells; the camera can go x {js_json.number(bounds['left'])}–{js_json.number(bounds['right'])}, "
+        f"y {js_json.number(bounds['bottom'])}–{js_json.number(bounds['top'])}")
     for a in areas:
         b = a["bounds"]
-        log(f"  area {a['name']}: {a['cols']}x{a['rows']} tiles, cells {js_json.number(b['left'])}-{js_json.number(b['right'])} "
-            f"x {js_json.number(b['bottom'])}-{js_json.number(b['top'])}")
-    log(f"camera distance {grid['distance']:.1f}, {grid['cols']}x{grid['rows']} = {len(grid['tiles'])} tiles, "
-        f"output about {js_round(grid['cols'] * grid['step']['x'] * opts['pxPerCell'])}x"
-        f"{js_round(grid['rows'] * grid['step']['y'] * opts['pxPerCell'])} px")
-    log(f"map      {target}")
+        log(f"area {a['name']}: {a['cols']}×{a['rows']} tiles over x {js_json.number(b['left'])}–{js_json.number(b['right'])}, "
+            f"y {js_json.number(b['bottom'])}–{js_json.number(b['top'])}")
+    log(f"grid: {grid['cols']}×{grid['rows']} = {len(grid['tiles'])} tiles; map image about "
+        f"{js_round(grid['cols'] * grid['step']['x'] * opts['pxPerCell'])}×{js_round(grid['rows'] * grid['step']['y'] * opts['pxPerCell'])} px")
+    detail(f"camera {grid['distance']:.0f} cells up")
+    detail(f"prepared map: {target}")
     return manifest_path

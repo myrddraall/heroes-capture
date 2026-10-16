@@ -44,9 +44,14 @@ Two logs:
   time-stamped; working files, so removed with the rest. A run removes only its own: a failed
   run's stay until `clean-up`. A capture restarted after a lost match carries on in its run's.
 
-On a terminal the output is a live view (the step, its status, progress bars; warnings print
-above it); `--log` gives plain log lines instead, the default in CI or when the output isn't a
-terminal; `-v` / `--verbose` adds the detail messages in either.
+On a terminal the output is a live view of the run as a tree: its steps (preparing, capturing,
+stitching and packing) and each step's stages and passes, the whole run from its start, a line
+each with its bar, count and time (greyed until it starts); one in progress has its latest
+status on a second line under it.
+Warnings print above it; when a run ends its finished tree is printed, so earlier runs are a
+scroll back. `--log` gives plain log lines instead, as a tree (the default in CI or when the
+output isn't a terminal; the log files read the same); `-v` / `--verbose` adds the detail
+messages in either.
 
 The rest of this page is for working on the tool itself.
 
@@ -441,7 +446,7 @@ materials, and the 200-second scrolls of the sequences that run alongside, GLsta
   game in front only as the run starts (or as it starts the game): alt-tabbing away pauses the
   run until you click back into the game. Opening the game's own menu (Esc, Options, the Alt+F4
   dialog) pauses it the same way, until the menu is closed. While paused, the live view says why;
-  the line goes once the run carries on (the logs keep each pause and how long it lasted). Either
+  once the run carries on, the status says how long it was paused and what was done again. Either
   way the tile in progress is dropped and redone from its start; black frames are retaken; where map content reaches an
   outer tile's outer edge (Battlefield of Eternity's arches run past the camera bounds), it lifts
   the camera bounds and adds tiles beyond, outwards until the edge is clear (three at most); it stops early if the map stops responding, and

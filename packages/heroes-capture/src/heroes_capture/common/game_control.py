@@ -184,7 +184,8 @@ def ensure_game_running(battlenet: str | None, game: str) -> None:
             "by hand, or tell heroes-capture where the app is: set HRS_BATTLENET=<path to Battle.net.exe>\n"
             "in update.cmd (or pass --battlenet)."
         )
-    log(f"Heroes isn't running; starting it through Battle.net ({launcher}) ...")
+    log("starting Heroes through Battle.net")
+    detail(f"Battle.net: {launcher}")
     # Battle.net can let a launch command go by: told to launch right after the game was killed,
     # it still showed the game's page with Play ready, and started nothing. So the command is
     # sent again after 45 s, then as the battlenet:// link the app also launches from, and
@@ -197,7 +198,7 @@ def ensure_game_running(battlenet: str | None, game: str) -> None:
     started = time.time()
     for n, (how, start) in enumerate(attempts):
         if n:
-            log(f"  Heroes hasn't started after {time.time() - started:.0f} s; trying {how}")
+            log(f"Heroes hadn't started after {time.time() - started:.0f} s; trying {how}")
         start()
         wait_until = time.time() + 45
         while not game_running() and time.time() < wait_until:
@@ -228,16 +229,16 @@ def ensure_game_running(battlenet: str | None, game: str) -> None:
             time.sleep(2.0)
             if not foreground_is_game():  # waited for, not taken back: the user may have stepped away from it on purpose
                 if time.time() - last_note > 10:
-                    log(f"  Heroes isn't in front ({foreground_program()} is); click into the game to carry on")
+                    log(f"Heroes isn't in front ({foreground_program()} is): click into the game to carry on")
                     last_note = time.time()
                 continue
             parts = menu_matches(screen.grab())
             seen = seen + 1 if parts >= 2 else 0
             if seen >= 2:
-                log("Heroes is at the main menu")
+                log("Heroes is at its main menu")
                 return
             if time.time() - last_note > 10:
-                log(f"  waiting for the menu ({parts} of 3 fixed parts of it on screen)")
+                log(f"waiting for the menu ({parts} of 3 fixed parts of it on screen)")
                 last_note = time.time()
     warn("couldn't tell whether Heroes reached the menu; carrying on")
 

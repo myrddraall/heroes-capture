@@ -43,9 +43,9 @@ def test_the_steps_on_their_own_show_as_steps(monkeypatch, tmp_path):
     monkeypatch.setattr(stitch, "main", lambda argv, specifics_of: None)
     monkeypatch.setenv("HRS_RECOVERIES", "1")
     result = runner.invoke(cli.app, ["--log", "capture", "tmp/m.json", "--start", "86"])
-    assert result.exit_code == 0 and "\nCapturing Punisher Arena in the game (restart 1 of 3)\n" in result.output
+    assert result.exit_code == 0 and "✓ Restart 1 of 3: the map launched again" in result.output
     result = runner.invoke(cli.app, ["--log", "stitch", "tmp/m.json"])
-    assert result.exit_code == 0 and "\nStitching Punisher Arena\n" in result.output
+    assert result.exit_code == 0 and "✓ Stitching Punisher Arena" in result.output
 
 
 def test_prepare_help_lists_its_options(tmp_path):
@@ -152,14 +152,14 @@ def test_map_render_runs_the_three_steps_with_the_defaults(monkeypatch, tmp_path
     assert calls[0] == ("prepare", ["Dragon Shire", "--structures", "hide", "--fov", "12", "--out", "tmp", "--keep", "0.4"])
     assert calls[1] == ("capture", [manifest])
     assert calls[2] == ("stitch", [manifest, "--output-dir", "maps"])
-    assert "Dragon Shire (hide structures): 10 tiles planned, black void" in result.output
+    assert "▾ Dragon Shire: hide render" in result.output and "│ 10 tiles planned\n" in result.output
     assert "not verified" not in result.output  # Dragon Shire is
     assert (tmp_path / "maps" / "dragon-shire" / "pack" / "pack.json").exists()
-    assert "Dragon Shire: the map is in maps" in result.output
+    assert "the map is in maps" in result.output
     # The working files stay, marked finished (a later run builds on them, and doesn't carry this one on).
     assert json.loads((tmp_path / "tmp" / "dragon-shire-terrain.json").read_text())["finished"] is True
     plain = (tmp_path / "logs" / "heroes-capture.log").read_text()  # the plain log stays
-    assert plain.startswith("===== ") and "\nPreparing Dragon Shire\n" in plain and "10 tiles planned" in plain
+    assert plain.startswith("===== ") and "▾ Dragon Shire: hide render\n" in plain and "✓ Preparing the map" in plain and "10 tiles planned" in plain
     assert "\x1b[" not in plain
 
 
@@ -338,7 +338,7 @@ def test_a_category_run_goes_on_past_a_failure_and_carries_on_where_it_left_off(
     assert result.exit_code == 1, result.output
     assert [c[1][0] for c in calls if c[0] == "prepare"] == ["Cursed Hollow", "Dragon Shire", "Punisher Arena"]
     assert "3 maps to render (all), 2 of them verified; 1 unsupported left out" in result.output  # Pull Party: a brawl not known
-    assert "Cursed Hollow (keep structures): 10 tiles planned, black void; not verified: it may not come out right" in result.output
+    assert "▾ Cursed Hollow: keep render" in result.output and "10 tiles planned (this map isn't verified yet)" in result.output
     assert "2 rendered, 0 already rendered, 1 failed" in result.output and "failed: Cursed Hollow." in result.output
     calls = render_steps(monkeypatch, tmp_path)
     result = runner.invoke(cli.app, ["--log", "map", "render", "--category", "all"])
@@ -510,8 +510,34 @@ def test_the_plain_log_is_what_log_mode_prints_in_either_mode(tmp_path, ui_state
         ui.show("1 of 2 maps validated")
         return (tmp_path / f"{mode}.log").read_text().splitlines()[1:]  # after the dated line
 
-    assert run("pretty") == run("log") == ["", "Capturing", "tile 1/2", "warning: focus lost", "a library's line",
-                                            "2 screenshots", "1 of 2 maps validated"]
+    lines = run("log")
+    assert [line.split("  ")[0].rstrip() for line in run("pretty")] == [line.split("  ")[0].rstrip() for line in lines]  # but the times
+    assert lines[:4] == ["▾ Capturing", "│ tile 1/2", "│ warning: focus lost", "│ a library's line"]
+    assert lines[4].startswith("└ ✓ Capturing") and lines[5:] == ["2 screenshots", "1 of 2 maps validated"]
+
+
+def test_the_tree_puts_each_line_under_its_folder_and_a_quiet_folder_on_one_line(tmp_path, ui_state):
+    """A folder with nothing shown in it is one closing line on screen; the run's own log (a
+    listener) gets every line, detail included, each under its folder's title."""
+    from heroes_capture.common import ui
+
+    ui.configure(log=True)
+    ui.set_plain_log(tmp_path / "plain.log", header=False)
+    told: list[str] = []
+    ui.add_listener(told.append)
+    with ui.folder("Capturing"):
+        with ui.folder("Status strip"):
+            ui.detail("status strip: 30x18 px cells")
+        with ui.folder("Tiles", 2) as tiles:
+            tiles.advance(2)
+            ui.warn("tile 2: no picture")
+    ui.remove_listener(told.append)
+    shown = (tmp_path / "plain.log").read_text().splitlines()
+    assert [line.split("  ")[0].rstrip() for line in shown] == [
+        "▾ Capturing", "│ ✓ Status strip", "│ ▾ Tiles", "│ │ warning: tile 2: no picture", "│ └ ✓ Tiles", "└ ✓ Capturing"]
+    assert "2/2" in shown[4]
+    assert [line.split("  ")[0].rstrip() for line in told[:4]] == [
+        "▾ Capturing", "│ ▾ Status strip", "│ │ status strip: 30x18 px cells", "│ └ ✓ Status strip"]
 
 
 def test_library_warnings_show_once_however_often_the_output_is_configured(ui_state, capsys):
@@ -548,11 +574,15 @@ def test_a_resumed_runs_progress_bar_counts_the_whole_run(ui_state):
 
     ui.configure()
     ui._s.mode = "pretty"
-    with ui.step("Capturing"):
+    with ui.step("Capturing") as capturing:
+        ui.plan("tiles from Chaos's side", 20)
         with ui.bar(154, "tiles", done=30) as advance:
             advance()
-            [task] = ui._s.bars.tasks
-            assert (task.total, task.completed) == (154, 31)
+            [tiles, _] = capturing.children
+            assert tiles.units() == (31, 154) and capturing.units() == (31, 174)  # what is planned counts too
+        ui.keep_count(ui.plan("pack", 1000))
+        assert capturing.units() == (31, 174)  # a count kept to its own folder isn't the run's
+    ui._stop_live()
 
 
 def test_a_pause_shows_while_it_lasts_and_is_gone_after(tmp_path, ui_state):
@@ -564,11 +594,12 @@ def test_a_pause_shows_while_it_lasts_and_is_gone_after(tmp_path, ui_state):
     ui._s.mode = "pretty"
     ui.set_plain_log(tmp_path / "plain.log")
     with ui.step("Capturing"):
-        with ui.notice("the game isn't in front"):
+        with ui.notice("the game isn't in front", "explorer.exe was in front"):
             assert ui._s.notice == "the game isn't in front"
         assert ui._s.notice == ""
+    ui._stop_live()
     lines = (tmp_path / "plain.log").read_text().splitlines()
-    assert "paused: the game isn't in front" in lines and any(line.startswith("carrying on after") for line in lines)
+    assert "│ ⏸ paused 0 s: explorer.exe was in front" in lines and not any("paused: the game" in line for line in lines)
 
 
 def test_map_view_serves_a_rendered_pack_until_stopped(monkeypatch, tmp_path):
@@ -607,7 +638,7 @@ def test_a_job_runs_its_renders_in_order(monkeypatch, tmp_path):
     result = runner.invoke(cli.app, ["job", str(job_file)])
     assert result.exit_code == 0, result.output
     assert [(c[0], c[1][0]) for c in calls if c[0] == "prepare"] == [("prepare", "Dragon Shire"), ("prepare", "Punisher Arena")]
-    assert "run 1 of 2: Dragon Shire: keep render" in result.output and "job done: 2 run(s)" in result.output
+    assert "Run 1 of 2: Dragon Shire: keep render" in result.output and "job done: 2 runs" in result.output
     assert json.loads((tmp_path / "tmp" / "job.json").read_text())["done"] == [0, 1]
 
 
@@ -620,7 +651,7 @@ def test_a_job_s_run_of_some_parts_builds_on_the_kept_run(monkeypatch, tmp_path)
     manifest = str((tmp_path / "tmp" / "dragon-shire-structures.json").resolve())
     assert [c[0] for c in calls] == ["prepare", "capture", "stitch"]
     assert calls[1] == ("capture", [manifest, "--parts", "tiles", "--reuse"])
-    assert "Dragon Shire: reshooting tiles (10); the rest kept" in result.output
+    assert "reshooting tiles (10); the rest kept" in result.output
     # Only skies: the kept tiles must fit the grid as planned now.
     manifest_data = json.loads(Path(manifest).read_text())
     manifest_data["tiles"][0]["x"] = 99
@@ -642,7 +673,7 @@ def test_a_stopped_job_resumes_where_it_left_off(monkeypatch, tmp_path):
     calls = render_steps(monkeypatch, tmp_path)
     result = runner.invoke(cli.app, ["job", str(job_file), "--resume"])
     assert result.exit_code == 0, result.output
-    assert "run 1 of 2: Dragon Shire: keep render: done before" in result.output and "(carried on)" in result.output
+    assert "Run 1 of 2: Dragon Shire: keep render: done before" in result.output and "(carried on)" in result.output
     manifest = str((tmp_path / "tmp" / "punisher-arena-structures.json").resolve())
     assert calls[0] == ("capture", [manifest, "--start", "4"])  # carried on from its screenshots
     # A changed job file isn't the job that stopped.

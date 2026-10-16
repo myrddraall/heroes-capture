@@ -31,7 +31,7 @@ from heroes_capture.capture.team_colour import MASK_SCALE, TEAM_COLOURS
 from heroes_capture.common import game_data
 from heroes_capture.common import ui
 from heroes_capture.common.jsonio import read_json, write_json
-from heroes_capture.common.runlog import log, stage, warn
+from heroes_capture.common.runlog import detail, log, stage, warn
 from heroes_capture.common.stormlib import Archive
 from heroes_capture.common.workers import ordered_map
 from heroes_capture.map.specifics import Specifics
@@ -458,7 +458,7 @@ def write(out: Path, manifest: dict, images: list[str], specifics: Specifics) ->
     for folder in (pack, raw):
         if folder.exists():
             shutil.rmtree(folder)
-    with stage("pack"):
+    with stage("Packing"):
         layers, arenas, layer_of = collect_raw(out, raw, manifest["id"], images)
         if arenas:
             areas = {a["name"].lower(): a["bounds"] for a in manifest.get("areas") or []}
@@ -566,5 +566,6 @@ def write(out: Path, manifest: dict, images: list[str], specifics: Specifics) ->
         }
         write_json(pack / "pack.json", description, indent=None)
     total = sum(e["bytes"] for e in description["files"].values())
-    log(f"pack -> {pack} ({len(packed)} layers, {len(found_images)} pictures, {total / 1e6:.0f} MB)")
+    log(f"pack: {total / 1e6:.0f} MB, {len(packed)} layer{'s' if len(packed) != 1 else ''} and {len(found_images)} pictures")
+    detail(f"pack in {pack}")
     return pack

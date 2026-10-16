@@ -416,6 +416,8 @@ def calibrate_one(map_spec: str, name: str, options: list[str], output_dir: Path
         raise typer.BadParameter(f"{name} has no calibration yet to add stages to: calibrate it whole first")
     work = Path(options[options.index("--out") + 1]) / CALIBRATION_WORK
     options = ["--structures", "elements", *without(options, "--structures", "--out", "--calibration"), "--out", str(work), "--calibrate"]
+    ui.plan("Preparing the map for its calibration")
+    ui.plan("Calibrating in the game" + (f" ({', '.join(only)})" if only else ""))
     with ui.step("Preparing the map for its calibration"):
         manifest_path = prepare.main([map_spec, *options], specifics_of_map)
     run_folder = manifest_path.with_suffix("")
@@ -440,7 +442,7 @@ def calibrate_one(map_spec: str, name: str, options: list[str], output_dir: Path
             work.rmdir()
         except OSError:
             pass  # other files in it
-    ui.done(f"{name}: calibrated, in {target}")
+    ui.done(f"calibration saved in {target}")
     return target
 
 
@@ -483,22 +485,24 @@ def render_one(map_spec: str, name: str, options: list[str], output_dir: Path, c
         ui.done(f"{name}: already rendered in {out} (--force renders it again)")
         return False
     options = with_reviewed_calibration(options, name)
-    note = "" if name in validated else "; not verified: it may not come out right"
+    note = "" if name in validated else " (this map isn't verified yet)"
     manifest_path = kept_run(work, map_id, options) if carry_on or not force else None
     if manifest_path:
         planned = read_json(manifest_path)
+        plan_render(structures, "Capturing in the game", None, planned, prepared=True)
         start = first_missing_tile(manifest_path, planned)
-        ui.done(f"{name}: carrying on from the run left in {work} ({start} of {len(planned['tiles'])} tiles kept){note}")
+        ui.done(f"carrying on from the run left in {work} ({start} of {len(planned['tiles'])} tiles kept){note}")
     else:
+        plan_render(structures, "Capturing in the game", None)
         with ui.step("Preparing the map"):
             manifest_path = prepare.main([map_spec, *options], specifics_of_map)
         planned = read_json(manifest_path)
+        plan_render(structures, "Capturing in the game", None, planned)
         planned["renderOptions"] = options  # what a later render must match to carry this one on
         planned["tool"] = tool_fingerprint()  # and the tool that must be carrying it on
         write_manifest(manifest_path, planned)
         start = 0
-        ui.done(f"{planned['map']} ({structures} structures): {len(planned['tiles'])} tiles planned, "
-                + ("void shot over white and black" if planned["sky"]["mode"] == "matte" else "black void") + note)
+        ui.done(f"{len(planned['tiles'])} tiles planned{note}")
     manifest = str(manifest_path)
     if start < len(planned["tiles"]):
         if not start:
@@ -512,8 +516,55 @@ def render_one(map_spec: str, name: str, options: list[str], output_dir: Path, c
         remove([manifest_path, manifest_path.with_suffix(".stormmap"), manifest_path.with_suffix("")])
     else:
         write_manifest(manifest_path, {**read_json(manifest_path), "finished": True})
-    ui.done(f"{name}: the map is in {stitch.output_folder(output_dir, planned)} (heroes-capture map view \"{name}\" shows it)")
+    ui.done(f"the map is in {stitch.output_folder(output_dir, planned)}; heroes-capture map view \"{name}\" shows it")
     return True
+
+
+# The stitch's stages, in the order they run (capture/stitch.py, the battleground's elements,
+# capture/pack.py); one a map doesn't need is left out as its step closes.
+STITCH_STAGES = ("Matching neighbours", "Placing the screenshots", "Routing the seams", "Composing", "Transparency outside the map",
+                 "Team colour", "The black edge", "Writing the map image", "Placing the elements", "Packing")
+
+
+def plan_render(structures: str, capturing: str, only: list[str] | None, manifest: dict | None = None, prepared: bool = False) -> None:
+    """A render's whole tree, pending, as its run starts (the live view shows all of it): its
+    steps, the capture's stages and the elements' passes (capture/tiles.py, element_capture.py:
+    the titles they open), the stitch's stages; with their counts once the map is prepared
+    (`manifest`; `prepared`: a kept run's, so no preparing step). `only`: a run of some parts
+    (job.PARTS), None the whole render."""
+    parts = set(only) if only else {"skies", "standing", "camps", "rubble", "tiles"}
+    if not prepared:
+        ui.plan("Preparing the map")
+    capture = ui.plan(capturing)
+    if capture is None:
+        return
+    capture.plan("Launching the map")
+    starting = capture.plan("Starting up")
+    starting.plan("Status strip")
+    starting.plan("Map ready")
+    found = (manifest or {}).get("elements") or {}
+    if structures == "elements" and parts & {"standing", "camps", "rubble"}:
+        elements = capture.plan("Elements")
+        count = len(found["structures"]) if found.get("structures") else None
+        if "rubble" in parts:  # the copies brought down before the standing shots
+            elements.plan("Rubble preparation")
+        if "standing" in parts:
+            for title in ("Standing (blue)", "Neighbours"):
+                elements.plan(title, count)
+            elements.plan("Standing (red)")
+        if "camps" in parts and (manifest is None or found.get("camps")):
+            elements.plan("Camps", len(found["camps"]) if found.get("camps") else None)
+        if "rubble" in parts:
+            elements.plan("Rubble", count)
+        elements.plan("Clearing")
+    if "tiles" in parts:
+        capture.plan("Tiles (blue)", len(manifest["tiles"]) if manifest else None)
+        capture.plan("Tiles past the edge")
+        capture.plan("Tiles (red)")
+    capture.plan("Leaving the match")
+    stitching = ui.keep_count(ui.plan("Stitching and packing"))
+    for title in STITCH_STAGES:
+        stitching.plan(title)
 
 
 def render_some(map_spec: str, name: str, options: list[str], output_dir: Path, only: list[str], capture_options: list[str],
@@ -543,12 +594,15 @@ def render_some(map_spec: str, name: str, options: list[str], output_dir: Path, 
     if not cleared:
         removed = job.clear(run_folder, only)
         mark_cleared()
-        ui.done(f"{name}: reshooting {', '.join(f'{p} ({n})' if p in removed else p for p, n in ((p, removed.get(p)) for p in only))}; the rest kept")
+        ui.done(f"reshooting {', '.join(f'{p} ({n})' if p in removed else p for p, n in ((p, removed.get(p)) for p in only))}; the rest kept")
+    capturing = f"Capturing in the game ({', '.join(only)})"
+    plan_render(structures, capturing, only)
     with ui.step("Preparing the map"):
         manifest_path = prepare.main([map_spec, *options], specifics_of_map)
     planned = read_json(manifest_path)
+    plan_render(structures, capturing, only, planned)
     write_manifest(manifest_path, {**planned, "renderOptions": options, "tool": tool_fingerprint()})
-    with ui.step(f"Capturing in the game ({', '.join(only)})"):
+    with ui.step(capturing):
         run_capture([str(manifest_path), "--parts", ",".join(job.capture_parts(only)), "--reuse", *capture_options])
     if "tiles" not in only:
         now = [(t["index"], t.get("x"), t.get("y")) for t in read_json(manifest_path)["tiles"]]
@@ -557,7 +611,7 @@ def render_some(map_spec: str, name: str, options: list[str], output_dir: Path, 
     with ui.step("Stitching and packing"):
         stitch.main([str(manifest_path), "--output-dir", str(output_dir)], specifics_of)
     write_manifest(manifest_path, {**read_json(manifest_path), "finished": True})
-    ui.done(f"{name}: the map is in {stitch.output_folder(output_dir, planned)}")
+    ui.done(f"the map is in {stitch.output_folder(output_dir, planned)}")
 
 
 @app.command("job")
@@ -597,12 +651,12 @@ def run_job(
             carrying_on = resume and state.get("current") == n
             state["current"] = n
             job.save(TMP, state)
-            with ui.folder(heading + (" (carried on)" if carrying_on else "")):
+            with ui.folder(heading + (" (carried on)" if carrying_on else ""), section=True):
                 run_one_of_job(run, n, state, carrying_on, output_dir, monitor, capture_options, validated, known)
             state["done"].append(n)
             job.save(TMP, state)
             whole.advance()
-    ui.done(f"job done: {len(runs)} run(s)")
+    ui.done(f"job done: {len(runs)} run{'s' if len(runs) != 1 else ''}")
     cleaned_up(TMP, clean)
 
 
@@ -684,7 +738,7 @@ def render(
     rendered, skipped, failed = 0, 0, []
     for map_spec, name in maps:
         try:
-            with ui.folder(f"{name}: {structures.value} render"):
+            with ui.folder(f"{name}: {structures.value} render", section=True):
                 rendered_now = render_one(map_spec, name, options, output_dir, clean, force, capture_options, validated)
             if rendered_now:
                 rendered += 1
@@ -1067,30 +1121,79 @@ def ui_demo() -> None:
     import warnings
 
     log_to(TMP)
-    with ui.step("Capturing Demo Map in the game"):
-        ui.info("waiting for the map's status strip ...")
-        time.sleep(1.5)
-        with ui.bar(40, "tiles") as advance:
-            for n in range(40):
-                ui.info(f"tile {n + 1}/40  (row {n // 8}, col {n % 8})")
-                ui.detail(f"tile {n + 1}: camera at ({20 + 26 * (n % 8)}, {178 - 11.5 * (n // 8)})")
-                if n == 10:
-                    ui.warn("focus lost during tile 11/40 (in front: explorer.exe); redoing it from the start")
-                if n == 18:
-                    warnings.warn("a Python warning from some library", RuntimeWarning)
-                if n == 24:
-                    logging.getLogger("dxcam").warning("a library's logging warning")
-                if n == 30:
-                    print("a library printing straight to stdout")
-                    print("and to stderr", file=sys.stderr)
-                advance()
-                time.sleep(0.15)
-    ui.done("40 screenshots in tmp\\demo")
-    with ui.step("Stitching"):
-        for stage in ("matching neighbours", "routing seams", "composing", "writing the map image"):
-            ui.info(stage)
-            time.sleep(0.8)
-    ui.done("The map is in maps\\demo-map")
+    manifest = {"tiles": [{}] * 40, "elements": {"structures": [{}] * 12, "camps": [{}] * 2}}
+    with ui.folder("Run 1 of 1: Demo Map: elements render", section=True):
+        plan_render("elements", "Capturing in the game", None)
+        with ui.step("Preparing the map"):
+            ui.info("game data: D:\\Games\\Heroes of the Storm")
+            time.sleep(1.0)
+            ui.info("grid: 8×5 = 40 tiles from 214 cells up; the map image about 12373×8126 px")
+            time.sleep(0.6)
+        plan_render("elements", "Capturing in the game", None, manifest)
+        with ui.step("Capturing in the game"):
+            with ui.folder("Launching the map"):
+                ui.info("launching Demo Map")
+                time.sleep(1.0)
+            with ui.folder("Starting up"):
+                for title in ("Status strip", "Map ready"):
+                    with ui.folder(title):
+                        time.sleep(0.5)
+                ui.info("the map is ready after 1 s (game clock 18 s)")
+            with ui.folder("Elements"):
+                with ui.folder("Rubble preparation", 3) as counter:
+                    for n in range(3):
+                        ui.info(f"group {n + 1} of 3: 4 falling")
+                        counter.advance()
+                        time.sleep(0.4)
+                with ui.folder("Standing (blue)", 12) as counter:
+                    for n in range(12):
+                        ui.info(f"Cannon Tower ({40 + n * 9}, 96)")
+                        counter.advance()
+                        time.sleep(0.15)
+                with ui.folder("Neighbours", 12) as counter:
+                    for n in range(12):
+                        counter.advance()
+                        time.sleep(0.05)
+                with ui.folder("Standing (red)", 8) as counter:
+                    for n in range(8):
+                        ui.info(f"Healing Fountain ({52.5 + n * 12:g}, 68.5)")
+                        if n == 3:
+                            with ui.notice("the game isn't in front (explorer.exe is): click into the game to carry on",
+                                           "explorer.exe was in front; Healing Fountain (88.5, 68.5) as red done again"):
+                                time.sleep(2.0)
+                        counter.advance()
+                        time.sleep(0.2)
+                for title, total in (("Camps", 2), ("Rubble", 12)):
+                    with ui.folder(title, total) as counter:
+                        for n in range(total):
+                            ui.info(f"wave {n // 4 + 1} of 3" if title == "Rubble" else f"camp wave {n + 1}")
+                            counter.advance()
+                            time.sleep(0.15)
+                with ui.folder("Clearing"):
+                    time.sleep(0.5)
+            with ui.folder("Tiles (blue)", 40) as counter:
+                for n in range(40):
+                    ui.info(f"tile {n + 1} of 40")
+                    if n == 10:
+                        ui.warn("tile 11: no picture (the map didn't answer, or the frames were black); not saved")
+                    if n == 18:
+                        warnings.warn("a Python warning from some library", RuntimeWarning)
+                    if n == 24:
+                        logging.getLogger("dxcam").warning("a library's logging warning")
+                    if n == 30:
+                        print("a library printing straight to stdout")
+                        print("and to stderr", file=sys.stderr)
+                    counter.advance()
+                    time.sleep(0.1)
+            with ui.folder("Leaving the match"):
+                time.sleep(0.3)
+            ui.done("40 screenshots")
+        with ui.step("Stitching and packing"):
+            for stage in ("Matching neighbours", "Placing the screenshots", "Routing the seams", "Composing", "Writing the map image", "Packing"):
+                with ui.folder(stage):
+                    ui.info(stage.lower())
+                    time.sleep(0.5)
+        ui.done("the map is in maps\\demo-map")
 
 
 @app.command("self-check", hidden=True)

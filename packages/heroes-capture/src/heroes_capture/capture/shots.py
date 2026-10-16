@@ -68,6 +68,13 @@ def recoloured(reference: np.ndarray, frame: np.ndarray, boxes: list[tuple[int, 
                for v0, v1, u0, u1 in boxes)
 
 
+def differs(reference: np.ndarray, frame: np.ndarray, boxes: list[tuple[int, int, int, int]]) -> bool:
+    """Whether a frame's boxes differ from the reference's (recoloured); the whole frame when none
+    of the boxes is on it."""
+    shown = [b for b in boxes if b[0] < b[1] and b[2] < b[3]] or [(0, frame.shape[0], 0, frame.shape[1])]
+    return recoloured(reference, frame, shown)
+
+
 def still_frame(session, boxes: list[tuple[int, int, int, int]], first: np.ndarray | None = None) -> np.ndarray | None:
     """A frame once `boxes` of the view hold still: two grabs STILL_GAP apart that differ in none of
     them (recoloured); after STILL_CAP, the frame as it is. `first`: a grab to start from."""

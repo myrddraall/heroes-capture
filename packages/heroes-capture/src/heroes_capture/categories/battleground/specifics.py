@@ -15,7 +15,7 @@ from heroes_capture.capture.stitch import Stitched
 from heroes_capture.categories.battleground import element_pack, element_stitch, elements, script
 from heroes_capture.common import actors, game_data
 from heroes_capture.common.jsonio import read_json
-from heroes_capture.common.runlog import log, stage
+from heroes_capture.common.runlog import detail, log, stage
 from heroes_capture.map.specifics import Specifics
 
 # The stacking probe's sink: the site operation's id, and how far below the ground it draws a copy.
@@ -52,10 +52,10 @@ def prepare(prep: Preparation) -> None:
         cell_flags, holes = elements.fill_structure_holes(archive.read("t3CellFlags"), prep.objects)
         if holes:
             archive.write("t3CellFlags", cell_flags)
-            log("terrain holes under structures filled in the file, opened by the script: "
-                + ", ".join(f"{h['type']} at ({h['x']:g}, {h['y']:g}), {len(h['cells'])} cells" for h in holes))
+            log(f"holes under {len(holes)} structures filled (opened again in the game)")
+            detail(", ".join(f"{h['type']} ({h['x']:g}, {h['y']:g})" for h in holes))
     found = elements.element_list(prep.map_script, prep.objects, prep.regions)
-    log(f"elements: {len(found['structures'])} structures in {len(found['towns'])} towns, {len(found['camps'])} camps")
+    log(f"{len(found['structures'])} structures in {len(found['towns'])} towns, {len(found['camps'])} camps")
     if prep.opts["structures"] == "elements":
         light = elements.lighting_map(archive.read_optional("LightingMap.tga"))
         if prep.opts["calibrate"]:
@@ -72,6 +72,8 @@ def prepare(prep: Preparation) -> None:
             placed = elements.parse_objects(prep.objects)[1]
             found["doodads"] = [{"type": d["type"], "x": d["x"], "y": d["y"]} for d in placed]
             found["report"] = data_report(prep, sorted({u["type"] for u in found["structures"]}), sorted({d["type"] for d in placed}))
+            for structure in found["structures"]:  # its name as the game shows it, for the run's log
+                structure["name"] = found["report"]["names"].get(structure["type"], structure["type"])
             moving = [t for t, m in found["report"]["doodads"].items() if m["particles"] or m["ribbons"] or m["lights"]]
             log(f"calibration: candidate spots for {len(candidates)} structures' copies; {len(found['report']['structures'])} structure "
                 f"types' actors and {len(placed)} doodads of {len(found['report']['doodads'])} types read "
@@ -100,18 +102,15 @@ def prepare(prep: Preparation) -> None:
             prep.manifest["fallWaits"] = calibration.get("fallWaits") or {}
             prep.manifest["standWaits"] = calibration.get("standWaits") or {}
             prep.manifest["standModels"] = calibration.get("standModels") or {}
-            log(f"copies: {len(spots)} structures' rubble prepared on the spots the calibration checked; "
-                f"{len(found['structures']) - len(spots)} fall themselves; "
-                f"{len(prep.manifest['fallWaits'])} kinds' fall waits and {len(prep.manifest['standWaits'])} standing times picked in its review")
+            log(f"rubble: {len(spots)} copied to checked spots, {len(found['structures']) - len(spots)} brought down in place")
+            log(f"calibration: {len(prep.manifest['fallWaits'])} fall times, {len(prep.manifest['standWaits'])} standing times")
         else:
             # Each structure's copy's spare spot (element_capture.py), under its own lighting; unchecked.
             spots = elements.copy_spots(found["structures"], found["camps"], prep.info["bounds"], prep.info["width"], light)
             for structure in found["structures"]:
                 if structure["id"] in spots:
                     structure["copy"] = spots[structure["id"]]
-            log(f"copies: {len(spots)} structures' rubble prepared on spare spots"
-                f"{' under the same lighting (the lighting map)' if light is not None else ''}, not calibrated; "
-                f"{len(found['structures']) - len(spots)} fall themselves")
+            log(f"rubble: {len(spots)} copied to spare spots (not calibrated), {len(found['structures']) - len(spots)} brought down in place")
     # What the render cuts out of the map (ELEMENTS-PLAN.md): structures, towns, camps.
     prep.manifest["elements"] = found
     # Structures kept in the tiles are in their team's colours there: a tile that shows one is shot

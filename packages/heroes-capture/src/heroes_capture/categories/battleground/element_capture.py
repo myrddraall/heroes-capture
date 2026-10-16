@@ -49,8 +49,9 @@ from pathlib import Path
 import numpy as np
 
 from heroes_capture.capture.sky import LIGHT_LEVEL, LIGHT_SKY
-from heroes_capture.capture.shots import SWITCH_CAP, recoloured_frame, shot_over_black, still_frame, tile_command
+from heroes_capture.capture.shots import STILL_CAP, STILL_GAP, SWITCH_CAP, differs, shot_over_black, still_frame, tile_command
 from heroes_capture.categories.battleground.elements import (
+    called,
     goes_with_a_fort,
     may_overlap,
     rubble_team_colour,
@@ -88,10 +89,6 @@ NEIGHBOUR_REACH = 10.0
 FADES_A_COMMAND = 4
 # Seconds from a structure shown (or a camp frozen) to its shot: a frame or two to be drawn.
 SHOW_SETTLE = 0.1
-# Seconds a side switch is watched for on a structure the calibration found nothing changes on.
-UNCHANGING_CAP = 0.5
-# Remains repainted (SetTeamColor, no blend time) change at once: watched this long at most.
-PAINT_CAP = 0.5
 # Remains whose circle has less than this share of pixels more than EMPTY_DIFF off the light sky
 # are nothing (a copy that fell to nothing; the least real rubble covers about 0.005).
 EMPTY_SHARE, EMPTY_DIFF = 0.001, 30
@@ -117,12 +114,6 @@ COPY_TRYING, COPY_CRASHED = "HRS_COPY_TRYING", "HRS_COPY_CRASHED"
 def element_key(kind: str, element: dict, state: str) -> str:
     """An element's shots' name: structure-<placed unit id>-<state>, camp-<n>-<state>."""
     return f"{kind}-{element['id'] if kind == 'structure' else element['camp']}-{state}"
-
-
-def called(element: dict) -> str:
-    """An element as the run's log names it: its name in the game (a structure's, from the data
-    report) and where it is."""
-    return f"{element.get('name') or element.get('type') or 'camp'} at ({element['x']:g}, {element['y']:g})"
 
 
 def capture_elements(session, manifest: dict, base: Path) -> None:
@@ -217,7 +208,7 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         key = element_key(kind, element, state)
         records[key] = {"kind": kind, "state": state, "element": element["id"] if kind == "structure" else element["camp"],
                         "x": element["x"], "y": element["y"], "radius": element["radius"], "tile": tile["index"],
-                        "shot": key, "camera": camera or None, **extra}
+                        "shot": key, "camera": camera or None, **({"name": element["name"]} if element.get("name") else {}), **extra}
         saved()
         write_json(record_path, records, indent=1)
 
@@ -242,6 +233,8 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         counter.completed = 0
         copied = sorted((u for u in structures if u["id"] in plan), key=lambda u: plan[u["id"]])
         note(f"Preparing rubble: making copies of {len(copied)} structures" if copied else "Waiting for the camps to spawn")
+        if copied:
+            log(f"making {len(copied)} copies")
         for u in copied:
             os.environ[COPY_TRYING] = u["type"]
             send(f"el copy {plan[u['id']]} make {u['x']:g} {u['y']:g} {u['copy']['x']:g} {u['copy']['y']:g}")
@@ -249,6 +242,7 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         camps_born = early["at"] + CAMP_WAIT if early["camps"] else 0.0
         for n, group in enumerate(copy_groups or [[]], start=1):
             if group:
+                log(f"group {n} of {len(copy_groups)}: {len(group)} falling")
                 note(f"Preparing rubble: bringing down copies of the structures, group {n} of {len(copy_groups)}")
                 look_over(*view_middle(group, at=lambda u: (u["copy"]["x"], u["copy"]["y"])))
             started_at = time.time()
@@ -331,6 +325,7 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         shot_over_black(session, white)  # the sky black for the neighbours' shots
         beside = []
         for n in near:
+            log(f"{called(u)} with {called(n)}")
             fade_all(([(shown["neighbour"], 0)] if shown["neighbour"] else []) + [(n, 1)])
             shown["neighbour"] = n
             settle(SHOW_SETTLE)
@@ -341,10 +336,10 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         update(key, neighbours=beside)
 
     def stand_chaos(u: dict) -> None:
-        """A structure shot again over white and black from Chaos's side (our player put on it once
-        for the whole pass: the switch long drawn), for its team-colour mask: once what it shows
-        differs from its shot from Order (watched briefly where the calibration saw nothing on it
-        change); unchanged, it has no team colour."""
+        """A structure shot again over white and black from Chaos's side, for its team-colour mask,
+        as its shot from Order was (SHOW_SETTLE from its fade-in): our player was put on Chaos once
+        before the pass, so it is drawn in Chaos's colours as it fades in, with nothing to wait for.
+        No different from its shot from Order, it has no team colour."""
         key = element_key("structure", u, "standing")
         go(u, leftovers() + [(u, 1)])
         shown.update(structure=u, neighbour=None)
@@ -352,16 +347,17 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         order = load_frame(folder / key) if frame_exists(folder / key) else None
         shape = order.shape if order is not None else (0, 0)
         circle = circle_box(screen_point(u, camera, manifest["screen"], manifest["pxPerCell"]), u["radius"] * manifest["pxPerCell"], shape)
-        white, changed = recoloured_frame(session, order, [circle], SWITCH_CAP if u.get("changesSide") else UNCHANGING_CAP)
-        if not changed:
+        settle(SHOW_SETTLE)
+        white = session.grab(dark_ok=True)
+        if order is None or white is None or not differs(order, white, [circle]):
             side["unchanged"] += 1
             if u.get("changesSide"):
-                warn(f"{called(u)}: nothing changed from Chaos's side, though the calibration saw it change; kept without team colour")
+                warn(f"{called(u)}: no change as red, though the calibration saw one; no team colour kept")
             update(key, chaos=None)
             return
         black = shot_over_black(session, white)
         if white is None or black is None:
-            warn(f"{called(u)}: the game gave no picture from Chaos's side")
+            warn(f"{called(u)}: no picture as red")
             update(key, chaos=None)
             return
         save(f"{key}-chaos", white)
@@ -387,11 +383,29 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
             settle(CAMP_WAIT)
             send("el freeze")
         for c in camps_now:
+            log(called(c))
             tile = go(c)
             if (camera := pair(element_key("camp", c, "spawned"))) is not None:
                 record("camp", c, "spawned", tile, camera)
         send("el keep 0")
         send("clean")  # the camps' defenders removed
+
+    # Kinds whose remains keep moving while the game is paused (Dragon Shire's Healing Fountains'
+    # debris): a hold-still check never ends for them, so once one has run its whole STILL_CAP
+    # they are shot after one short gap.
+    moving: set[str] = set()
+
+    def held(u: dict, circle: tuple, first: np.ndarray | None = None) -> np.ndarray | None:
+        """The view once the remains in `circle` hold still (still_frame); a kind seen moving, after
+        one STILL_GAP."""
+        if u["type"] in moving:
+            settle(STILL_GAP)
+            return session.grab(dark_ok=True)
+        started_at = time.time()
+        frame = still_frame(session, [circle], first)
+        if time.time() - started_at >= STILL_CAP * 0.95:
+            moving.add(u["type"])
+        return frame
 
     def rubble_shots(u: dict, at: dict) -> dict | None:
         """A structure's remains (on the cell `at`) over white and black as drawn (Order's side), and
@@ -411,7 +425,7 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         first = session.grab(dark_ok=True)
         shape = first.shape if first is not None else (0, 0)
         circle = circle_box(screen_point(at, camera or at, manifest["screen"], manifest["pxPerCell"]), radius * manifest["pxPerCell"], shape)
-        white = still_frame(session, [circle], first)
+        white = held(u, circle, first)
         black = shot_over_black(session, white)
         if white is None or black is None:
             warn(f"{stem}: the game gave no picture")
@@ -424,11 +438,14 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
             return {"camera": camera, "chaos": None, "empty": True}
         if not other or rubble_team_colour(u, report) is False or not send(f"sky {LIGHT_SKY} 0"):
             return {"camera": camera, "chaos": None}
-        light = still_frame(session, [circle])
+        light = held(u, circle)
         paint = f"el paint {at['x']:g} {at['y']:g} {radius:g}"
         if light is None or not send(f"{paint} SetTeamColor~{','.join(map(str, other['diffuse']))}~{','.join(map(str, other.get('emissive', other['diffuse'])))}"):
             return {"camera": camera, "chaos": None}
-        chaos_white, changed = recoloured_frame(session, light, [circle], PAINT_CAP)
+        # Repainted at once (SetTeamColor has no blend time): drawn a frame or two later.
+        settle(SHOW_SETTLE)
+        chaos_white = held(u, circle)
+        changed = chaos_white is not None and differs(light, chaos_white, [circle])
         chaos_black = shot_over_black(session, chaos_white) if changed else None
         send(f"{paint} ClearTeamColor")
         if chaos_black is None:
@@ -477,6 +494,7 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
             settle(max(0.0, max(ends) - time.time()))
             send("el freeze")
         for u in structures_now:
+            log(called(u))
             tile = go(u)
             if (shots := rubble_shots(u, u)) is not None:
                 record("structure", {**u, "radius": rubble_radius(u)}, "rubble", tile, shots["camera"], chaos=shots["chaos"])
@@ -500,7 +518,6 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         return {u["id"]: n for n, u in enumerate(u for g in copy_groups for u in g)}
 
     replaced: set[int] = set()
-    started = time.time()
     copy_groups: list[list[dict]] = []
     plan = plan_copies()
     prepared = {"done": False}
@@ -518,13 +535,13 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
     # run kept already done.
     if plan or early["camps"]:
         ui.plan("Rubble preparation", len(copy_groups) or None)
-    for title in ("Standing", "Standing with their neighbours"):
+    for title in ("Standing (blue)", "Neighbours"):
         ui.plan(title, len(structures))
-    ui.plan("Standing from Chaos's side", sum(needs_chaos(u) for u in structures))
+    ui.plan("Standing (red)", sum(needs_chaos(u) for u in structures))
     if camps:
         ui.plan("Camps", len(camps))
     ui.plan("Rubble", len(structures))
-    ui.plan("Clearing the remains")
+    ui.plan("Clearing")
     send(tile_command(tiles[0]))  # the scene and the capture camera as the tiles have them
     # The structures faded out, not hidden: each keeps its look as the map paused it, effects
     # and all (hidden and shown again, a structure restarts its animations, a level 3 tower's
@@ -537,16 +554,18 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
     if plan or early["camps"]:
         with stage("Rubble preparation", len(copy_groups) or None) as counter:
             step(lambda: prepare(counter), "the rubble preparation")
-    with stage("Standing", len(structures), len(structures) - len(pending_structures)) as counter:
+    with stage("Standing (blue)", len(structures), len(structures) - len(pending_structures)) as counter:
         for u in pending_structures:
-            step(lambda: stand(u), f"{called(u)} standing")
+            log(called(u))
+            step(lambda: stand(u), f"{called(u)} as blue")
             counter.advance()
     # Every structure now stands as it is shot: the neighbours' shots, then one pass from Chaos's
     # side (our player switched once, not twice a structure).
     standing = [u for u in structures if element_key("structure", u, "standing") in records]
     beside = [u for u in standing if "neighbours" not in records[element_key("structure", u, "standing")]]
-    with stage("Standing with their neighbours", len(standing), len(standing) - len(beside)) as counter:
+    with stage("Neighbours", len(standing), len(standing) - len(beside)) as counter:
         for u in beside:
+            log(called(u))
             step(lambda: connect(u), f"{called(u)} with its neighbours")
             counter.advance()
     for u in standing:
@@ -554,16 +573,17 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
             update(element_key("structure", u, "standing"), chaos=None)
     coloured = [u for u in standing if needs_chaos(u)]
     chaos = [u for u in coloured if "chaos" not in records[element_key("structure", u, "standing")]]
-    with stage("Standing from Chaos's side", len(coloured), len(coloured) - len(chaos)) as counter:
+    with stage("Standing (red)", len(coloured), len(coloured) - len(chaos)) as counter:
         if chaos and send("side 2"):
             side["team"] = 2
             settle(SWITCH_CAP)
             for u in chaos:
-                step(lambda: stand_chaos(u), f"{called(u)} from Chaos's side")
+                log(called(u))
+                step(lambda: stand_chaos(u), f"{called(u)} as red")
                 counter.advance()
             back_to_order()
         if side["unchanged"]:
-            log(f"{side['unchanged']} showed nothing that changes with the side: no team colour for them")
+            log(f"{side['unchanged']} with no team colour")
     step(put_away, "the last standing shots faded out")
     if camps:
         with stage("Camps", len(camps), len(camps) - len(pending_camps)) as counter:
@@ -592,17 +612,19 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         copied = [u for u in pending_rubble if u["id"] in plan]
         rest = [u for u in pending_rubble if u["id"] not in plan]
         for u in copied:
+            log(called(u))
             step(lambda: copy_rubble(u), f"{called(u)}'s rubble")
             count_rubble([u], counter)
         if copied:
             send("el clear")  # the copies' remains
         waves = rubble_waves(rest + fell_to_nothing, radius=rubble_radius)
         for n, structures_now in enumerate(waves, start=1):
-            log(f"wave {n} of {len(waves)}: {len(structures_now)} structure{'s' if len(structures_now) != 1 else ''}")
+            log(f"wave {n} of {len(waves)}: {len(structures_now)} falling")
             step(lambda: wave(structures_now, n, len(waves), lambda u: count_rubble([u], counter)), f"rubble wave {n}")
             count_rubble(structures_now, counter)
-    with stage("Clearing the remains"):
+    with stage("Clearing"):
         def clear() -> None:
+            log("bringing everything down")
             note("Clearing the remains before the tiles")
             for team in (1, 2):  # a resumed run: everything still standing comes down now
                 if team not in replaced:
@@ -619,4 +641,4 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
 
         step(clear, "clearing the remains")
     saver.shutdown(wait=True)
-    log(f"{len(records)} element shots kept; the structures are down, so the tiles show the bare terrain")
+    log(f"{len(records)} element shots; the structures are down for the tiles")
