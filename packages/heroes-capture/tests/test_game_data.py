@@ -136,6 +136,24 @@ def test_the_game_s_team_colours_from_our_player_s_view(storage):
                                                "hostile": {"diffuse": [255, 0, 0], "emissive": [178, 0, 0]}}
 
 
+def test_a_model_s_team_colour_is_read_from_its_materials(storage):
+    """common/m3.py has_team_colour, on Dragon Shire's models as the game draws them: its forts,
+    gates and moonwells team-coloured standing, its walls not; a fort's remains team-coloured, a
+    moonwell's only while its death plays (its pools dissolve away)."""
+    from heroes_capture.common.m3 import M3
+
+    def model(pattern):
+        return M3(storage.read(storage.find(pattern)[0]))
+
+    assert model("*storm_building_kingscrest_fort.m3").has_team_colour("Stand")
+    assert model("*storm_building_ds19kingscrest_gate_00.m3").has_team_colour("Stand")
+    assert model("*storm_building_ds19kingscrest_manawell.m3").has_team_colour("Stand")
+    assert not model("*storm_building_kingscrest_townwall_00.m3").has_team_colour("Stand")  # (its variations numbered)
+    assert model("*storm_building_kingscrest_fort_death.m3").has_team_colour("Dead")
+    moonwell_death = model("*storm_building_ds19kingscrest_manawell_death.m3")
+    assert moonwell_death.has_team_colour("Death") and not moonwell_death.has_team_colour("Dead")
+
+
 def test_tilesets_light_sets_and_sky_models(storage):
     table = game_data.light_sets(storage)
     assert len(table["terrains"]) > 30 and len(table["lights"]) > 300

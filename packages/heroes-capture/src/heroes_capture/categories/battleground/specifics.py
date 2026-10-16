@@ -77,6 +77,12 @@ def prepare(prep: Preparation) -> None:
                 f"types' actors and {len(placed)} doodads of {len(found['report']['doodads'])} types read "
                 f"({len(moving)} types with particles, ribbons or lights)")
         elif prep.opts["calibration"]:
+            # What the map's structures are made of (common/actors.py): each one's finished and death
+            # models, whether they draw team colour (none: not shot again from Chaos's side) and how far
+            # their meshes reach (two standing apart further than theirs can't overlap on screen).
+            found["report"] = data_report(prep, sorted({u["type"] for u in found["structures"]}), [])
+            for structure in found["structures"]:  # its name as the game shows it, for the run's log
+                structure["name"] = found["report"]["names"].get(structure["type"], structure["type"])
             # Each structure's copy's spot, whether it changes with the side, and each kind's fall
             # wait, as the map's reviewed calibration has them (calibrate.py; VERIFICATION.md).
             calibration = read_json(Path(prep.opts["calibration"]))
@@ -121,7 +127,7 @@ def data_report(prep: Preparation, structure_types: list[str], doodad_types: lis
     mods = re.findall(r"([A-Za-z0-9_]+\.stormmod)", prep.archive.read_text("DocumentInfo") or "")
     own = [prep.archive.read_text(f"Base.StormData\\GameData\\{name}.xml") or "" for name in ("ActorData", "ModelData")]
     with game_data.game_storage() as storage:
-        return actors.report(storage, mods, own, structure_types, doodad_types)
+        return actors.report(storage, mods, own, structure_types, doodad_types, prep.archive.read_text(game_data.GAMESTRINGS) or "")
 
 
 def before_tiles(session, manifest: dict, base) -> None:
@@ -130,7 +136,8 @@ def before_tiles(session, manifest: dict, base) -> None:
     if manifest.get("structures") == "elements":
         from heroes_capture.categories.battleground import element_capture  # drives the game: Windows only
 
-        element_capture.capture_elements(session, manifest, base)
+        with stage("Elements"):
+            element_capture.capture_elements(session, manifest, base)
 
 
 # The calibration's stages (calibrate.py), each runnable on its own (`map calibrate --only`), with
@@ -153,7 +160,7 @@ def after_stitch(stitched: Stitched) -> None:
     """The elements placed on the map image; on a map of several arenas, each arena's on its own
     image (the images in the areas' order, as stitch.write_outputs writes them)."""
     if (stitched.base / "elements" / "elements.json").exists():
-        with stage("elements"):
+        with stage("Placing the elements"):
             several = len(stitched.written) > 1
             for area_no, image_id in enumerate(stitched.written):
                 element_stitch.write_elements(stitched.manifest, stitched.base, stitched.out, stitched.layout, stitched.scale,

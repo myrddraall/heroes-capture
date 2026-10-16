@@ -40,25 +40,43 @@ def mod_order(documentinfo, map_mods: list[str]) -> list[str]:
     return order
 
 
+def _documentinfo(storage, mod: str) -> list[str]:
+    """The mods a mod names in its DocumentInfo."""
+    names = []
+    for info in storage.find(f"*\\{mod}\\documentinfo"):
+        names += [m.decode() for m in re.findall(rb"([A-Za-z0-9_]+\.stormmod)", storage.read(info) or b"")]
+    return names
+
+
 def catalog_texts(storage, map_mods: list[str], kinds: tuple[bytes, ...] = (b"<CActor", b"<CModel")) -> list[str]:
     """The game data catalogs with actors or models in them (or the entries `kinds` names) that a
     map loads, in load order (the map's own data not included)."""
-
-    def documentinfo(mod: str) -> list[str]:
-        names = []
-        for info in storage.find(f"*\\{mod}\\documentinfo"):
-            names += [m.decode() for m in re.findall(rb"([A-Za-z0-9_]+\.stormmod)", storage.read(info) or b"")]
-        return names
-
     files = [n for n in storage.find("*.xml") if "\\base.stormdata\\gamedata\\" in n.lower()]
     texts = []
-    for mod in mod_order(documentinfo, map_mods):
+    for mod in mod_order(lambda m: _documentinfo(storage, m), map_mods):
         for name in files:
             if f"\\{mod}\\base.stormdata\\" in name.lower():
                 data = storage.read(name) or b""
                 if any(kind in data for kind in kinds):
                     texts.append(data.decode("utf-8", errors="replace"))
     return texts
+
+
+def unit_names(storage, map_mods: list[str], own_strings: str, unit_types: list[str]) -> dict[str, str]:
+    """Each unit type's name as the game shows it (GameStrings' Unit/Name/<type>, English: Dragon
+    Shire's TownMoonwellL3 is a "Healing Fountain"), the mods a map loads in load order and then the
+    map's own strings, the later winning."""
+    files = [n for n in storage.find("*gamestrings.txt") if "\\enus.stormdata\\localizeddata\\" in n.lower()]
+    texts = []
+    for mod in mod_order(lambda m: _documentinfo(storage, m), map_mods):
+        texts += [(storage.read(n) or b"").decode("utf-8", errors="replace") for n in files if f"\\{mod}\\" in n.lower()]
+    names: dict[str, str] = {}
+    wanted = set(unit_types)
+    for text in [*texts, own_strings]:
+        for unit, name in re.findall(r"^Unit/Name/([^=\r\n]+)=([^\r\n]*)", text, re.M):
+            if unit in wanted and name.strip():
+                names[unit] = name.strip()
+    return names
 
 
 class Catalog:
@@ -168,6 +186,24 @@ class Catalog:
                     children.append(self.node(words[1], terms.split(";")[0].strip(), depth + 1, seen))
         return {"actor": actor_id, "class": entry["class"].removeprefix("CActor"), "on": how,
                 "models": list(dict.fromkeys(models)), "children": [c for c in children if shows(c)]}
+
+    def death_models(self, actor_id: str) -> list[str]:
+        """The models an actor's structure leaves when it dies: its normal death's (DeathArray
+        Normal, its own or its nearest parent's) and its death variations' (DeathCustoms: a wall's,
+        a gate's), with the templates' ##unitName## filled in; "Invisible" left out."""
+        unit = self.actors[actor_id]["unit"] or actor_id
+        normal, customs = None, []
+        for entry in self._chain(self.actors, actor_id):
+            for el in entry["elements"]:
+                link = el.get("ModelLink") or (el.find("ModelLink").get("value") if el.find("ModelLink") is not None else None)
+                if not link:
+                    continue
+                link = link.replace("##unitName##", unit)
+                if el.tag == "DeathArray" and el.get("index", "Normal") == "Normal" and normal is None:
+                    normal = link
+                elif el.tag == "DeathCustoms" and link != "Invisible" and link not in customs:
+                    customs.append(link)
+        return [m for m in dict.fromkeys(([normal] if normal else []) + customs) if m in self.models]
 
     def finished_model(self, actor_id: str) -> str | None:
         """The model an actor shows once built: the one it swaps to when its build animation ends
@@ -283,14 +319,34 @@ def model_parts(storage, catalog: Catalog, model_ids: list[str]) -> dict[str, di
         if not hits and pattern.endswith(".m3"):
             # A model with variations: its files numbered (Dragon Shire's gates' _00 to _03): the first.
             hits = sorted(storage.find(pattern[:-3] + "_*.m3"))[:1]
-        sequences, extent = [], None
+        sequences, extent, team = [], None, {}
         if hits:
             file = file or hits[-1]
             data = storage.read(hits[-1]) or b""
             parts = m3_parts(data)
             sequences = m3_sequences(data)
             extent = m3_extent(data)
-        found[model_id] = {"file": file, "scale": catalog.model_scale(model_id), "extent": extent, **parts, "sequences": sequences}
+            team = team_colour(data)
+        found[model_id] = {"file": file, "scale": catalog.model_scale(model_id), "extent": extent, "teamColour": team,
+                           **parts, "sequences": sequences}
+    return found
+
+
+def team_colour(m3: bytes) -> dict[str, bool]:
+    """Whether a model draws team colour (common/m3.py has_team_colour) in each of its sequences
+    a structure is shot in: Stand (standing), Death (its remains, shot while it plays) and Dead
+    (after it); a sequence the model lacks, or a file the reader can't read, left out."""
+    from heroes_capture.common.m3 import M3
+
+    found = {}
+    try:
+        model = M3(m3)
+        groups = model.groups()
+        for sequence in ("Stand", "Death", "Dead"):
+            if sequence in groups:
+                found[sequence] = model.has_team_colour(sequence)
+    except (ValueError, struct.error, IndexError, KeyError):
+        pass
     return found
 
 
@@ -299,18 +355,23 @@ def tree_models(tree: list[dict]) -> list[str]:
     return list(dict.fromkeys(m for n in tree for m in n["models"] + tree_models(n["children"])))
 
 
-def report(storage, map_mods: list[str], own_texts: list[str], unit_types: list[str], doodad_types: list[str]) -> dict:
+def report(storage, map_mods: list[str], own_texts: list[str], unit_types: list[str], doodad_types: list[str], own_strings: str = "") -> dict:
     """The calibration's data report: each structure type's actor tree and finished model (the
-    standing timing restarts it), and the moving parts and animations of every model those show
-    and of every doodad type placed (a doodad's type is its model)."""
+    standing timing restarts it), its name as the game shows it (unit_names; `own_strings`: the
+    map's GameStrings), and the moving parts and animations of every model those show and of every
+    doodad type placed (a doodad's type is its model)."""
     catalog = Catalog(catalog_texts(storage, map_mods) + own_texts)
     trees = {t: catalog.tree(t) for t in unit_types}
     # Each type's finished model: its unit actor's (the actor named for the unit, else the first its
     # birth creates).
-    finished = {}
+    finished, deaths = {}, {}
     for t in unit_types:
         actor = t if t in catalog.actors else next(iter(catalog.born.get(t, [])), None)
         if actor and (model := catalog.finished_model(actor)) and not model.startswith("##"):
             finished[t] = model
-    models = model_parts(storage, catalog, list(dict.fromkeys([m for t in trees.values() for m in tree_models(t)] + list(finished.values()) + doodad_types)))
-    return {"structures": trees, "standModels": finished, "models": models, "doodads": {t: models[t] for t in doodad_types}}
+        if actor:
+            deaths[t] = catalog.death_models(actor)
+    models = model_parts(storage, catalog, list(dict.fromkeys([m for t in trees.values() for m in tree_models(t)] + list(finished.values())
+                                                              + [m for d in deaths.values() for m in d] + doodad_types)))
+    return {"structures": trees, "names": unit_names(storage, map_mods, own_strings, unit_types), "standModels": finished,
+            "deathModels": deaths, "models": models, "doodads": {t: models[t] for t in doodad_types}}

@@ -51,7 +51,7 @@ from PIL import Image
 from scipy import ndimage
 
 from heroes_capture.capture.shots import still_frame, tile_command
-from heroes_capture.categories.battleground.elements import rubble_radius
+from heroes_capture.categories.battleground.elements import rubble_radius, standing_team_colour
 from heroes_capture.common import ui
 from heroes_capture.common.game_control import Recoverable, settle, step
 from heroes_capture.common.geometry import circle_box, screen_point
@@ -889,9 +889,15 @@ def calibrate(session, manifest: dict, base: Path, stages: list[str] = ("motion"
         entry = {"type": u["type"], "owner": u.get("owner"), "standing": f"structure-{key}.png", "moves": moves}
         if moves > MOVING_SHARE:
             entry["moving"] = _moving_picture(folder, f"structure-{key}-moving", frame, again, box)
-        to_chaos, chaos_frame = side_time(2, frame, box, ndimage.binary_dilation(moving, iterations=2))
-        to_order, _ = side_time(1, chaos_frame, box, ndimage.binary_dilation(moving, iterations=2))
-        measured[key] = {**entry, "changes": to_chaos is not None and to_order is not None, "toChaos": to_chaos, "toOrder": to_order}
+        # Whether it changes with the side: its model's data says (elements.standing_team_colour), or
+        # it is measured (switched to Chaos and back, watched).
+        known = standing_team_colour(u, found.get("report") or {})
+        if known is not None:
+            measured[key] = {**entry, "changes": known, "toChaos": None, "toOrder": None, "fromData": True}
+        else:
+            to_chaos, chaos_frame = side_time(2, frame, box, ndimage.binary_dilation(moving, iterations=2))
+            to_order, _ = side_time(1, chaos_frame, box, ndimage.binary_dilation(moving, iterations=2))
+            measured[key] = {**entry, "changes": to_chaos is not None and to_order is not None, "toChaos": to_chaos, "toOrder": to_order}
         if key not in candidates:
             return
         send(f"el fades {u['x']:g} {u['y']:g} 0")
@@ -975,7 +981,7 @@ def calibrate(session, manifest: dict, base: Path, stages: list[str] = ("motion"
         for entry in falls.values():
             entry["settle"] = round(statistics.median(entry["settles"]), 2) if entry["settles"] else None
         changing = [s for s in measured.values() if s["changes"]]
-        slowest = max((max(s["toChaos"], s["toOrder"]) for s in changing), default=0.0)
+        slowest = max((max(s["toChaos"], s["toOrder"]) for s in changing if s["toChaos"] is not None and s["toOrder"] is not None), default=0.0)
         reasons = Counter(t["failed"] for t in tries if t["failed"])
         log(f"calibration: {len(changing)} of {len(measured)} structures change with the side (the slowest switch {slowest:.2f} s), "
             f"{sum(s['moves'] > MOVING_SHARE for s in measured.values())} move while paused; "

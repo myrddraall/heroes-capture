@@ -59,13 +59,14 @@ def test_scenario(name, tmp_path):
 
 def test_tiles_with_team_coloured_doodads_are_also_shot_from_chaos_s_side(tmp_path):
     """A tile with a team-coloured doodad in view (manifest teamColoured) is shot from both sides:
-    its shots from Chaos's side next to Order's (tile_<n>-chaos, -chaos-black), each taken once the
-    switch is drawn; a tile with none is shot once, as before. Order's shots don't change."""
+    its shots from Chaos's side next to Order's (tile_<n>-chaos, -chaos-black), all in one pass
+    after every tile (our player put on Chaos once, and back once), each once its discs differ
+    from its shot from Order; a tile with none is shot once, as before. Order's shots don't change."""
     import numpy as np
 
     run = simulate(tmp_path, "matte", FAKE_TEAM="1")
     assert run["outcome"] == "finished", run["outcome"]
-    assert "(and from Chaos's side)" in run["log"], run["log"][-3000:]
+    assert "tiles shot again from Chaos's side, in one pass" in run["log"], run["log"][-3000:]
     tiles = tmp_path / "test-map" / "tiles"
     chaos = sorted(p.name for p in tiles.glob("tile_*-chaos.npy"))
     assert chaos and len(chaos) < len(list(tiles.glob("tile_????.npy")))

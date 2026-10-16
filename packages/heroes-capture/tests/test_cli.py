@@ -649,3 +649,18 @@ def test_a_stopped_job_resumes_where_it_left_off(monkeypatch, tmp_path):
     job_file.write_text("runs:\n  - map: Dragon Shire\n    render: hide\n")
     result = runner.invoke(cli.app, ["job", str(job_file), "--resume"])
     assert result.exit_code != 0 and "has changed since" in result.output
+
+
+def test_a_kept_run_still_counts_after_the_tool_s_folder_moves(monkeypatch, tmp_path):
+    """Its reviewed calibration's path isn't part of how it was prepared (the folder moved: E:\\
+    instead of the Desktop); a stopped run whose prepared map was in the old folder starts over."""
+    assert cli.same_preparation(["--structures", "elements", "--calibration", r"C:\old\dragon-shire.json"],
+                                ["--structures", "elements", "--calibration", r"E:\map-capture\dragon-shire.json"])
+    assert not cli.same_preparation(["--structures", "keep"], ["--structures", "hide"]) and not cli.same_preparation(None, [])
+    render_steps(monkeypatch, tmp_path, fail_capture={"Dragon Shire": 6})
+    assert runner.invoke(cli.app, ["map", "render", "dragon shire"]).exit_code != 0
+    manifest = tmp_path / "tmp" / "dragon-shire-structures.json"
+    manifest.write_text(json.dumps({**json.loads(manifest.read_text()), "stormmap": str(tmp_path / "gone" / "x.stormmap")}))
+    calls = render_steps(monkeypatch, tmp_path)
+    result = runner.invoke(cli.app, ["map", "render", "dragon shire"])
+    assert result.exit_code == 0 and calls[0][0] == "prepare" and "prepared in another folder" in result.output

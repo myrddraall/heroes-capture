@@ -672,20 +672,24 @@ def test_the_elements_capture_shoots_each_element_then_brings_the_structures_dow
     # straight above it (the move sets the white sky), what the one before left faded in faded out
     # in it too, shot over white and black; no sky put back after (the next move does it). (No
     # camera bounds in this manifest: no room for copies, so every structure falls in waves.)
-    # The two are neighbours (within NEIGHBOUR_REACH): after each one's pair of shots, the other is
-    # faded in beside it for a shot over black (which of them is in front where they overlap). The
-    # last ones left faded in, faded out in one command before the camp's shot. While the camp is
-    # born, the note at the top of the screen says so.
-    # Each structure shot from both sides, in the order that needs no extra sky swap: over white
-    # from Order, switched to Chaos (the switch watched for on screen), over white and then black
-    # from Chaos, switched back, over black from Order; the neighbours shot from Order.
-    assert sent[:17] == ["tile 0 0.00 0.00", "el fadeall 0", "el env off", "el keep 1", "el camp 1",
+    # In passes: each structure shot over white and black from Order's side; then (every structure
+    # standing as it is shot) each faded in over black with its neighbour (within NEIGHBOUR_REACH:
+    # no models in this report) faded in beside it (which of them is in front where they overlap);
+    # then our player put on Chaos once, each shot again over white and black, and back once. The
+    # last one left faded in, faded out before the camp's shot. While the camp is born, the note at
+    # the top of the screen says so.
+    assert sent[:24] == ["tile 0 0.00 0.00", "el fadeall 0", "el env off", "el keep 1", "el camp 1",
                          "note Waiting for the camps to spawn", "el freeze",
-                         "el at 1.00 2.00 1 2 1", "side 2", "black", "side 1", "el fades 3 1 1",
-                         "el at 3.00 1.00 1 2 0 3 1 0 3 1 1", "side 2", "black", "side 1", "el fades 1 2 1"]
+                         "el at 1.00 2.00 1 2 1", "black", "el at 3.00 1.00 1 2 0 3 1 1", "black",  # from Order
+                         "el at 1.00 2.00 3 1 0 1 2 1", "black", "el fades 3 1 1",  # with its neighbour
+                         "el at 3.00 1.00 1 2 0 3 1 0 3 1 1", "black", "el fades 1 2 1",
+                         "side 2", "el at 1.00 2.00 3 1 0 1 2 0 1 2 1", "black", "el at 3.00 1.00 1 2 0 3 1 1", "black", "side 1",
+                         "el fades 3 1 0"]
     # The camp shot after the structures (from Order's only: camps don't change with the side), its
     # defenders removed; no isolating anywhere.
-    assert sent[17:22] == ["el fades 3 1 0 1 2 0", "el at 49.00 51.00", "black", "el keep 0", "clean"] and sent.count("el camp 1") == 1
+    assert sent[24:28] == ["el at 49.00 51.00", "black", "el keep 0", "clean"] and sent.count("el camp 1") == 1
+    records = json.loads((tmp_path / "elements" / "elements.json").read_text())
+    assert records["structure-5-standing"]["neighbours"] == [6] and records["structure-6-standing"]["neighbours"] == [5]
     records = json.loads((tmp_path / "elements" / "elements.json").read_text())
     assert records["structure-5-standing"]["chaos"] == "structure-5-standing-chaos" and "chaos" not in records["camp-1-spawned"]
     assert {p.stem for p in (tmp_path / "elements").glob("structure-5-standing*")} >= {
@@ -722,21 +726,25 @@ def test_the_elements_capture_shoots_each_element_then_brings_the_structures_dow
     assert frame_exists(tmp_path / "elements" / "structure-5-rubble") and frame_exists(tmp_path / "elements" / "structure-5-rubble-black")
 
 
-def _lose_focus_at(element_capture, tmp_path, grab: int) -> list[str]:
-    """The elements capture with the focus lost at the capture's `grab`th shot (an answer's frame
-    isn't one) and the step done again; what was typed."""
+def _lose_focus_after(element_capture, tmp_path, command: str) -> list[str]:
+    """The elements capture with the focus lost at the first shot after `command` is typed, and the
+    step done again; what was typed."""
 
     class Lost(Exception):
         pass
 
     class Session(_FakeSession):
-        grabs = 0
+        armed, done = False, False
+
+        def send(self, text, timeout=2.0):
+            if text == command and not Session.done:
+                Session.armed = True
+            return super().send(text, timeout)
 
         def grab(self, dark_ok=False):
-            if dark_ok:
-                Session.grabs += 1
-                if Session.grabs == grab:
-                    raise Lost
+            if dark_ok and Session.armed:
+                Session.armed, Session.done = False, True
+                raise Lost
             return super().grab(dark_ok)
 
     def step(action, what):
@@ -752,14 +760,12 @@ def _lose_focus_at(element_capture, tmp_path, grab: int) -> list[str]:
     return session.sent
 
 
-def test_a_standing_shot_done_again_starts_from_what_is_really_shown(element_capture, tmp_path):
-    """The focus lost part way through a structure's shots (its neighbour faded in beside it: the
-    seventh grab, after Order's white and its hold, the watch and Chaos's white held, the watch and
-    Order's black held): the step done again fades that neighbour out in the command that moves the
-    camera back, so the structure's shot alone has nothing else in it."""
-    sent = _lose_focus_at(element_capture, tmp_path, 7)
-    assert sent[7:13] == ["el at 1.00 2.00 1 2 1", "side 2", "black", "side 1", "el fades 3 1 1",
-                          "el at 1.00 2.00 1 2 0 3 1 0 1 2 1"]
+def test_a_neighbour_s_shot_done_again_starts_from_what_is_really_shown(element_capture, tmp_path):
+    """The focus lost with a structure's neighbour faded in beside it: the step done again fades that
+    neighbour out in the command that moves the camera back, before it is faded in again."""
+    sent = _lose_focus_after(element_capture, tmp_path, "el fades 3 1 1")
+    lost = sent.index("el fades 3 1 1")
+    assert sent[lost + 1:lost + 4] == ["el at 1.00 2.00 1 2 0 3 1 0 1 2 1", "black", "el fades 3 1 1"]
 
 
 class _UnchangingSession(_FakeSession):
@@ -769,12 +775,12 @@ class _UnchangingSession(_FakeSession):
         return np.zeros((40, 60, 3), np.uint8)
 
 
-@pytest.mark.parametrize("changes, sides", [(None, 1), (True, 3), (False, 1)])
-def test_a_structure_the_calibration_saw_change_is_shot_again_when_its_switch_isn_t_seen(element_capture, tmp_path, monkeypatch, changes, sides):
-    """Changing with neither switch: nothing on it has team colour, unless the map's calibration
-    saw it change (then the first shots were from the wrong side: shot again, three times at most).
-    Seen never to change, its switches aren't waited on for long. (Its rubble is repainted, not
-    switched: watched for PAINT_CAP.)"""
+@pytest.mark.parametrize("changes, sides", [(None, 1), (True, 1), (False, 0)])
+def test_a_structure_is_shot_from_chaos_s_side_unless_the_calibration_saw_it_unchanged(element_capture, tmp_path, monkeypatch, changes, sides):
+    """One switch to Chaos's side for the whole pass (none when nothing in it can change): a
+    structure the calibration saw change watched for its change at length (SWITCH_CAP), one it
+    didn't measure briefly (the switch long drawn), one it saw unchanged not shot from Chaos's
+    side at all. (Its rubble is repainted, not switched: watched for PAINT_CAP.)"""
     waited = []
     real = element_capture.recoloured_frame
     monkeypatch.setattr(element_capture, "recoloured_frame", lambda session, ref, boxes, cap: waited.append(cap) or real(session, ref, boxes, 0.0))
@@ -786,15 +792,19 @@ def test_a_structure_the_calibration_saw_change_is_shot_again_when_its_switch_is
     session = _UnchangingSession()
     element_capture.capture_elements(session, manifest, tmp_path)
     assert session.sent.count("side 2") == sides
-    assert set(waited) == {element_capture.UNCHANGING_CAP if changes is False else element_capture.SWITCH_CAP, element_capture.PAINT_CAP}
+    standing = {None: {element_capture.UNCHANGING_CAP}, True: {element_capture.SWITCH_CAP}, False: set()}[changes]
+    assert set(waited) == standing | {element_capture.PAINT_CAP}
+    record = json.loads((tmp_path / "elements" / "elements.json").read_text())["structure-5-standing"]
+    assert record["chaos"] is None  # (nothing changed on this screen)
 
 
-def test_a_standing_shot_done_again_from_chaos_s_side_switches_back_first(element_capture, tmp_path):
-    """The focus lost while our player is on Chaos (Chaos's white shot): the step done again puts
-    it back on Order before anything else, so Order's shots are Order's colours."""
-    sent = _lose_focus_at(element_capture, tmp_path, 3)
-    assert sent[7:13] == ["el at 1.00 2.00 1 2 1", "side 2", "side 1", "el at 1.00 2.00 1 2 0 1 2 1",
-                          "side 2", "black"]
+def test_a_shot_from_chaos_s_side_done_again_stays_on_chaos_s_side(element_capture, tmp_path):
+    """The focus lost in the pass from Chaos's side: the step done again shoots it from there again,
+    without switching back and forth; our player back on Order once after the pass."""
+    sent = _lose_focus_after(element_capture, tmp_path, "side 2")
+    pass_from_chaos = sent[sent.index("side 2"):sent.index("side 1") + 1]
+    assert pass_from_chaos.count("side 2") == 1 and pass_from_chaos.count("el at 1.00 2.00 3 1 0 1 2 0 1 2 1") == 1
+    assert pass_from_chaos.count("black") == 2 and sent.count("side 1") == 1
 
 
 def _copies_manifest():
@@ -914,7 +924,7 @@ def test_a_camp_near_a_structure_is_spawned_after_the_structures_are_shot(elemen
     session = _FakeSession()
     element_capture.capture_elements(session, manifest, tmp_path)
     sent = session.sent
-    assert sent.index("el camp 1") > sent.index("el fades 3 1 0 1 2 0") and sent[1:4] == ["el fadeall 0", "el env off", "el at 1.00 2.00 1 2 1"]
+    assert sent.index("el camp 1") > sent.index("el fades 3 1 0") and sent[1:4] == ["el fadeall 0", "el env off", "el at 1.00 2.00 1 2 1"]
 
 
 def test_a_resumed_elements_capture_only_brings_the_structures_down(element_capture, tmp_path):
@@ -948,7 +958,7 @@ def test_each_structure_is_restarted_and_paused_at_its_standing_time(element_cap
     element_capture.capture_elements(session, ELEMENTS_MANIFEST, tmp_path)
     seq = session.everything
     first = seq.index("el at 1.00 2.00 1 2 1")
-    assert seq[first + 1:first + 4] == ["el restart 1 2", "el hold 1 2", "side 2"]
+    assert seq[first + 1:first + 4] == ["el restart 1 2", "el hold 1 2", "black"]
     assert seq.count("el restart 3 1") == 1
 
 
@@ -1309,3 +1319,27 @@ def test_a_fort_s_standalone_tower_gets_no_copy():
     assert [elements.goes_with_a_fort(u, structures) for u in structures] == [False, True, False]
     found = elements.copy_candidates(structures, [], {"left": 0, "bottom": 0, "right": 200, "top": 200}, 200, None)
     assert 2 not in found and 3 in found
+
+
+def test_the_data_report_says_what_has_team_colour_and_what_can_overlap():
+    """From the models (actors.report): a structure's finished model's team colour standing; its
+    remains' from its own death models (a tower's only the shared one: no say); two structures can
+    overlap on screen when nearer than their models reach, as the capture camera sees them."""
+    from heroes_capture.categories.battleground import elements
+
+    report = {"standModels": {"Fort": "FortModel", "Wall": "WallModel", "Tower": "TowerModel"},
+              "deathModels": {"Fort": ["FortDeath"], "Wall": [elements.GENERIC_DEATH, "WallDeath00"], "Tower": [elements.GENERIC_DEATH]},
+              "models": {"FortModel": {"teamColour": {"Stand": True}, "extent": {"reach": 3.0, "height": 6.0}, "scale": 1.0},
+                         "WallModel": {"teamColour": {"Stand": False}, "extent": {"reach": 3.0, "height": 2.0}, "scale": 1.0},
+                         "TowerModel": {"teamColour": {}, "extent": None},
+                         "FortDeath": {"teamColour": {"Death": True, "Dead": True}},
+                         "WallDeath00": {"teamColour": {"Death": False, "Dead": False}},
+                         elements.GENERIC_DEATH: {"teamColour": {"Death": False}}}}
+    fort, wall, tower = ({"type": t, "x": x, "y": 0} for t, x in (("Fort", 0), ("Wall", 6), ("Tower", 30)))
+    assert [elements.standing_team_colour(u, report) for u in (fort, wall, tower)] == [True, False, None]
+    assert [elements.rubble_team_colour(u, report) for u in (fort, wall, tower)] == [True, False, None]
+    assert elements.stand_reach(fort, report, 85.0) == pytest.approx(3.0 * 85 / 79)
+    assert elements.may_overlap(fort, wall, report, 85.0, 10.0)  # 6 apart, reaching 3.2 + 3.1
+    far = {"type": "Wall", "x": 7, "y": 0}
+    assert not elements.may_overlap(fort, far, report, 85.0, 10.0)  # 7 apart: more than both reach
+    assert elements.may_overlap(far, {"type": "Tower", "x": 15, "y": 0}, report, 85.0, 10.0)  # unknown: within 10

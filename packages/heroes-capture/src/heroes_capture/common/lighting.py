@@ -65,7 +65,8 @@ def _key_direction(xml: str) -> list[float] | None:
 
 
 def parse_lights(xml: str, into: dict | None = None) -> dict:
-    """CLight entries: id -> {parent?, key?: [x, y, z]} (the first time of day's Key light)."""
+    """CLight entries: id -> {parent?, key?: [x, y, z], hdrExposure?, hdrWhitePoint?} (the first time
+    of day's Key light and its HDR tone mapping's exposure and white point)."""
     into = {} if into is None else into
     for attrs, body in _entries(xml, "CLight"):
         if not attrs.get("id"):
@@ -77,7 +78,19 @@ def parse_lights(xml: str, into: dict | None = None) -> dict:
         key = _key_direction(tod.group(1) if tod else body)
         if key:
             light["key"] = key
+        for param, field in (("HDRExposure", "hdrExposure"), ("HDRWhitePoint", "hdrWhitePoint")):
+            value = re.search(rf'<Param index="{param}" value="([^"]+)"', tod.group(1) if tod else body)
+            if value:
+                light[field] = float(value.group(1))
     return into
+
+
+def light_hdr(table: dict, light_id: str) -> dict | None:
+    """A light's HDR tone mapping, {exposure, whitePoint}, from it or its parents; None where the
+    data doesn't set both."""
+    exposure = _inherited(table, light_id, "hdrExposure")
+    white = _inherited(table, light_id, "hdrWhitePoint")
+    return None if exposure is None or white is None else {"exposure": exposure, "whitePoint": white}
 
 
 def _inherited(table: dict, id_: str, field: str, seen: set | None = None):

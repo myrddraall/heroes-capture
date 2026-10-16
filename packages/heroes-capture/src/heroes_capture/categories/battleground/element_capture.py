@@ -52,6 +52,9 @@ from heroes_capture.capture.sky import LIGHT_LEVEL, LIGHT_SKY
 from heroes_capture.capture.shots import SWITCH_CAP, recoloured_frame, shot_over_black, still_frame, tile_command
 from heroes_capture.categories.battleground.elements import (
     goes_with_a_fort,
+    may_overlap,
+    rubble_team_colour,
+    standing_team_colour,
     fall_wait,
     rubble_radius,
     rubble_waves,
@@ -61,7 +64,7 @@ from heroes_capture.categories.battleground.elements import (
     view_middle,
 )
 from heroes_capture.common import ui
-from heroes_capture.common.frames import save_frame
+from heroes_capture.common.frames import frame_exists, load_frame, save_frame
 from heroes_capture.common.geometry import circle_box, screen_point
 
 from heroes_capture.common.game_control import Recoverable, settle, step
@@ -116,6 +119,12 @@ def element_key(kind: str, element: dict, state: str) -> str:
     return f"{kind}-{element['id'] if kind == 'structure' else element['camp']}-{state}"
 
 
+def called(element: dict) -> str:
+    """An element as the run's log names it: its name in the game (a structure's, from the data
+    report) and where it is."""
+    return f"{element.get('name') or element.get('type') or 'camp'} at ({element['x']:g}, {element['y']:g})"
+
+
 def capture_elements(session, manifest: dict, base: Path) -> None:
     """The passes (see the module's note). `base`: the run's folder (the tiles' folder's parent);
     The first tile's command puts the whole scene in place (what ran before, the sky layers'
@@ -126,6 +135,7 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
     folder.mkdir(exist_ok=True)
     record_path = folder / "elements.json"
     records: dict = read_json(record_path, {})
+    report = (manifest.get("elements") or {}).get("report") or {}  # what the structures are made of (actors.report)
     tiles = manifest["tiles"]
     failures = {"count": 0}
 
@@ -186,79 +196,22 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         camera = session.camera()
         black = shot_over_black(session, white)
         if white is None or black is None:
-            warn(f"  {stem}: no frame")
+            warn(f"{stem}: the game gave no picture")
             return None
         save(stem, white)
         save(f"{stem}-black", black)
         return camera
 
-    # Our player's side: Order (1) as the match starts and between structures; Chaos (2) only
-    # while a structure's Chaos shots are taken. Kept as each switch is answered, so a step done
-    # again after a lost focus starts by switching back.
+    # Our player's side: Order (1) as the match starts and for every shot but the standing pass
+    # from Chaos's side. Kept as each switch is answered, so a step done again after a lost focus
+    # starts by switching back.
     side = {"team": 1, "unchanged": 0}
-
-    def switch(team: int, element: dict, camera: dict, reference: np.ndarray | None) -> tuple[np.ndarray | None, bool]:
-        """Our player put on the team ("side"), then the frame once the element's circle has changed
-        from `reference` (shots.recoloured_frame), and whether it did. Not waited on for long when
-        the calibration found nothing on it that changes (UNCHANGING_CAP)."""
-        if not send(f"side {team}"):
-            return None, False
-        side["team"] = team
-        shape = reference.shape if reference is not None else (0, 0)
-        box = circle_box(screen_point(element, camera, manifest["screen"], manifest["pxPerCell"]),
-                         element["radius"] * manifest["pxPerCell"], shape)
-        return recoloured_frame(session, reference, [box], UNCHANGING_CAP if element.get("changesSide") is False else SWITCH_CAP)
 
     def back_to_order() -> None:
         """Our player back on Order, if a step was left on Chaos (a lost focus mid-structure)."""
         if side["team"] != 1 and send("side 1"):
             side["team"] = 1
             settle(SWITCH_CAP)
-
-    def pair_both(stem: str, element: dict, attempt: int = 1) -> dict | None:
-        """The view over white and over black from both sides: Order's saved as <stem> and
-        <stem>-black (as pair), Chaos's as <stem>-chaos and <stem>-chaos-black. In the order that
-        needs no extra sky swap: white from Order, switch, white from Chaos, black from Chaos,
-        switch back, black from Order. The camera's position; None without Order's frames (Chaos's
-        missing: left out of the record, and noted).
-
-        Which side the game really draws is read from the screen, not assumed: a structure with
-        team colour changes on one switch and back on the other. Changing on neither: it has none
-        (a gate on some maps), unless the calibration saw it change ("changesSide"): then, as when
-        it changes only on the switch back, the first shots were Chaos's (the game hadn't taken
-        the last switch back when they were shot: Dragon Shire's forts came out in the other
-        side's colours), so they are all taken again."""
-        camera = session.camera()
-        watched = camera or {"x": element["x"], "y": element["y"]}  # where the circle is watched for the switch
-        # Faded in just now (and just after the last structure's switch back to Order): shot once
-        # it has finished redrawing, its colours Order's side's.
-        first = session.grab(dark_ok=True)
-        shape = first.shape if first is not None else (0, 0)
-        circle = circle_box(screen_point(element, watched, manifest["screen"], manifest["pxPerCell"]),
-                            element["radius"] * manifest["pxPerCell"], shape)
-        white = still_frame(session, [circle], first)
-        chaos_white, to_chaos = switch(2, element, watched, white)
-        chaos_black = shot_over_black(session, chaos_white)
-        black, to_order = switch(1, element, watched, chaos_black)
-        if white is None or black is None:
-            warn(f"  {stem}: no frame")
-            return None
-        if not to_chaos and (to_order or element.get("changesSide")):
-            if attempt < 3:
-                log(f"  {stem}: " + ("shot from Chaos's side (the switch back hadn't been drawn)" if to_order
-                                     else "the switch to Chaos wasn't seen, though the calibration saw it change") + "; shot again")
-                return pair_both(stem, element, attempt + 1)
-            warn(f"  {stem}: the side switch isn't drawn as sent; its shots may be from the wrong side")
-        if not to_chaos:
-            side["unchanged"] += 1
-        save(stem, white)
-        save(f"{stem}-black", black)
-        if chaos_white is None or chaos_black is None:
-            warn(f"  {stem}: no frame from Chaos's side")
-        else:
-            save(f"{stem}-chaos", chaos_white)
-            save(f"{stem}-chaos-black", chaos_black)
-        return {"camera": camera, "chaos": f"{stem}-chaos" if chaos_white is not None and chaos_black is not None else None}
 
     def record(kind: str, element: dict, state: str, tile: dict, camera: dict, **extra) -> None:
         key = element_key(kind, element, state)
@@ -280,11 +233,13 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         half_h = screen["h"] / ppc / 2 * VIEW_BACK * VIEW_SHARE
         return view_groups(items, half_w, half_h, at)
 
-    def prepare() -> None:
+    def prepare(counter) -> None:
         """Every copy made on its spot; then each group of them (planned: copy_groups) brought down
         with the camera over it (look_over), each set of the same fall_wait at once ("el
         copykill"), the slowest first, so each has fallen for just its own fall_wait when
-        everything is paused (and the early camps born, by the first group's pause)."""
+        everything is paused (and the early camps born, by the first group's pause). `counter`:
+        its folder, a group counted as it is paused (from none: done again, it starts over)."""
+        counter.completed = 0
         copied = sorted((u for u in structures if u["id"] in plan), key=lambda u: plan[u["id"]])
         note(f"Preparing rubble: making copies of {len(copied)} structures" if copied else "Waiting for the camps to spawn")
         for u in copied:
@@ -308,8 +263,10 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
                 ends.append(time.time() + wait)
             settle(max(0.0, max(ends) - time.time()))
             send("el freeze")
+            if group:
+                counter.advance()
         if copied:
-            log(f"  rubble prepared: {len(copied)} copies brought down on their spots, in {len(copy_groups)} groups")
+            log(f"{len(copied)} copies brought down on their spots, in {len(copy_groups)} groups")
         prepared["done"] = True
 
     # What the standing shots left faded in: the structure last shot and its last neighbour. Each
@@ -328,13 +285,18 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
             fade_all(fading)
         shown.update(structure=None, neighbour=None)
 
+    def update(key: str, **fields) -> None:
+        """A record's fields added to (a later pass's shots), once its frames are on disk."""
+        records[key].update(fields)
+        saved()
+        write_json(record_path, records, indent=1)
+
     def stand(u: dict) -> None:
         """A structure faded in (what the one before left faded out, in the same command as the
-        camera's move), shot alone over white and black from both sides (pair_both), then (the sky
-        still black, our player on Order) over black again with each neighbour (NEIGHBOUR_REACH)
-        faded in beside it, one at a time, each in place of the one before: where the neighbour
-        covers it, the neighbour stands in front (the stitch makes its masks:
-        element_stitch.write_elements). Left faded in for the next one to put away."""
+        camera's move), its animations started over and paused at its kind's standing time, and
+        shot alone over white and black from Order's side (pair). Its neighbours' shots and its
+        shots from Chaos's side come in later passes (connect, stand_chaos), once every structure
+        stands as it is shot. Left faded in for the next one to put away."""
         back_to_order()
         tile = go(u, leftovers() + [(u, 1)])
         shown.update(structure=u, neighbour=None)
@@ -344,20 +306,72 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         settle(stand_wait(u, manifest.get("standWaits")))
         send(f"el hold {u['x']:g} {u['y']:g}")
         key = element_key("structure", u, "standing")
-        if (shots := pair_both(key, u)) is not None:
-            camera = shots["camera"]
-            beside = []
-            for n in structures:
-                if n is u or math.dist((n["x"], n["y"]), (u["x"], u["y"])) >= NEIGHBOUR_REACH:
-                    continue
-                fade_all(([(shown["neighbour"], 0)] if shown["neighbour"] else []) + [(n, 1)])
-                shown["neighbour"] = n
-                settle(SHOW_SETTLE)
-                frame = session.grab(dark_ok=True)
-                if frame is not None:
-                    save(f"{key}-with-{n['id']}", frame)
-                    beside.append(n["id"])
-            record("structure", u, "standing", tile, camera, neighbours=beside, chaos=shots["chaos"])
+        if (camera := pair(key)) is not None:
+            record("structure", u, "standing", tile, camera)
+
+    def neighbours_of(u: dict) -> list[dict]:
+        """The structures that can overlap a structure on screen (elements.may_overlap: their
+        models' reach, from the data; NEIGHBOUR_REACH without it)."""
+        return [n for n in structures if n is not u and may_overlap(u, n, report, manifest["distance"], NEIGHBOUR_REACH)]
+
+    def connect(u: dict) -> None:
+        """A structure faded in over black with each neighbour that can overlap it faded in beside
+        it, one at a time, each in place of the one before: where the neighbour covers it, the
+        neighbour stands in front (the stitch makes its masks: element_stitch.write_elements). After
+        every structure's standing shot: each stands as it was shot (started over and paused at its
+        standing time), not as the map left it (a gate's wooden doors before it is restarted)."""
+        key = element_key("structure", u, "standing")
+        near = neighbours_of(u)
+        if not near:
+            update(key, neighbours=[])
+            return
+        go(u, leftovers() + [(u, 1)])
+        shown.update(structure=u, neighbour=None)
+        white = session.grab(dark_ok=True)
+        shot_over_black(session, white)  # the sky black for the neighbours' shots
+        beside = []
+        for n in near:
+            fade_all(([(shown["neighbour"], 0)] if shown["neighbour"] else []) + [(n, 1)])
+            shown["neighbour"] = n
+            settle(SHOW_SETTLE)
+            frame = session.grab(dark_ok=True)
+            if frame is not None:
+                save(f"{key}-with-{n['id']}", frame)
+                beside.append(n["id"])
+        update(key, neighbours=beside)
+
+    def stand_chaos(u: dict) -> None:
+        """A structure shot again over white and black from Chaos's side (our player put on it once
+        for the whole pass: the switch long drawn), for its team-colour mask: once what it shows
+        differs from its shot from Order (watched briefly where the calibration saw nothing on it
+        change); unchanged, it has no team colour."""
+        key = element_key("structure", u, "standing")
+        go(u, leftovers() + [(u, 1)])
+        shown.update(structure=u, neighbour=None)
+        camera = session.camera() or {"x": u["x"], "y": u["y"]}
+        order = load_frame(folder / key) if frame_exists(folder / key) else None
+        shape = order.shape if order is not None else (0, 0)
+        circle = circle_box(screen_point(u, camera, manifest["screen"], manifest["pxPerCell"]), u["radius"] * manifest["pxPerCell"], shape)
+        white, changed = recoloured_frame(session, order, [circle], SWITCH_CAP if u.get("changesSide") else UNCHANGING_CAP)
+        if not changed:
+            side["unchanged"] += 1
+            if u.get("changesSide"):
+                warn(f"{called(u)}: nothing changed from Chaos's side, though the calibration saw it change; kept without team colour")
+            update(key, chaos=None)
+            return
+        black = shot_over_black(session, white)
+        if white is None or black is None:
+            warn(f"{called(u)}: the game gave no picture from Chaos's side")
+            update(key, chaos=None)
+            return
+        save(f"{key}-chaos", white)
+        save(f"{key}-chaos-black", black)
+        update(key, chaos=f"{key}-chaos")
+
+    def needs_chaos(u: dict) -> bool:
+        """Whether a structure is shot from Chaos's side: not when the calibration saw nothing on it
+        change with the side, nor when its model draws no team colour (the data report)."""
+        return u.get("changesSide") is not False and standing_team_colour(u, report) is not False
 
     def spawn(camps_now: list[dict]) -> None:
         send("el keep 1")  # the sweep leaves them
@@ -400,7 +414,7 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         white = still_frame(session, [circle], first)
         black = shot_over_black(session, white)
         if white is None or black is None:
-            warn(f"  {stem}: no frame")
+            warn(f"{stem}: the game gave no picture")
             return None
         save(stem, white)
         save(f"{stem}-black", black)
@@ -408,7 +422,7 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         inside = white[v0:v1, u0:u1, :3]
         if inside.size and float((np.abs(inside.astype(np.int16) - LIGHT_LEVEL).max(axis=2) > EMPTY_DIFF).mean()) < EMPTY_SHARE:
             return {"camera": camera, "chaos": None, "empty": True}
-        if not other or not send(f"sky {LIGHT_SKY} 0"):
+        if not other or rubble_team_colour(u, report) is False or not send(f"sky {LIGHT_SKY} 0"):
             return {"camera": camera, "chaos": None}
         light = still_frame(session, [circle])
         paint = f"el paint {at['x']:g} {at['y']:g} {radius:g}"
@@ -433,7 +447,7 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         go({**u, "x": spot["x"], "y": spot["y"]})
         tile = source_tile(u, tiles)
         if (shots := rubble_shots(u, spot)) is not None and shots.get("empty"):
-            warn(f"  {u['type']} {u['id']}: its copy at ({spot['x']:g}, {spot['y']:g}) fell to nothing; brought down itself")
+            warn(f"{called(u)}: its copy at ({spot['x']:g}, {spot['y']:g}) left no rubble; brought down where it stands instead")
             fell_to_nothing.append(u)
         elif shots is not None:
             camera = shots["camera"]
@@ -441,10 +455,11 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
                 camera = {"x": camera["x"] + u["x"] - spot["x"], "y": camera["y"] + u["y"] - spot["y"]}
             record("structure", {**u, "radius": rubble_radius(u)}, "rubble", tile, camera, chaos=shots["chaos"])
 
-    def wave(structures_now: list[dict], n: int, waves: int) -> None:
+    def wave(structures_now: list[dict], n: int, waves: int, shot=lambda u: None) -> None:
         """A wave brought down (faded in first: faded out after its standing shot), a group at a
         time with the camera over it (look_over), each group left to settle and paused; then each
-        one's rubble shot alone, and the remains cleared away. `n` of `waves`: for the note."""
+        one's rubble shot alone, and the remains cleared away. `n` of `waves`: for the note.
+        shot(u) once each one's rubble is recorded."""
         note(f"Rubble wave {n} of {waves}: waiting for the structures to fall")
         for group in grouped(structures_now):
             look_over(*view_middle(group))
@@ -465,6 +480,7 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
             tile = go(u)
             if (shots := rubble_shots(u, u)) is not None:
                 record("structure", {**u, "radius": rubble_radius(u)}, "rubble", tile, shots["camera"], chaos=shots["chaos"])
+                shot(u)
         send("el clear")
 
     def plan_copies() -> dict:
@@ -475,7 +491,7 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
             lost = os.environ.pop(COPY_TRYING).split(",")
             crashed += lost
             os.environ[COPY_CRASHED] = ",".join(crashed)
-            warn(f"  copies of {', '.join(lost)} crashed the game: from now on they fall in waves")
+            warn(f"copies of {', '.join(lost)} crashed the game; from now on those are brought down where they stand")
         copied = [u for u in structures if u.get("copy") and u["type"] not in crashed and not goes_with_a_fort(u, structures)
                   and element_key("structure", u, "rubble") not in records][:COPY_LIMIT]
         # In groups to bring down under one camera each; numbered by group, then by fall_wait, the
@@ -488,61 +504,104 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
     copy_groups: list[list[dict]] = []
     plan = plan_copies()
     prepared = {"done": False}
-    with stage("elements (standing)"):
-        pending_structures = [u for u in structures if element_key("structure", u, "standing") not in records]
-        pending_camps = [c for c in camps if element_key("camp", c, "spawned") not in records]
-        camp_waves = rubble_waves(pending_camps)
-        # The first camp wave spawned with the scene hidden, born while the structures' first wave
-        # plays, and shot after the structures: only camps clear of every structure's circle (the
-        # structures' shots must not have them in their cut-outs).
-        early = {"camps": [c for c in (camp_waves[0] if camp_waves and pending_structures else [])
-                           if all(math.dist((c["x"], c["y"]), (u["x"], u["y"])) >= c["radius"] + u["radius"] for u in structures)],
-                 "at": 0.0}
-        send(tile_command(tiles[0]))  # the scene and the capture camera as the tiles have them
-        # The structures faded out, not hidden: each keeps its look as the map paused it, effects
-        # and all (hidden and shown again, a structure restarts its animations, a level 3 tower's
-        # into its birth, and gives off no particles until it plays).
-        send("el fadeall 0")
-        send("el env off", timeout=10.0)
-        if early["camps"]:
-            spawn(early["camps"])
-            early["at"] = time.time()
-        if plan or early["camps"]:
-            step(prepare, "preparing the rubble")
-        with ui.bar(len(pending_structures) + len(pending_camps), "elements standing") as advance:
-            for u in pending_structures:
-                step(lambda: stand(u), element_key("structure", u, "standing"))
-                advance()
-            step(put_away, "the last structure shot faded out")
+    pending_structures = [u for u in structures if element_key("structure", u, "standing") not in records]
+    pending_camps = [c for c in camps if element_key("camp", c, "spawned") not in records]
+    pending_rubble = [u for u in structures if element_key("structure", u, "rubble") not in records]
+    camp_waves = rubble_waves(pending_camps)
+    # The first camp wave spawned with the scene hidden, born while the structures' first wave
+    # plays, and shot after the structures: only camps clear of every structure's circle (the
+    # structures' shots must not have them in their cut-outs).
+    early = {"camps": [c for c in (camp_waves[0] if camp_waves and pending_structures else [])
+                       if all(math.dist((c["x"], c["y"]), (u["x"], u["y"])) >= c["radius"] + u["radius"] for u in structures)],
+             "at": 0.0}
+    # The passes ahead, in the footer from the start; each counts all it covers, what a resumed
+    # run kept already done.
+    if plan or early["camps"]:
+        ui.plan("Rubble preparation", len(copy_groups) or None)
+    for title in ("Standing", "Standing with their neighbours"):
+        ui.plan(title, len(structures))
+    ui.plan("Standing from Chaos's side", sum(needs_chaos(u) for u in structures))
+    if camps:
+        ui.plan("Camps", len(camps))
+    ui.plan("Rubble", len(structures))
+    ui.plan("Clearing the remains")
+    send(tile_command(tiles[0]))  # the scene and the capture camera as the tiles have them
+    # The structures faded out, not hidden: each keeps its look as the map paused it, effects
+    # and all (hidden and shown again, a structure restarts its animations, a level 3 tower's
+    # into its birth, and gives off no particles until it plays).
+    send("el fadeall 0")
+    send("el env off", timeout=10.0)
+    if early["camps"]:
+        spawn(early["camps"])
+        early["at"] = time.time()
+    if plan or early["camps"]:
+        with stage("Rubble preparation", len(copy_groups) or None) as counter:
+            step(lambda: prepare(counter), "the rubble preparation")
+    with stage("Standing", len(structures), len(structures) - len(pending_structures)) as counter:
+        for u in pending_structures:
+            step(lambda: stand(u), f"{called(u)} standing")
+            counter.advance()
+    # Every structure now stands as it is shot: the neighbours' shots, then one pass from Chaos's
+    # side (our player switched once, not twice a structure).
+    standing = [u for u in structures if element_key("structure", u, "standing") in records]
+    beside = [u for u in standing if "neighbours" not in records[element_key("structure", u, "standing")]]
+    with stage("Standing with their neighbours", len(standing), len(standing) - len(beside)) as counter:
+        for u in beside:
+            step(lambda: connect(u), f"{called(u)} with its neighbours")
+            counter.advance()
+    for u in standing:
+        if not needs_chaos(u) and "chaos" not in records[element_key("structure", u, "standing")]:
+            update(element_key("structure", u, "standing"), chaos=None)
+    coloured = [u for u in standing if needs_chaos(u)]
+    chaos = [u for u in coloured if "chaos" not in records[element_key("structure", u, "standing")]]
+    with stage("Standing from Chaos's side", len(coloured), len(coloured) - len(chaos)) as counter:
+        if chaos and send("side 2"):
+            side["team"] = 2
+            settle(SWITCH_CAP)
+            for u in chaos:
+                step(lambda: stand_chaos(u), f"{called(u)} from Chaos's side")
+                counter.advance()
+            back_to_order()
+        if side["unchanged"]:
+            log(f"{side['unchanged']} showed nothing that changes with the side: no team colour for them")
+    step(put_away, "the last standing shots faded out")
+    if camps:
+        with stage("Camps", len(camps), len(camps) - len(pending_camps)) as counter:
             if early["camps"]:
-                step(lambda: camp_wave(early["camps"], spawned=True), "camps spawned early")
-                advance(len(early["camps"]))
+                step(lambda: camp_wave(early["camps"], spawned=True), "the camps spawned early")
+                counter.advance(len(early["camps"]))
             late = [c for c in pending_camps if c not in early["camps"]]
             for n, camps_now in enumerate(rubble_waves(late), start=1):
                 step(lambda: camp_wave(camps_now), f"camp wave {n}")
-                advance(len(camps_now))
-        log(f"  {len(pending_structures) + len(pending_camps)} element(s) shot standing; the structures from both sides"
-            + (f" ({side['unchanged']} with nothing that changed with the side)" if side["unchanged"] else ""))
-    # Only structures have rubble (camps aren't destroyed).
-    with stage("elements (rubble)"):
-        pending_rubble = [u for u in structures if element_key("structure", u, "rubble") not in records]
+                counter.advance(len(camps_now))
+    # Only structures have rubble (camps aren't destroyed). Each counted once its rubble is
+    # recorded (a wave done again after a lost focus counts nothing twice).
+    counted: set[str] = set()
+
+    def count_rubble(group: list[dict], counter) -> None:
+        for u in group:
+            key = element_key("structure", u, "rubble")
+            if key in records and key not in counted:
+                counted.add(key)
+                counter.advance()
+
+    with stage("Rubble", len(structures), len(structures) - len(pending_rubble)) as counter:
         if plan and not prepared["done"]:
-            step(prepare, "preparing the rubble")
+            with ui.folder("Rubble preparation", len(copy_groups) or None) as preparing:
+                step(lambda: prepare(preparing), "the rubble preparation")
         copied = [u for u in pending_rubble if u["id"] in plan]
         rest = [u for u in pending_rubble if u["id"] not in plan]
-        with ui.bar(len(pending_rubble), "rubble") as advance:
-            for u in copied:
-                step(lambda: copy_rubble(u), element_key("structure", u, "rubble"))
-                if u not in fell_to_nothing:
-                    advance()
-            if copied:
-                send("el clear")  # the copies' remains
-            waves = rubble_waves(rest + fell_to_nothing, radius=rubble_radius)
-            for n, structures_now in enumerate(waves, start=1):
-                log(f"  wave {n} of {len(waves)}: {len(structures_now)} structure(s)")
-                step(lambda: wave(structures_now, n, len(waves)), f"rubble wave {n}")
-                advance(len(structures_now))
-    with stage("elements (clearing)"):
+        for u in copied:
+            step(lambda: copy_rubble(u), f"{called(u)}'s rubble")
+            count_rubble([u], counter)
+        if copied:
+            send("el clear")  # the copies' remains
+        waves = rubble_waves(rest + fell_to_nothing, radius=rubble_radius)
+        for n, structures_now in enumerate(waves, start=1):
+            log(f"wave {n} of {len(waves)}: {len(structures_now)} structure{'s' if len(structures_now) != 1 else ''}")
+            step(lambda: wave(structures_now, n, len(waves), lambda u: count_rubble([u], counter)), f"rubble wave {n}")
+            count_rubble(structures_now, counter)
+    with stage("Clearing the remains"):
         def clear() -> None:
             note("Clearing the remains before the tiles")
             for team in (1, 2):  # a resumed run: everything still standing comes down now
@@ -560,5 +619,4 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
 
         step(clear, "clearing the remains")
     saver.shutdown(wait=True)
-    log(f"elements: {len(records)} shot ({len(structures)} structures standing and as rubble, {len(camps)} camps) "
-        f"in {time.time() - started:.0f} s; the structures are down, the tiles are the bare terrain")
+    log(f"{len(records)} element shots kept; the structures are down, so the tiles show the bare terrain")

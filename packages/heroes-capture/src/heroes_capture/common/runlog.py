@@ -1,6 +1,6 @@
-"""The run's log: each message shown (ui.py: a line in --log mode, the status line in the live
-view) and, once the run's folder is known, appended to its log.txt (copied back with the results,
-so a run can be diagnosed from them)."""
+"""The run's log: each message shown (ui.py: a line in the tree) and, once the run's folder is known,
+the tree from then on appended to its log.txt as plain text, detail included (copied back with the
+results, so a run can be diagnosed from them)."""
 
 import time
 from contextlib import contextmanager
@@ -14,73 +14,71 @@ _timings: list[tuple[str, float]] = []
 current = {"stage": "", "message": ""}
 
 
+def _write(line: str) -> None:
+    if _path is not None:
+        with open(_path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+
+
 def set_log_file(path: Path) -> None:
     global _path
     _path = path
-
-
-def _append(text: str) -> None:
-    current["message"] = text
-    if _path is not None:
-        with open(_path, "a", encoding="utf-8") as f:
-            f.write(text + "\n")
+    ui.remove_listener(_write)
+    ui.add_listener(_write)
 
 
 def log(*parts) -> None:
     """A routine message."""
     text = " ".join(str(p) for p in parts)
+    current["message"] = text.strip()
     ui.info(text)
-    _append(text)
 
 
 def warn(text: str) -> None:
     """Something to notice, shown in every mode."""
+    current["message"] = text
     ui.warn(text)
-    _append(f"warning: {text}")
 
 
 def done(text: str) -> None:
     """An outcome worth keeping on screen."""
+    current["message"] = text
     ui.done(text)
-    _append(text)
 
 
 def detail(text: str) -> None:
     """Extra information (shown with --verbose; always in the log files)."""
     ui.detail(text)
-    _append(f"  {text}")
 
 
 @contextmanager
-def paused(text: str):
-    """A pause the run waits out (see ui.notice): shown while it lasts; in the run's log too."""
-    _append(f"paused: {text}")
-    started = time.time()
-    with ui.notice(text):
+def paused(text: str, after: str | None = None):
+    """A pause the run waits out (see ui.notice): shown while it lasts, then a line saying how long
+    (`after`: what it was, said once it's over)."""
+    with ui.notice(text, after):
         yield
-    _append(f"  carrying on after {time.time() - started:.0f} s")
 
 
 @contextmanager
-def stage(name: str):
-    """Time a stage of the run; log_timings() lists them all at the end."""
+def stage(name: str, total: int | None = None, done: int = 0):
+    """A stage of the run: a folder of the tree (ui.folder: yields it, to count what it does), timed
+    for log_timings."""
     started = time.time()
     outer = current["stage"]
     current["stage"] = name
     try:
-        yield
+        with ui.folder(name, total, done) as node:
+            yield node
     finally:
         current["stage"] = outer
         _timings.append((name, time.time() - started))
 
 
 def log_timings(title: str) -> None:
-    """The stages timed so far, one line each, and the total."""
+    """The stages timed so far, one detail line each (each stage's folder shows its time), and the
+    total."""
     if not _timings:
         return
-    width = max(len(name) for name, _ in _timings)
-    log(f"{title} timings:")
-    for name, seconds in _timings:
-        log(f"  {name:<{width}}  {seconds:7.1f} s")
-    log(f"  {'total':<{width}}  {sum(s for _, s in _timings):7.1f} s")
+    detail(f"{title} timings: " + ", ".join(f"{name} {seconds:.1f} s" for name, seconds in _timings)
+           + f"; total {sum(s for _, s in _timings):.1f} s")
     _timings.clear()

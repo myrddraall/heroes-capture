@@ -66,11 +66,14 @@ def require_focus() -> None:
         raise FocusLost
 
 
-def wait_for_game() -> None:
-    """Block until the game window is in front. Nothing is typed anywhere else."""
+def wait_for_game(redoing: str | None = None) -> None:
+    """Block until the game window is in front. Nothing is typed anywhere else. `redoing`: the step
+    done again once it is (for the line saying what the pause was)."""
     if foreground_is_game():
         return
-    with paused(f"the game isn't in front ({foreground_program()} is): click into the game to carry on"):
+    program = foreground_program()
+    with paused(f"the game isn't in front ({program} is): click into the game to carry on",
+                f"{program} was in front" + (f"; {redoing} done again" if redoing else "")):
         while not foreground_is_game():
             if not game_running():
                 raise Recoverable("the game isn't running any more (it crashed?)")
@@ -83,7 +86,7 @@ def wait_for_menu_closed() -> None:
     """Block while one of the game's menus is open over the match, looking twice a second while the
     game is in front; two looks without it in a row and the run carries on. The game closing
     meanwhile (Leave in the exit dialog) is a lost match."""
-    with paused("a game menu is open (Esc, Options or the exit dialog): close it to carry on"), \
+    with paused("a game menu is open (Esc, Options or the exit dialog): close it to carry on", "a game menu was open"), \
             ScreenGrabber(game_region(), duplication=False) as screen:
         clear = 0
         while clear < 2:
@@ -110,7 +113,7 @@ def step(action, what: str):
                 wait_for_menu_closed()
             else:
                 detail(f"focus lost during {what} (in front: {foreground_program()}); redoing it once the game is back")
-            wait_for_game()
+            wait_for_game(redoing=what)
 
 
 def settle(seconds: float) -> None:
@@ -202,7 +205,7 @@ def ensure_game_running(battlenet: str | None, game: str) -> None:
         if game_running():
             break
     if not game_running():
-        with paused("Battle.net didn't start Heroes: press Play on its Heroes of the Storm page to carry on"):
+        with paused("Battle.net didn't start Heroes: press Play on its Heroes of the Storm page to carry on", "waited for Play in Battle.net"):
             deadline = time.time() + 600
             while not game_running():
                 if time.time() > deadline:

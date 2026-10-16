@@ -1,8 +1,8 @@
 """The interface's textures (extract.py's) searched by description.
 
 Each texture's thumbnail goes through the image half of an image-text model (SigLIP 2, by
-OpenCLIP, on the CPU: in bfloat16 where the processor has it, twice as fast for the same vectors) once: squared up over mid grey, so a black mask and a white glow both show,
-and a long bar isn't cropped. The vectors are kept in <out>/index-<model>.npz with each texture's
+OpenCLIP, on the CPU; in bfloat16 where the processor has it: faster, for the same vectors) once,
+squared up over mid grey, so a black mask and a white glow both show, and a long bar isn't cropped. The vectors are kept in <out>/index-<model>.npz with each texture's
 SHA-1, so after a game update only what it changed is looked at again. A description goes through
 the text half; the textures are ranked by how near their picture is to it, with WORD_WEIGHT added
 in proportion to how many of its words appear in what the game's data calls the texture (its file

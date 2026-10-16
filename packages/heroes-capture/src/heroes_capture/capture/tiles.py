@@ -338,10 +338,10 @@ def start_up(session: Session, manifest: dict, manifest_path: Path, out: Path, b
             if time.time() > deadline:
                 quit_match()
                 sys.exit("\nStopped: the map never carried out a command (the strip shows, so the script runs; is a selection phase holding it?)")
-            log("  start-up: the map hasn't taken a command yet (intro or selection phase)")
+            detail("the map hasn't taken a command yet (an intro or a selection phase)")
             time.sleep(1.0)
 
-    with stage("start-up (strip)"):
+    with stage("Status strip"):
         if manifest.get("keepIntro"):
             # Diagnostic: the intro plays out. Nothing is typed meanwhile, in case keys count as
             # skipping it.
@@ -358,10 +358,10 @@ def start_up(session: Session, manifest: dict, manifest_path: Path, out: Path, b
             quit_match()
             raise Recoverable(f"another map is running (identity {seen.map_id}, expected {expected_id})")
     if before_ready is not None:
-        with stage("start-up (first command)"):
+        with stage("First command"):
             until_commands_taken()
         before_ready()
-    with stage("start-up (ready, bounds)"):
+    with stage("Map ready"):
         finish_start_up(session, manifest, manifest_path, until_commands_taken)
 
 
@@ -443,12 +443,8 @@ def team_boxes(manifest: dict, camera: dict, shape: tuple) -> list[tuple[int, in
 def shoot_once(session: Session, tile: dict, settle_time: float, manifest: dict):
     """(the strip's status at the tile: where the camera really is; the kept shot; the same view
     over the black skybox when matting; whether the kept shot doesn't match the view the tile
-    was acknowledged in; with team-coloured doodads in view, the same from Chaos's side: its shot
-    and its shot over black when matting, else None).
-
-    With team-coloured doodads in view, the shots are taken in the order that needs no extra sky
-    swap, as the elements' are: the kept shot from Order, switch, from Chaos, black from Chaos,
-    switch back, black from Order."""
+    was acknowledged in). From Order's side: the team-coloured tiles are shot again from Chaos's
+    after every tile (capture_team_side)."""
     matting = (manifest.get("sky") or {}).get("mode") == "matte"
     if session.team != 1 and session.side(1):  # a step done again after a lost focus, left on Chaos
         settle(SWITCH_CAP)
@@ -456,7 +452,7 @@ def shoot_once(session: Session, tile: dict, settle_time: float, manifest: dict)
     # the camera really is, and the acknowledged frame is the reference view.
     answer = session.send(tile_command(tile), timeout=3.0)
     if answer is None:
-        return None, None, None, False, None
+        return None, None, None, False
     moved = time.time()
     status = answer[0]
     reference = session.blank(answer[1])
@@ -468,32 +464,42 @@ def shoot_once(session: Session, tile: dict, settle_time: float, manifest: dict)
         settle(wait)
     raw = session.fresh()
     if raw is None:
-        return status, None, None, False, None
+        return status, None, None, False
     frame, mismatch = whole_frame(session, session.blank(raw), reference)
-    boxes = team_boxes(manifest, status.camera, frame.shape) if frame is not None else None
-    chaos = None
-    if boxes is not None and session.side(2):
-        chaos_white, _ = recoloured_frame(session, frame, boxes)
-        chaos_black = shot_over_black(session, chaos_white) if matting else None
-        reference = chaos_black if matting else chaos_white
-        back = session.side(1)
-        # Shot 2 (matting): the same over black, from Order again (the sky already black).
-        black = None
-        if back:
-            again, _ = recoloured_frame(session, reference, boxes)
-            black = again if matting and chaos_black is not None else None  # (no black answered: the sky's state unknown)
-        return status, frame, black, mismatch, (chaos_white, chaos_black)
     # Shot 2 (matting): the same over black; the stitch turns the pair into colour and
     # transparency.
     black = None
     if matting and frame is not None:
         black = shot_over_black(session, frame)
-    return status, frame, black, mismatch, None
+    return status, frame, black, mismatch
+
+
+def shoot_chaos(session: Session, tile: dict, settle_time: float, manifest: dict, order: np.ndarray | None):
+    """A team-coloured tile again from Chaos's side (our player already on it): its shot, once
+    its team-coloured boxes differ from the tile's shot from Order (`order`; the switch was long
+    drawn: at once), and its shot over black when matting. None without a view or anything
+    team-coloured in it."""
+    matting = (manifest.get("sky") or {}).get("mode") == "matte"
+    answer = session.send(tile_command(tile), timeout=3.0)
+    if answer is None:
+        return None
+    moved = time.time()
+    status, reference = answer[0], session.blank(answer[1])
+    wait = moved + settle_time - time.time()
+    if wait > 0:
+        settle(wait)
+    raw = session.fresh()
+    frame = whole_frame(session, session.blank(raw), reference)[0] if raw is not None else None
+    boxes = team_boxes(manifest, status.camera, frame.shape) if frame is not None else None
+    if boxes is None:
+        return None
+    white, _ = recoloured_frame(session, order if order is not None else frame, boxes)
+    return white, shot_over_black(session, white) if matting else None
 
 
 def shoot(session: Session, tile: dict, settle_time: float, manifest: dict):
-    """One tile, start to finish, as one step. A tile whose kept shot isn't the view it was
-    acknowledged in (something moved the camera in between) is done again, once."""
+    """One tile from Order's side, start to finish, as one step. A tile whose kept shot isn't the
+    view it was acknowledged in (something moved the camera in between) is done again, once."""
     result = shoot_once(session, tile, settle_time, manifest)
     if result[3] and result[1] is not None:
         log(f"    tile {tile['index'] + 1}: the view changed under it; doing it again")
@@ -588,7 +594,7 @@ def capture_tiles(session: Session, manifest: dict, start: int, settle_time: flo
     def take(tile: dict, total: int, sides: list[str]) -> None:
         note = ""
         try:
-            status, frame, black, mismatch, chaos = step(lambda: shoot(session, tile, settle_time, manifest), f"tile {tile['index'] + 1}/{total}")
+            status, frame, black, mismatch = step(lambda: shoot(session, tile, settle_time, manifest), f"tile {tile['index'] + 1}/{total}")
         except Recoverable as e:
             if e.resume_at is None:  # lost during this tile (the game closed): the fresh launch carries on at it
                 e.resume_at = tile["index"]
@@ -632,24 +638,13 @@ def capture_tiles(session: Session, manifest: dict, start: int, settle_time: flo
                 saver.submit(save_frame, tile_stem(out, tile["index"], black=True), black)
             else:
                 note += "  (no shot over black; kept opaque)"
-        if chaos is not None:
-            # The team-colour pair: the same view from Chaos's side (the stitch's team-colour mask).
-            chaos_white, chaos_black = chaos
-            if chaos_white is not None and (chaos_black is not None or not matting):
-                saver.submit(save_frame, tile_stem(out, tile["index"], chaos=True), chaos_white)
-                if chaos_black is not None:
-                    saver.submit(save_frame, tile_stem(out, tile["index"], black=True, chaos=True), chaos_black)
-                note += "  (and from Chaos's side)"
-            else:
-                note += "  (no shots from Chaos's side)"
         for side in sides:
             if edge_content(frame, black, matting, left, side):
                 flagged.append((tile, side))
                 note += f"  (the map runs on past its {side} edge)"
         state["done"] += 1
         state["advance"]()
-        eta = (time.time() - started) / state["done"] * max(0, total - start - state["done"])
-        log(f"  tile {tile['index'] + 1}/{total}  (row {tile['row']}, col {tile['col']})  ~{eta:.0f}s left{note}")
+        detail(f"tile {tile['index'] + 1}/{total} (row {tile['row']}, col {tile['col']}){note}")
 
     if start:
         # A resumed run: the outer tiles shot before it still count (from their saved shots).
@@ -662,14 +657,48 @@ def capture_tiles(session: Session, manifest: dict, start: int, settle_time: flo
     if any(t.get("edge") for t in tiles[start:]):
         # Tiles past the grid left by the run this one resumes: the camera bounds lifted again.
         step(lambda: session.send("unbound"), "lifting the camera bounds")
-    with stage("tiles"), ui.bar(len(tiles), "tiles", done=start) as advance:  # a resumed run's bar starts at the tiles kept
-        state["advance"] = advance
+    with stage("Tiles", len(tiles), start) as counter:  # a resumed run's bar starts at the tiles kept
+        state["advance"] = counter.advance
         for tile in tiles[start:]:
             take(tile, len(tiles), sides_of(tile))
     state["advance"] = lambda n=1: None
-    with stage("tiles past the grid"):
+    with stage("Tiles past the grid"):
         extend_past_grid(manifest, tiles, flagged, take, session, manifest_path)
     saver.shutdown(wait=True)
+    capture_team_side(session, manifest, settle_time, out, positions)
+
+
+def capture_team_side(session: Session, manifest: dict, settle_time: float, out: Path, positions: dict) -> None:
+    """The tiles with team-coloured doodads in view again from Chaos's side (the stitch's
+    team-colour mask), in one pass after them all: our player put on Chaos once and back once, not
+    twice a tile (the scene is paused: the two passes are the same pixels but for the team colour).
+    The tiles whose shots from Chaos's side are missing only (a resumed run carries on)."""
+    matting = (manifest.get("sky") or {}).get("mode") == "matte"
+    shape = (int(manifest["screen"]["h"]), int(manifest["screen"]["w"]))
+    todo = [t for t in manifest["tiles"] if str(t["index"]) in positions and frame_exists(tile_stem(out, t["index"]))
+            and not frame_exists(tile_stem(out, t["index"], chaos=True)) and team_boxes(manifest, positions[str(t["index"])], shape)]
+    if not todo:
+        return
+    if not session.side(2):
+        warn("our player couldn't be put on Chaos's side: the tiles have no team colour")
+        return
+    settle(SWITCH_CAP)
+    saver = ThreadPoolExecutor(max_workers=SAVERS)
+    with stage("Tiles from Chaos's side", len(todo)) as counter:
+        for tile in todo:
+            order = load_frame(tile_stem(out, tile["index"]))
+            shots = step(lambda: shoot_chaos(session, tile, settle_time, manifest, order), f"tile {tile['index'] + 1} from Chaos's side")
+            if shots is not None and shots[0] is not None and (shots[1] is not None or not matting):
+                saver.submit(save_frame, tile_stem(out, tile["index"], chaos=True), shots[0])
+                if shots[1] is not None:
+                    saver.submit(save_frame, tile_stem(out, tile["index"], black=True, chaos=True), shots[1])
+            else:
+                warn(f"tile {tile['index'] + 1}: no shots from Chaos's side")
+            counter.advance()
+    saver.shutdown(wait=True)
+    if session.side(1):
+        settle(SWITCH_CAP)
+    detail(f"{len(todo)} tiles shot again from Chaos's side, in one pass")
 
 
 def extend_past_grid(manifest: dict, tiles: list, flagged: list, take, session, manifest_path: Path) -> None:
@@ -772,27 +801,34 @@ def main(argv: list[str], specifics_of: Callable[[dict], Specifics]) -> None:
     positions_path = args.manifest.parent / manifest["id"] / "positions.json"
     positions: dict = read_json(positions_path) if (args.start or args.reuse) and positions_path.exists() else {}
 
-    if not args.no_launch:
-        game = args.game or find_install()
-        if not game:
-            sys.exit("Heroes of the Storm's install wasn't found (uninstall entries, the Battle.net app's list, the usual folders); pass --game")
-        launch_map(manifest, str(game), args.battlenet, args.monitor)
-    if args.launch_only:
-        done("Launched. In the game, type commands ending in ';' (the map's command box has the keyboard): 'tile <n>;' moves to a tile, 'clean;', 'black;', 'sky <colour>;', 'pause;'.")
-        return
-
     probe = next((name for name in probes.PROBES if getattr(args, f"probe_{name.replace('-', '_')}")), None)
     if probe:
-        log(f"Probe {probe} on {manifest['map']}: {probes.PROBES[probe][1]}.")
+        log(f"probe {probe}: {probes.PROBES[probe][1]}")
     elif args.calibrate is not None:
         only = [n for n in args.calibrate.split(",") if n]
-        log(f"Calibrating {manifest['map']}: {', '.join(calibration.chosen_stages(only, specifics.calibration_stages, specifics.calibration_probes))}. "
-            "Leave the keyboard and mouse alone.")
-    else:
-        shots = "two shots each (over the light grey, over black)" if (manifest.get("sky") or {}).get("mode") == "matte" else "one shot each (over black; the void is black terrain)"
-        resumed = f", carrying on at tile {args.start + 1}" if args.start else ""
-        log(f"Capturing {manifest['map']}: {len(tiles)} tiles{resumed}, {shots}. Leave the keyboard and mouse alone.")
-    with stage("launch and load"):
+        log(f"calibrating: {', '.join(calibration.chosen_stages(only, specifics.calibration_stages, specifics.calibration_probes))}")
+    elif not args.launch_only:
+        shots = "two shots each, over light grey and over black" if (manifest.get("sky") or {}).get("mode") == "matte" else "one shot each, over black"
+        log(f"{len(tiles)} tiles, {shots}" + (f"; carrying on at tile {args.start + 1}" if args.start else ""))
+        # What the capture does, in the footer from the start (the map's own passes plan theirs).
+        ui.plan("Launching the map")
+        ui.plan("Starting up")
+        if "tiles" in parts:
+            ui.plan("Tiles", len(tiles))
+            ui.plan("Tiles past the grid")
+            ui.plan("Tiles from Chaos's side")
+        ui.plan("Leaving the match")
+    if not args.launch_only:
+        warn("leave the keyboard and mouse alone until the capture is done")
+    with stage("Launching the map"):
+        if not args.no_launch:
+            game = args.game or find_install()
+            if not game:
+                sys.exit("Heroes of the Storm's install wasn't found (uninstall entries, the Battle.net app's list, the usual folders); pass --game")
+            launch_map(manifest, str(game), args.battlenet, args.monitor)
+        if args.launch_only:
+            done("Launched. In the game, type commands ending in ';' (the map's command box has the keyboard): 'tile <n>;' moves to a tile, 'clean;', 'black;', 'sky <colour>;', 'pause;'.")
+            return
         wait_for_map_load(not args.no_launch)
         if args.monitor:
             keep_game_on_monitor(args.monitor, "as the map loaded")
@@ -800,7 +836,7 @@ def main(argv: list[str], specifics_of: Callable[[dict], Specifics]) -> None:
     expected = (manifest["screen"]["w"], manifest["screen"]["h"])
     region = ScreenGrabber.monitor(args.monitor_region) if args.monitor_region else game_region()
     with ScreenGrabber(region, duplication=os.environ.get("HRS_CAPTURE", "duplication") != "mss") as screen:
-        log(f"capturing {region['width']}x{region['height']} at ({region['left']}, {region['top']}) by {screen.method}")
+        detail(f"capturing {region['width']}x{region['height']} at ({region['left']}, {region['top']}) by {screen.method}")
         if os.environ.get("HRS_WATCH"):
             # Beside the run's folder, which a finished render removes.
             watch_folder = out.parent.parent / f"watch-{time.strftime('%H%M%S')}"
@@ -830,14 +866,15 @@ def main(argv: list[str], specifics_of: Callable[[dict], Specifics]) -> None:
                     sky_waits = True
                     return
             area = None if manifest.get("unbound") else game_bounds(session, manifest)
-            with stage("sky depth measurement"):
+            with stage("Measuring the sky layers"):
                 measured = step(lambda: sky_layers.measure(session, manifest, out.parent, area), "measuring the sky layers")
-            with stage("sky layer shots"):
+            with stage("Shooting the sky layers"):
                 sky_layers.capture(session, manifest, out.parent, measured, area=area)
 
         # A resumed run (after a recovery) keeps the sky work this run already did.
         sky_done = "skies" not in parts or (args.start and (out.parent / "sky-layers.json").exists() and (out.parent / "sky" / "positions.json").exists())
-        start_up(session, manifest, args.manifest, out, before_ready=None if probe or args.calibrate is not None or sky_done else lambda: sky_work(wait_if_hidden=True))
+        with stage("Starting up"):
+            start_up(session, manifest, args.manifest, out, before_ready=None if probe or args.calibrate is not None or sky_done else lambda: sky_work(wait_if_hidden=True))
         if sky_waits:
             sky_work()
         if probe:
@@ -860,9 +897,9 @@ def main(argv: list[str], specifics_of: Callable[[dict], Specifics]) -> None:
                 start = max(0, missing - SAVERS) if missing < len(manifest["tiles"]) else missing
             capture_tiles(session, manifest, start, args.settle, out, positions, positions_path, args.manifest)
 
-    with stage("leaving"):
+    with stage("Leaving the match"):
         quit_match(wait=False)  # the stitch runs while the game leaves; the next launch waits for the menu
-    log(f"camera positions recorded for {len(positions)} screenshots")
+    detail(f"camera positions recorded for {len(positions)} screenshots")
     log_timings("capture")
     if "tiles" in parts:
         done(f"{len(manifest['tiles'])} screenshots in {out}" + (f" ({len(manifest['tiles']) - args.start} of them in this launch)" if args.start else ""))
@@ -894,6 +931,7 @@ def recover(e: Recoverable, argv: list[str]) -> int:
     env = dict(os.environ, HRS_RECOVERIES=str(done + 1))
     if ui.log_file():
         env["HRS_DIAG_LOG"] = str(ui.log_file())  # the fresh run carries on in this run's diagnostic log
+    env[ui.DEPTH_ENV] = str(ui.depth())  # and draws its tree under this one's open folders
     # The same program again: the exe itself, or Python running the package.
     program = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, "-m", "heroes_capture"]
     return subprocess.call([*program, "capture", *argv], env=env)

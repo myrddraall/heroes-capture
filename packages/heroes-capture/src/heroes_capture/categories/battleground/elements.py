@@ -221,6 +221,51 @@ def group_outposts(structures: list[dict], towns: list[dict]) -> list[dict]:
     return outposts
 
 
+# The death model the game's town structures share (a tower's remains are its dead state's and
+# explosions', not in its death list): no say on whether a structure's remains are team-coloured.
+GENERIC_DEATH = "TownStructureDeathAnimation"
+
+
+def standing_team_colour(u: dict, report: dict) -> bool | None:
+    """Whether a structure's finished model draws team colour standing (the data report's,
+    common/m3.py); None when the report can't tell."""
+    model = (report.get("models") or {}).get((report.get("standModels") or {}).get(u["type"]))
+    return (model or {}).get("teamColour", {}).get("Stand")
+
+
+def rubble_team_colour(u: dict, report: dict) -> bool | None:
+    """Whether a structure's remains can draw team colour: one of its death models does while its
+    death plays or after (its remains are shot while it plays). None when the report can't tell
+    (no death model of its own, as a tower: it dies into a dead state and explosions)."""
+    models = report.get("models") or {}
+    own = [m for m in (report.get("deathModels") or {}).get(u["type"], []) if m != GENERIC_DEATH and m in models]
+    if not own:
+        return None
+    found = [v for m in own for v in (models[m].get("teamColour") or {}).values()]
+    return any(found) if found else None
+
+
+def stand_reach(u: dict, report: dict, distance: float) -> float | None:
+    """How far a structure's finished model can reach on screen from its cell, in cells: its mesh's
+    reach across the ground at its top's height, as the capture camera (`distance` up, straight
+    down) sees it: r·d/(d−h). None when the report can't tell."""
+    model = (report.get("models") or {}).get((report.get("standModels") or {}).get(u["type"])) or {}
+    extent = model.get("extent")
+    if not extent:
+        return None
+    scale = model.get("scale") or 1.0
+    reach, height = extent["reach"] * scale, max(0.0, extent["height"] * scale)
+    return reach * distance / max(distance - height, 1e-3)
+
+
+def may_overlap(u: dict, n: dict, report: dict, distance: float, fallback: float) -> bool:
+    """Whether two standing structures can overlap on screen: nearer than both their models reach
+    (stand_reach); nearer than `fallback` when the report can't tell for either."""
+    a, b = stand_reach(u, report, distance), stand_reach(n, report, distance)
+    apart = math.dist((u["x"], u["y"]), (n["x"], n["y"]))
+    return apart < (a + b if a is not None and b is not None else fallback)
+
+
 def goes_with_a_fort(u: dict, structures: list[dict]) -> bool:
     """Whether a structure is a standalone tower GameLib takes down with a fort (STANDALONE_REACH):
     it falls before its fort (rubble_waves) and has no copy (left standing while its copy fell, it

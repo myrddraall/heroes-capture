@@ -185,6 +185,12 @@ the strip, and where the camera lands when sent to a tile. The report (`report.j
 column and the screen at half size) goes to `tmp\probe-monitor-<WxH>-<time>\`; the log line
 `monitor probe at WxH: n of 6 checks ok` sums it up.
 
+### In a Hyper-V VM
+
+To render without giving up the PC, or at a resolution none of its monitors has (4K, say),
+[`vm/`](vm/README.md) sets up a Windows VM for the tool: a share of the PC's GPU, a virtual
+monitor at the resolution you choose, Battle.net, and a session that stays signed in by itself.
+
 ### Options (prepare; `map render` passes them on)
 
 | Option                    | Default     | Effect                                                                                                         |
@@ -287,8 +293,27 @@ uv sync --extra search   # or: pip install -e ".[search]"
 ```
 
 The model's weights download once (Hugging Face's cache). The first search looks at every
-picture (`assets\ui\index-<model>.npz`), which takes minutes; after that a search takes seconds,
-and after a game update only the textures it changed are looked at again.
+picture (`assets\ui\index-<model>.npz`), which takes 10 to 30 minutes on a 16-core CPU; after
+that a search takes seconds, and after a game update only the textures it changed are looked at
+again.
+
+### The Play screen's background
+
+```powershell
+heroes-capture ui background -o ..\heroes-replay-stats\packages\app\public\backgrounds\play
+```
+
+Exports the background of the game's Play screen for a browser to draw (heroes-replay-stats
+draws it with WebGL, at its `/play-background` page): its sky, the energy drifting in towards
+the horizon, the twinkling stars and the planets (their atmospheres, and the faint hex grid over
+them), not the floor. `scene.json` holds the camera, the light's HDR exposure and white point, the
+meshes (the planets' with their normals, their billboards turned to face the camera), their
+materials' layers (colours, fresnels and emissive blends included) and the stars' particle system;
+the textures go beside it as WebP (about 1 MB in all). From the game's
+data (`ui/play_background.py`): the cutscene the Play screen runs (`gluebackground.stormcutscene`:
+its camera, the model its actor shows, the light and animation in effect while it holds the Play
+screen) and that model (`common/m3.py` reads it: its meshes placed by the Stand pose, its
+materials, and the 200-second scrolls of the sequences that run alongside, GLstand).
 
 ## How it works
 
@@ -443,9 +468,9 @@ object, `map/specifics.py`'s `Specifics`, which `cli.py` builds for each map.
 
 | Layer | Folder, module | What it does |
 | --- | --- | --- |
-| | `cli.py` | the `heroes-capture` command (Typer, Rich): `map render`, `map calibrate`, `map list`, `map view`, `ui extract`, `ui search`, `prepare`, `capture`, `stitch`; picks a map's category and its own module (`specifics_for`) |
-| 1 everything | `common/` | the game's install and data (`game_data.py`, `casclib.py`, `stormlib.py`, `native.py`, `lighting.py`, `actors.py`: actor trees and models' moving parts), its process, window and input (`game_window.py`, `game_control.py`, `monitors.py`), screen grabs and comparisons (`screen.py`, `matching.py`), the game's states and menus (`game_state.py`, `game_menus.py`, `menu-reference/`), images, geometry, DDS textures, JSON and frames on disk, the log and the live view (`runlog.py`, `ui.py`, `watch.py`), the worker pool |
-| 2 the interface's textures | `ui/` | which textures the interface uses and what the game's data says about each (`catalogue.py`), their pictures (`extract.py`), the search by description (`search.py`) |
+| | `cli.py` | the `heroes-capture` command (Typer, Rich): `map render`, `map calibrate`, `map list`, `map view`, `ui extract`, `ui search`, `ui background`, `prepare`, `capture`, `stitch`; picks a map's category and its own module (`specifics_for`) |
+| 1 everything | `common/` | the game's install and data (`game_data.py`, `casclib.py`, `stormlib.py`, `native.py`, `lighting.py`, `actors.py`: actor trees and models' moving parts, `m3.py`: model files' meshes, materials, particles and animation tracks), its process, window and input (`game_window.py`, `game_control.py`, `monitors.py`), screen grabs and comparisons (`screen.py`, `matching.py`), the game's states and menus (`game_state.py`, `game_menus.py`, `menu-reference/`), images, geometry, DDS textures, JSON and frames on disk, the log and the live view (`runlog.py`, `ui.py`, `watch.py`), the worker pool |
+| 2 the interface's textures | `ui/` | which textures the interface uses and what the game's data says about each (`catalogue.py`), their pictures (`extract.py`), the search by description (`search.py`), the Play screen's background (`play_background.py`) |
 | 2 inside any map | `map/` | the script assembler and the map's own part (`script.py`, `script.galaxy`), the status strip (`status.py`), the Galaxy reader (`galaxy.py`), launching and leaving a match and the command box (`match.py`), what every preparation reads of a map (`prepare.py`), `specifics.py` |
 | 3 capturing maps | `capture/` | preparing for capture (`prepare.py`), the grid, the capture run (`tiles.py`, `shots.py`), a map's calibration (`calibration.py`), skies (`sky.py`, `sky_layers.py`, `sky_stitch.py`), matting and cut-outs (`matting.py`), the stitch (`stitch.py`, `edge_black.py`), the pack (`pack.py`, `minimap_svg.py`), the reference viewer and `map view` (`viewer.py`, `viewer.html`, `serve.py`), the capture's script part, `diagnostics/` (the `--probe-*` switches and their helpers) |
 | 4 categories of maps | `categories/` | `battleground/`: towns, outposts, camps, structure holes, the elements capture, stitch and pack, the calibration's measurements and its review (`calibrate.py`, `calibration_review.py` and its page), its script part; `arena/`: capture areas and rounds |
@@ -468,6 +493,9 @@ uv run pytest -n auto --dist loadgroup   # or pnpm test from the workspace root
   render.
 - `tests/test_game_menus.py`: the game's menus told from the map at screen sizes from 600 to
   2160 rows and 16:9 to 32:9 (`tests/sim/menus.py` draws them).
+- `tests/test_play_background.py`: the Play screen's background: its cutscene read for the Play
+  screen, the camera, the light's HDR, animation tracks; and, marker `game_data`, the export from
+  the game's own data.
 - `tests/test_ui.py`: the interface's textures on a made-up storage (the catalogue, the pictures,
   the search's ranking) and, marker `game_data`, the game's own interface catalogue.
 - `tests/test_game_data.py` (marker `game_data`): the game's own data from Blizzard's CDN (no

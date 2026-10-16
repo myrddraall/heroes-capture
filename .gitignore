@@ -29,3 +29,4 @@ packages/heroes-capture/build/
 packages/heroes-capture/src/heroes_capture/_version.py
 packages/heroes-capture/local-assets/
 packages/heroes-capture/native/
+packages/heroes-capture/vm/settings.local.psd1

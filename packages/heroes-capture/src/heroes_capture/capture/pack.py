@@ -150,39 +150,41 @@ def write_pyramid(png: Path, dest: Path, name: str, overview: int, webp: dict, m
                          extend="background", background=pad)
     tiles = []
     premultiplied = padded.premultiply()
-    for level in range(levels - 1, overview - 1, -1):
-        # Each level halves the one finer (the same box filter as shrinking the image by the level's
-        # factor at once, the image read once).
-        if level == levels - 1:
-            scaled = padded.copy_memory()
-        else:
-            premultiplied = premultiplied.shrink(2, 2).copy_memory()
-            scaled = premultiplied.unpremultiply().cast("uchar").copy_memory()
-        if level == overview:
-            # The overview (PACK.md, Overviews): the level whole, as one picture, so a viewer has it
-            # in one request; the same pixels its tiles would have.
-            level_w, level_h = level_size(width, height, levels, level)
-            overview_path = dest.with_name(f"{dest.stem}-overview.webp")
-            scaled.crop(0, 0, level_w, level_h).webpsave(str(overview_path), keep="none", **webp)
-            if level < levels - 1:
-                break
-        cols, rows = math.ceil(scaled.width / TILE), math.ceil(scaled.height / TILE)
+    tiled = [level for level in range(levels - 1, overview - 1, -1) if level > overview or level == levels - 1]
+    with ui.bar(sum(math.ceil(padded.width / 2 ** (levels - 1 - level) / TILE) * math.ceil(padded.height / 2 ** (levels - 1 - level) / TILE)
+                    for level in tiled), name) as advance:
+        for level in range(levels - 1, overview - 1, -1):
+            # Each level halves the one finer (the same box filter as shrinking the image by the level's
+            # factor at once, the image read once).
+            if level == levels - 1:
+                scaled = padded.copy_memory()
+            else:
+                premultiplied = premultiplied.shrink(2, 2).copy_memory()
+                scaled = premultiplied.unpremultiply().cast("uchar").copy_memory()
+            if level == overview:
+                # The overview (PACK.md, Overviews): the level whole, as one picture, so a viewer has it
+                # in one request; the same pixels its tiles would have.
+                level_w, level_h = level_size(width, height, levels, level)
+                overview_path = dest.with_name(f"{dest.stem}-overview.webp")
+                scaled.crop(0, 0, level_w, level_h).webpsave(str(overview_path), keep="none", **webp)
+                if level < levels - 1:
+                    break
+            cols, rows = math.ceil(scaled.width / TILE), math.ceil(scaled.height / TILE)
 
-        def encode(xy, scaled=scaled, level=level):
-            x, y = xy
-            tile = scaled.crop(x * TILE, y * TILE, min(TILE, scaled.width - x * TILE), min(TILE, scaled.height - y * TILE))
-            if empty(tile):
-                return None  # empty: not stored (a missing tile is transparent, or no team colour)
-            if tile.width < TILE or tile.height < TILE:
-                tile = tile.embed(0, 0, TILE, TILE, extend="background", background=pad)
-            return zxy_to_tileid(level, x, y), tile.webpsave_buffer(keep="none", **webp)
+            def encode(xy, scaled=scaled, level=level):
+                x, y = xy
+                tile = scaled.crop(x * TILE, y * TILE, min(TILE, scaled.width - x * TILE), min(TILE, scaled.height - y * TILE))
+                if empty(tile):
+                    return None  # empty: not stored (a missing tile is transparent, or no team colour)
+                if tile.width < TILE or tile.height < TILE:
+                    tile = tile.embed(0, 0, TILE, TILE, extend="background", background=pad)
+                return zxy_to_tileid(level, x, y), tile.webpsave_buffer(keep="none", **webp)
 
-        with ui.bar(cols * rows, f"{name}, level {level + 1} of {levels}") as advance:
             for result in ordered_map(encode, [(x, y) for y in range(rows) for x in range(cols)]):
                 if result:
                     tiles.append(result)
                 advance()
-        del scaled
+            del scaled
     tiles.sort(key=lambda t: t[0])
     meta = {"size": [width, height], "levels": levels, "tileSize": TILE,
             "overview": {"file": f"{dest.stem}-overview.webp", "level": overview, "size": list(level_size(width, height, levels, overview))}}

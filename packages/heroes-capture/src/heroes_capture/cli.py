@@ -7,6 +7,7 @@
     heroes-capture map list                                     the game's maps, and which are verified
     heroes-capture ui extract                                   the game's interface textures, as pictures with a catalogue
     heroes-capture ui search "gold hexagonal portrait frame"    the interface textures that fit a description
+    heroes-capture ui background -o <app>\\public\\backgrounds\\play  the Play screen's background, for a browser to draw
     heroes-capture clean-up                                     remove the working files a failed render left in tmp\\
     heroes-capture --version
 
@@ -359,6 +360,13 @@ def tool_fingerprint() -> str:
     return digest.hexdigest()[:16]
 
 
+def same_preparation(kept: list[str] | None, options: list[str]) -> bool:
+    """Whether a kept run was prepared with these options, wherever the tool's folder is now: the
+    reviewed calibration's path left out (the folder may have moved; its contents count through
+    tool_fingerprint, and a run of some parts takes the calibration as it is now)."""
+    return kept is not None and without(kept, "--calibration") == without(options, "--calibration")
+
+
 def kept_run(work: Path, map_id: str, options: list[str]) -> Path | None:
     """The manifest of a run left unfinished in `work` (failed or stopped) that a render with these
     preparing options can carry on: the same map, prepared the same way, by the same tool
@@ -369,9 +377,12 @@ def kept_run(work: Path, map_id: str, options: list[str]) -> Path | None:
         data = read_json(manifest)
     except (OSError, ValueError):
         return None
-    if data.get("renderOptions") != options or not manifest.with_suffix(".stormmap").exists():
+    if not same_preparation(data.get("renderOptions"), options) or not manifest.with_suffix(".stormmap").exists():
         return None
     if data.get("finished"):
+        return None
+    if data.get("stormmap") and not Path(data["stormmap"]).exists():
+        ui.warn(f"the run left in {work} was prepared in another folder (the tool's folder moved?): starting over")
         return None
     if data.get("tool") != tool_fingerprint():
         ui.warn(f"the run left in {work} was taken by another version of the tool: starting over")
@@ -405,14 +416,14 @@ def calibrate_one(map_spec: str, name: str, options: list[str], output_dir: Path
         raise typer.BadParameter(f"{name} has no calibration yet to add stages to: calibrate it whole first")
     work = Path(options[options.index("--out") + 1]) / CALIBRATION_WORK
     options = ["--structures", "elements", *without(options, "--structures", "--out", "--calibration"), "--out", str(work), "--calibrate"]
-    with ui.step(f"Preparing {name} for its calibration"):
+    with ui.step("Preparing the map for its calibration"):
         manifest_path = prepare.main([map_spec, *options], specifics_of_map)
     run_folder = manifest_path.with_suffix("")
     shutil.rmtree(run_folder, ignore_errors=True)  # a kept earlier calibration's pictures would mix in
     run_folder.mkdir(parents=True, exist_ok=True)
     if only:  # the calibration so far, for the stages run to be merged into
         shutil.copyfile(target, run_folder / calibration.PREVIOUS)
-    with ui.step(f"Calibrating {name} in the game" + (f" ({', '.join(only)})" if only else "")):
+    with ui.step("Calibrating in the game" + (f" ({', '.join(only)})" if only else "")):
         run_capture([str(manifest_path), "--calibrate", ",".join(only), *capture_options])
     # The measurements and their pictures (for the review) beside the map's packs; a run of some
     # stages adds its pictures to the others'.
@@ -479,7 +490,7 @@ def render_one(map_spec: str, name: str, options: list[str], output_dir: Path, c
         start = first_missing_tile(manifest_path, planned)
         ui.done(f"{name}: carrying on from the run left in {work} ({start} of {len(planned['tiles'])} tiles kept){note}")
     else:
-        with ui.step(f"Preparing {name}"):
+        with ui.step("Preparing the map"):
             manifest_path = prepare.main([map_spec, *options], specifics_of_map)
         planned = read_json(manifest_path)
         planned["renderOptions"] = options  # what a later render must match to carry this one on
@@ -493,9 +504,9 @@ def render_one(map_spec: str, name: str, options: list[str], output_dir: Path, c
         if not start:
             for folder in ("tiles", "elements"):  # old screenshots would mix in (the elements' record skips what it lists)
                 shutil.rmtree(manifest_path.with_suffix("") / folder, ignore_errors=True)
-        with ui.step(f"Capturing {name} in the game"):
+        with ui.step("Capturing in the game"):
             run_capture([manifest, *(["--start", str(start)] if start else []), *capture_options])
-    with ui.step(f"Stitching {name}"):
+    with ui.step("Stitching and packing"):
         stitch.main([manifest, "--output-dir", str(output_dir)], specifics_of)
     if clean:
         remove([manifest_path, manifest_path.with_suffix(".stormmap"), manifest_path.with_suffix("")])
@@ -527,23 +538,23 @@ def render_some(map_spec: str, name: str, options: list[str], output_dir: Path, 
         kept = None
     if kept is None or not run_folder.is_dir():
         raise SystemExit(f"{name} has no kept {structures} render in {work} to build on: render it whole first")
-    if kept.get("renderOptions") != options:
+    if not same_preparation(kept.get("renderOptions"), options):
         raise SystemExit(f"{name}'s kept render in {work} was prepared with other options: render it whole")
     if not cleared:
         removed = job.clear(run_folder, only)
         mark_cleared()
         ui.done(f"{name}: reshooting {', '.join(f'{p} ({n})' if p in removed else p for p, n in ((p, removed.get(p)) for p in only))}; the rest kept")
-    with ui.step(f"Preparing {name}"):
+    with ui.step("Preparing the map"):
         manifest_path = prepare.main([map_spec, *options], specifics_of_map)
     planned = read_json(manifest_path)
     write_manifest(manifest_path, {**planned, "renderOptions": options, "tool": tool_fingerprint()})
-    with ui.step(f"Capturing {name} in the game ({', '.join(only)})"):
+    with ui.step(f"Capturing in the game ({', '.join(only)})"):
         run_capture([str(manifest_path), "--parts", ",".join(job.capture_parts(only)), "--reuse", *capture_options])
     if "tiles" not in only:
         now = [(t["index"], t.get("x"), t.get("y")) for t in read_json(manifest_path)["tiles"]]
         if now != [(t["index"], t.get("x"), t.get("y")) for t in kept["tiles"]]:
             raise SystemExit(f"{name}'s grid came out differently this time: the kept tiles don't fit it; run tiles too")
-    with ui.step(f"Stitching {name}"):
+    with ui.step("Stitching and packing"):
         stitch.main([str(manifest_path), "--output-dir", str(output_dir)], specifics_of)
     write_manifest(manifest_path, {**read_json(manifest_path), "finished": True})
     ui.done(f"{name}: the map is in {stitch.output_folder(output_dir, planned)}")
@@ -577,33 +588,43 @@ def run_job(
     for run in runs:  # every map named is known before anything runs
         maps_to_render(run.map, None, known)
     capture_options = [*(["--game", game] if game else []), *(["--monitor", monitor] if monitor else [])]
-    for n, run in enumerate(runs):
-        heading = f"run {n + 1} of {len(runs)}: {run.describe()}"
-        if n in state["done"]:
-            ui.done(f"{heading}: done before")
-            continue
-        carrying_on = resume and state.get("current") == n
-        state["current"] = n
-        job.save(TMP, state)
-        ui.show(heading + (" (carried on)" if carrying_on else ""))
-        (map_spec, name), = maps_to_render(run.map, None, known)[0]
-        with kept_on_failure(TMP):
-            if run.calibrate is not None:
-                calibrate_one(map_spec, name, preparing_options("elements", [], monitor), output_dir, False, capture_options, run.calibrate)
-            elif run.only:
-                def mark_cleared(n=n) -> None:
-                    state["cleared"].append(n)
-                    job.save(TMP, state)
-
-                render_some(map_spec, name, preparing_options(run.render, [], monitor), output_dir, run.only, capture_options,
-                            carrying_on and n in state["cleared"], mark_cleared)
-            else:
-                render_one(map_spec, name, preparing_options(run.render, [], monitor), output_dir, False, True, capture_options,
-                           validated, carry_on=carrying_on)
-        state["done"].append(n)
-        job.save(TMP, state)
+    with ui.folder(f"Job {path.name}", total=len(runs), done=len(state["done"])) as whole:
+        for n, run in enumerate(runs):
+            heading = f"Run {n + 1} of {len(runs)}: {run.describe()}"
+            if n in state["done"]:
+                ui.done(f"{heading}: done before")
+                continue
+            carrying_on = resume and state.get("current") == n
+            state["current"] = n
+            job.save(TMP, state)
+            with ui.folder(heading + (" (carried on)" if carrying_on else "")):
+                run_one_of_job(run, n, state, carrying_on, output_dir, monitor, capture_options, validated, known)
+            state["done"].append(n)
+            job.save(TMP, state)
+            whole.advance()
     ui.done(f"job done: {len(runs)} run(s)")
     cleaned_up(TMP, clean)
+
+
+def run_one_of_job(run, n: int, state: dict, carrying_on: bool, output_dir: Path, monitor: str | None, capture_options: list[str],
+                   validated: dict, known: dict) -> None:
+    """One run of a job (job.Run): a calibration, a render of some parts, or a whole render."""
+    from heroes_capture import job
+
+    (map_spec, name), = maps_to_render(run.map, None, known)[0]
+    with kept_on_failure(TMP):
+        if run.calibrate is not None:
+            calibrate_one(map_spec, name, preparing_options("elements", [], monitor), output_dir, False, capture_options, run.calibrate)
+        elif run.only:
+            def mark_cleared(n=n) -> None:
+                state["cleared"].append(n)
+                job.save(TMP, state)
+
+            render_some(map_spec, name, preparing_options(run.render, [], monitor), output_dir, run.only, capture_options,
+                        carrying_on and n in state["cleared"], mark_cleared)
+        else:
+            render_one(map_spec, name, preparing_options(run.render, [], monitor), output_dir, False, True, capture_options,
+                       validated, carry_on=carrying_on)
 
 
 @map_app.command("render", context_settings=PASS_THROUGH, options_metavar="[OPTIONS] [MAP]")
@@ -663,7 +684,9 @@ def render(
     rendered, skipped, failed = 0, 0, []
     for map_spec, name in maps:
         try:
-            if render_one(map_spec, name, options, output_dir, clean, force, capture_options, validated):
+            with ui.folder(f"{name}: {structures.value} render"):
+                rendered_now = render_one(map_spec, name, options, output_dir, clean, force, capture_options, validated)
+            if rendered_now:
                 rendered += 1
             else:
                 skipped += 1
@@ -920,6 +943,26 @@ def ui_extract(
     clean_up([ui.log_file()], False)
 
 
+@ui_app.command("background")
+def ui_background(
+    output_dir: Annotated[Path, typer.Option("--output-dir", "-o", help="Where the scene and its textures go.")] = Path("assets") / "backgrounds" / "play",
+) -> None:
+    """Export the Play screen's background for a browser to draw: for now its sky, the energy drifting towards the horizon and the twinkling stars.
+
+    From the game's data: the camera, light and animation of the cutscene the Play screen runs, and its model's meshes, materials and particles (scene.json), with the textures they use as WebP.
+    """
+    from heroes_capture.common.game_data import game_storage
+    from heroes_capture.ui.play_background import export
+
+    log_to(TMP)
+    with kept_on_failure(TMP), ui.step("Exporting the Play screen's background"):
+        with game_storage() as storage:
+            scene = export(storage, output_dir)
+    size = sum(f.stat().st_size for f in output_dir.iterdir() if f.is_file())
+    ui.done(f"The Play screen's background in {output_dir} ({size / 1e3:.0f} kB, game build {scene['source']['build']})")
+    clean_up([ui.log_file()], False)
+
+
 @ui_app.command("search")
 def ui_search(
     description: Annotated[str, typer.Argument(help="What to look for, in words: \"gold hexagonal portrait frame\".", show_default=False)],
@@ -928,15 +971,19 @@ def ui_search(
 ) -> None:
     """The interface textures that best fit a description: listed, and shown on a contact sheet.
 
-    Ranked by how near each texture's picture is to the description (an image-text model on the CPU: the search extra), and by its words in what the game's data calls the texture. The first search looks at every picture once (minutes); the rest take seconds.
+    Ranked by how near each texture's picture is to the description (an image-text model on the CPU: the search extra), and by its words in what the game's data calls the texture. The first search looks at every picture once (10 to 30 minutes); the rest take seconds.
     """
     from heroes_capture.ui import search as searching
 
     found, textures, sheet = searching.search(output_dir, description, count)
-    table = Table("#", "Texture", "Size", "Where the game uses it", title=f"\"{description}\"", title_justify="left")
+    table = Table(title=f"\"{description}\" (pictures in {output_dir / 'png'})", title_justify="left")
+    table.add_column("#", justify="right")
+    table.add_column("Texture", overflow="fold")  # whole: it's the picture's file name
+    table.add_column("Size", no_wrap=True)
+    table.add_column("Where the game uses it", overflow="fold")
     for i, (name, _) in enumerate(found, 1):
         entry = textures[name]
-        table.add_row(str(i), escape(entry["png"]), f"{entry['width']}x{entry['height']}", escape(searching.where(entry)))
+        table.add_row(str(i), escape(Path(entry["png"]).name), f"{entry['width']}x{entry['height']}", escape(searching.where(entry)))
     ui.show(table)
     ui.done(f"contact sheet: {sheet}")
 
@@ -968,7 +1015,7 @@ def capture(ctx: typer.Context) -> None:
         return
     log_to(Path(args[0]).parent)
     restart = os.environ.get("HRS_RECOVERIES")  # a capture started again after a lost match (capture.recover)
-    title = f"Capturing {read_json(Path(args[0]))['map']} in the game" + (f" (restart {restart} of 3)" if restart else "")
+    title = f"Restart {restart} of 3: the map launched again" if restart else f"Capturing {read_json(Path(args[0]))['map']} in the game"
     with ui.step(title):  # the live view, also in a restarted capture's own process
         run_capture(args)
 

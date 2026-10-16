@@ -707,3 +707,17 @@ def test_a_copy_that_fell_to_nothing_is_no_copy_spot():
     measured["tries"] = [{"id": 7, "type": "T", "x": 10, "y": 10, "failed": None, "rubbleLook": {"drawn": 0.0, "mean": [0, 0, 0], "dark": 0.0}},
                          {"id": 8, "type": "T", "x": 20, "y": 20, "failed": None, "rubbleLook": {"drawn": 0.0053, "mean": [9, 9, 9], "dark": 0.0}}]
     assert set(review.apply_review(measured, {"submitted": True})["copySpots"]) == {"8"}
+
+
+def test_a_structure_s_side_change_is_taken_from_its_model_s_data(calibrate, tmp_path):
+    """Its finished model's team colour in the data report (common/m3.py): no switch to Chaos's side
+    and back to measure it (the tower's here); recorded as from the data."""
+    manifest = json.loads(json.dumps(CALIBRATION_MANIFEST))
+    manifest["elements"]["report"] = {"structures": {}, "doodads": {}, "standModels": {"TownCannonTowerL2": "Tower"},
+                                      "models": {"Tower": {"teamColour": {"Stand": True}}}}
+    game = _CalibrationGame(calibrate.clock)
+    found = calibrate.calibrate(game, manifest, tmp_path)
+    tower = game.sent.index("el at 50.00 50.00 50 50 1")
+    assert game.sent[tower + 1] == "el fades 50 50 0"  # no side switches for it
+    measured = found["structures"]["5"]
+    assert measured["changes"] is True and measured["fromData"] is True and measured["toChaos"] is None
