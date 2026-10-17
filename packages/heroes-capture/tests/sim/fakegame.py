@@ -529,7 +529,9 @@ class MSS:
             bgra[..., 3] = 255
             bgra.setflags(write=False)
             MSS._source, MSS._bgra = f, bgra
-        return MSS._bgra
+        # Only the area asked for, as mss gives it (the capture polls the status strip's corner).
+        left, top = region.get("left", 0), region.get("top", 0)
+        return MSS._bgra[top:top + region.get("height", H), left:left + region.get("width", W)]
 
     def close(self):
         pass

@@ -112,10 +112,11 @@ class Shots:
         thread finishes first."""
         levels = {}
         for i in order:
-            if not self.matting or not self.has_black(i):
+            # (From the tile's pair from Order: one from Chaos's side may have no shot over black.)
+            if not self.matting or not frame_exists(tile_stem(self.dir, i, black=True)):
                 continue
             if self.light_level is None:
-                self.light_level = light_level(load_frame(self.stem(i)), load_frame(self.black_stem(i)))
+                self.light_level = light_level(load_frame(tile_stem(self.dir, i)), load_frame(tile_stem(self.dir, i, black=True)))
                 if self.light_level is not None:
                     detail(f"light sky level {self.light_level:.1f}")
             levels[i] = self.light_level or LIGHT_LEVEL
@@ -126,6 +127,13 @@ class Shots:
         map whose void is black terrain is shot once, over black; void_terrain_transparent
         handles the void)."""
         white = load_frame(self.stem(i))
+        order_black = tile_stem(self.dir, i, black=True)
+        if self.matting and not self.has_black(i) and self.stem(i) != tile_stem(self.dir, i) and frame_exists(order_black):
+            # A tile from Chaos's side shot only over the light sky (capture_team_side): its colour
+            # with the see-through share its pair from Order gives (the team-colour mask takes that
+            # pair's alpha anyway: canvas_team_mask).
+            alpha = matte(load_frame(tile_stem(self.dir, i)), load_frame(order_black), level if level is not None else LIGHT_LEVEL)[..., 3]
+            return matte_with_alpha(white, alpha, level if level is not None else LIGHT_LEVEL)
         if not self.matting or not self.has_black(i):
             return np.dstack([white, np.full(white.shape[:2], 255, dtype=np.uint8)])
         counts: list[int] = []

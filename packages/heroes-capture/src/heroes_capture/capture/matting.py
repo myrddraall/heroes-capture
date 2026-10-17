@@ -89,6 +89,26 @@ def matte(white: np.ndarray, black: np.ndarray, level: float, animated: bool = T
     return out
 
 
+def matte_with_alpha(white: np.ndarray, alpha: np.ndarray, level: float) -> np.ndarray:
+    """RGBA from one shot over the light sky and an alpha known from another pair of the same view
+    (a tile from Chaos's side: only its team colour differs from its shots from Order, which give
+    the see-through share): the shot is alpha·colour + (1 − alpha)·level, so the colour is the
+    shot less the sky's share, over alpha; where it is opaque (most pixels), the shot as it is."""
+    out = np.empty((*white.shape[:2], 4), dtype=np.uint8)
+    for r0 in range(0, white.shape[0], MATTE_BAND):
+        r1 = r0 + MATTE_BAND
+        w = white[r0:r1].astype(np.float32)
+        a = alpha[r0:r1].astype(np.float32) / 255.0
+        rgb = w
+        part = a < 1.0
+        a_part = a[part]
+        rgb[part] = np.where(a_part[:, None] > 1 / 255,
+                             np.clip((w[part] - (1.0 - a_part)[:, None] * level) / np.maximum(a_part, 1 / 255)[:, None], 0, 255), 0)
+        out[r0:r1, :, :3] = rgb.round()
+        out[r0:r1, :, 3] = alpha[r0:r1]
+    return out
+
+
 # An element's cut-out from its shots alone over the sky (cut_out), opacity out of 255. At or below
 # VEIL: transparent. At or above SOLID: opaque; soft edges, glass and glows lie between. Measured
 # over the white sky, whose bloom left a veil on the sky (99.9% of its pixels at 7 or less) and took

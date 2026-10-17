@@ -7,7 +7,7 @@ element in turn, straight above it in the middle of the screen:
    look as the map paused it once ready, its effects built up while the map ran and held still
    (the prepared map's models freeze their particles and ribbons with their animations; and each
    structure's animations are started over once the camera is over it and paused at its kind's
-   standing time, "el restart" and "el hold": the same moment every run, its particles lit, as
+   standing time, in one "el restart" with its seconds: the same moment every run, its particles lit, as
    they only run near the camera); hidden
    and shown again, a structure restarts its animations (a level 3 tower's into its birth) and
    gives off no particles until it plays. Then each faded in, shot alone over white and over
@@ -53,6 +53,7 @@ from heroes_capture.capture.shots import STILL_CAP, STILL_GAP, SWITCH_CAP, diffe
 from heroes_capture.categories.battleground.elements import (
     NEIGHBOUR_REACH,
     by_stand_kind,
+    death_setup,
     called,
     goes_with_a_fort,
     may_overlap,
@@ -237,6 +238,8 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         for u in copied:
             os.environ[COPY_TRYING] = u["type"]
             send(f"el copy {plan[u['id']]} make {u['x']:g} {u['y']:g} {u['copy']['x']:g} {u['copy']['y']:g}")
+            if setup := death_setup(u, report):  # (its model variation, which picks its remains)
+                send(f"el copy {plan[u['id']]} msg {setup}")
         os.environ.pop(COPY_TRYING, None)
         camps_born = early["at"] + CAMP_WAIT if early["camps"] else 0.0
         for n, group in enumerate(copy_groups or [[]], start=1):
@@ -295,9 +298,9 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         shown.update(structure=u, neighbour=None)
         # Its animations started over and paused at its kind's standing time (picked in the
         # calibration's review): every run catches it at the same moment, its effects lit.
-        send(f"el restart {u['x']:g} {u['y']:g} {by_stand_kind(manifest.get('standModels') or {}, u) or ''}".rstrip())
-        settle(stand_wait(u, manifest.get("standWaits")))
-        send(f"el hold {u['x']:g} {u['y']:g}")
+        # (The restart and the pause at its standing time in one command: one round trip.)
+        wait = stand_wait(u, manifest.get("standWaits"))
+        send(f"el restart {u['x']:g} {u['y']:g} {by_stand_kind(manifest.get('standModels') or {}, u) or '-'} {wait:g}", timeout=wait + 3.0)
         key = element_key("structure", u, "standing")
         if (camera := pair(key)) is not None:
             record("structure", u, "standing", tile, camera)
@@ -490,6 +493,9 @@ def capture_elements(session, manifest: dict, base: Path) -> None:
         for group in grouped(structures_now):
             look_over(*view_middle(group))
             fade_all([(u, 1) for u in group])
+            for u in group:  # (its model variation, which picks its remains: before it falls)
+                if setup := death_setup(u, report):
+                    send(f"el msg {u['x']:g} {u['y']:g} {setup}")
             # The slowest brought down first, so each has fallen for just its own fall_wait at the pause.
             started_at, longest, ends = time.time(), max(wait_of(u) for u in group), []
             for u in sorted(group, key=lambda u: -wait_of(u)):

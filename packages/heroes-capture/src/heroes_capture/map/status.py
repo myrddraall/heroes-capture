@@ -27,6 +27,7 @@ The cells run down a first column of ROWS cells and continue in a second column 
 right, below a fixed black cell at its top (which keeps the locator's white cell distinct).
 """
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -127,6 +128,14 @@ class StatusStrip:
                 return True
             self.origin, self.cell, self.cell_w, self.pitch_x, self.pitch_y = None, 0, 0, 0.0, 0.0
         return False
+
+    def extent(self) -> tuple[int, int] | None:
+        """How far the strip reaches from the frame's corner (width, height in pixels), once
+        located: both columns of cells."""
+        if self.origin is None:
+            return None
+        return (int(math.ceil(self.origin[0] + self.pitch_x + self.cell_w)) + 2,
+                int(math.ceil(self.origin[1] + (ROWS - 1) * self.pitch_y + self.cell)) + 2)
 
     def _bit(self, frame: np.ndarray, k: int) -> int | None:
         return self._cell(frame, k + 1 if k >= ROWS else k)  # the second column starts with a fixed black cell

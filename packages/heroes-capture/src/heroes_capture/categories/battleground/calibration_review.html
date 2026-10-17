@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>Calibration Review</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -156,7 +157,7 @@ function updateProgress() {
   if (!status.classList.contains("ok")) status.textContent = left ? `${answered.size} of ${questions.size} answered: ${left} still to pick.` : `All ${questions.size} answered.`;
   document.querySelectorAll("[data-question]").forEach(n => { n.classList.toggle("unanswered", !answered.has(n.dataset.question)); });
 }
-const teamName = owner => owner === "order" ? "Order" : owner === "chaos" ? "Chaos" : owner;
+const teamName = owner => owner === "order" ? "blue" : owner === "chaos" ? "red" : "";
 const secs = s => `${Number(s).toFixed(2)} s`;
 const shot = (name, caption) => name && img(name) ? el("figure", { class: "shot" },
   el("a", { href: img(name), target: "_blank", rel: "noopener", title: "Open at full size" }, el("img", { src: img(name), alt: caption, loading: "lazy" })),
@@ -185,7 +186,7 @@ function filmCard(f, chosen, after, facts, marks = {}, section = "") {
   const strip = img(f.film);
   const columns = Math.max(1, Math.min(f.columns || f.frames, f.frames));
   const rows = Math.ceil(f.frames / columns);
-  const big = el("div", { class: "big", role: "img", "aria-label": `${f.type} filmed` });
+  const big = el("div", { class: "big", role: "img", "aria-label": `${f.name || f.type} ${teamName(f.owner)} filmed` });
   const picked = el("div", { class: "picked" });
   const frames = el("div", { class: "frames" });
   const place = (node, k) => {
@@ -206,7 +207,7 @@ function filmCard(f, chosen, after, facts, marks = {}, section = "") {
     frames.append(b);
   }
   const card = el("article", { class: "card", "data-question": key },
-    el("div", { class: "card-head" }, el("h3", {}, document.createTextNode(`${f.type} `), el("span", { class: `team-${f.owner}`, text: teamName(f.owner) }), el("span", { class: "todo", text: "not picked yet" })), el("span", { class: "muted mono", text: facts })),
+    el("div", { class: "card-head" }, el("h3", {}, document.createTextNode(`${f.name || f.type} `), el("span", { class: `team-${f.owner}`, text: teamName(f.owner) }), el("span", { class: "todo", text: "not picked yet" })), el("span", { class: "muted mono", text: `${f.type} · ${facts}` })),
     el("div", { class: "film-body" }, el("div", {}, big, picked), frames));
   card.addEventListener("film-near", () => [big, ...frames.children].forEach(node => { node.style.backgroundImage = `url("${strip}")`; }));
   filmsShown.observe(card);

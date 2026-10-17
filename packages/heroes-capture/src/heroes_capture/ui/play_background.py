@@ -145,7 +145,7 @@ class Export:
             if not layer["flags"] & LAYER_COLOR:
                 return None
             b, g, r, a = self.value(layer["color"])
-            return {"color": [r, g, b, a], "brightMult": round(self.value(layer["brightMult"])[0], 5)}
+            return {"color": [r, g, b, a], "brightMult": round(self.value(layer["brightMult"])[0], 5), **self.fresnel(layer)}
         image = layer.text("image").replace("\\", "/").rsplit("/", 1)[-1]
         key = re.sub(r"[^a-z0-9]+", "-", image.lower().rsplit(".", 1)[0]).strip("-")
         self.textures[key] = image
@@ -160,19 +160,25 @@ class Export:
                "wrap": [bool(layer["flags"] & LAYER_WRAP_X), bool(layer["flags"] & LAYER_WRAP_Y)]}
         if layer["uvSource"] == 1:
             out["uvSet"] = 2  # the mesh's second texture coordinates
-        if layer["fresnelType"]:
-            # Stronger where the surface turns away from the camera: from `min` facing it to `max`
-            # edge-on, the view turned by `yaw` and `pitch` (radians); type 2 inverts it.
-            out["fresnel"] = {"type": layer["fresnelType"], "exponent": round(layer["fresnelExponent"], 5),
-                              "min": round(layer["fresnelMin"], 5),
-                              "max": round(layer["fresnelMin"] + layer["fresnelMaxOffset"], 5),
-                              "yaw": round(layer["fresnelYaw"], 5), "pitch": round(layer["fresnelPitch"], 5)}
+        out.update(self.fresnel(layer))
         track = self.tracks.get(layer["uvOffset"].id)
         if track and track.keys[0] != track.keys[-1]:
             # A steady scroll through the sequence's length, looping (the GLstand ones: 200 s).
             out["scroll"] = {"seconds": (track.frames[-1] - track.frames[0]) / 1000,
                              "by": [round(b - a, 5) for a, b in zip(track.keys[0], track.keys[-1])]}
         return out
+
+    @staticmethod
+    def fresnel(layer) -> dict:
+        """A layer's fresnel, if it has one (a colour-only layer may: the flyby worlds' rim glow).
+        Stronger where the surface turns away from the camera: from `min` facing it to `max`
+        edge-on, the view turned by `yaw` and `pitch` (radians); type 2 inverts it."""
+        if not layer["fresnelType"]:
+            return {}
+        return {"fresnel": {"type": layer["fresnelType"], "exponent": round(layer["fresnelExponent"], 5),
+                            "min": round(layer["fresnelMin"], 5),
+                            "max": round(layer["fresnelMin"] + layer["fresnelMaxOffset"], 5),
+                            "yaw": round(layer["fresnelYaw"], 5), "pitch": round(layer["fresnelPitch"], 5)}}
 
     def material(self, record) -> str:
         if (id(self.m3), record.at) in self.keys:
@@ -240,20 +246,33 @@ def particles(m3: M3, export: Export, record, emitter: str) -> dict:
             "vertexAlpha": bool(record["flags"] & PARTICLE_VERTEX_ALPHA)}
 
 
-def texture_files(storage: Storage, names: dict[str, str], alpha_read: set[str], out: Path) -> dict:
+def texture_image(storage: Storage, name: str) -> Image.Image:
+    """A texture from the game's data, as RGBA."""
+    hits = [n for n in storage.find(f"*\\assets\\textures\\{name.lower()}") if re.search(r"\\(base|enus)\.stormassets\\", n, re.I)]
+    if not hits:
+        raise SystemExit(f"the game's data has no texture {name}")
+    image = Image.open(io.BytesIO(storage.read(hits[0]) or b""))
+    image.load()
+    return image.convert("RGBA")
+
+
+def texture_files(storage: Storage, names: dict[str, str], alpha_read: set[str], out: Path,
+                  baked: dict[str, tuple[Image.Image, bool]] | None = None) -> dict:
     """The textures as WebP: lossless where a layer reads the texture's alpha (the stars' mask is in
-    it), else without the alpha, lossy at WEBP_QUALITY."""
+    it), else without the alpha, lossy at WEBP_QUALITY. `baked` images (key -> image, whether
+    lossless) are written beside them."""
     found = {}
-    for key, name in sorted(names.items()):
-        hits = [n for n in storage.find(f"*\\assets\\textures\\{name.lower()}") if re.search(r"\\(base|enus)\.stormassets\\", n, re.I)]
-        if not hits:
-            raise SystemExit(f"the game's data has no texture {name}")
-        image = Image.open(io.BytesIO(storage.read(hits[0]) or b""))
-        image.load()
-        image = image.convert("RGBA")
+    images = {}
+    for key, name in names.items():
+        image = texture_image(storage, name)
+        images[key] = (image, key in alpha_read and image.getchannel("A").getextrema()[0] < 255)
+    images.update(baked or {})
+    for key, (image, lossless) in sorted(images.items()):
         file = f"{key}.webp"
-        if key in alpha_read and image.getchannel("A").getextrema()[0] < 255:
+        if lossless and image.getchannel("A").getextrema()[0] < 255:
             image.save(out / file, "WEBP", lossless=True, method=6, exact=True)
+        elif lossless:
+            image.convert("RGB").save(out / file, "WEBP", lossless=True, method=6)
         else:
             image.convert("RGB").save(out / file, "WEBP", quality=WEBP_QUALITY, method=6)
         found[key] = {"file": file, "width": image.width, "height": image.height}

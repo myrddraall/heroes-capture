@@ -62,7 +62,7 @@ from heroes_capture.common.game_menus import ScriptBroken, game_menu_open, inter
 from heroes_capture.common.game_state import IN_MAP, LOADING, MAP_FAILED, MENU, NOT_RUNNING, PHASES, game_state
 from heroes_capture.common.game_window import game_region, hold_key
 from heroes_capture.common.jsonio import read_json, write_json, write_manifest
-from heroes_capture.common.runlog import detail, done, log, log_timings, set_log_file, stage, warn
+from heroes_capture.common.runlog import command_time, detail, done, log, log_timings, set_log_file, stage, warn
 from heroes_capture.common.screen import ScreenGrabber, disagree, looks_black, same_view, view_shift
 from heroes_capture.common.watch import start_watch
 from heroes_capture.map.match import launch_map, quit_match, send_chat, send_command, wait_for_map_load
@@ -135,12 +135,34 @@ class Session:
         status = self.status()
         return status.camera if status else dict(default or {})
 
+    def strip_box(self) -> tuple[int, int, int, int] | None:
+        """The screen's top-left corner the strip is in (x0, y0, x1, y1 from the region's corner),
+        once located: what polling grabs (a sliver of the screen, not a whole frame)."""
+        extent = self.strip.extent()
+        if extent is None:
+            return None
+        width, height = extent
+        return 0, 0, min(width, self.screen.region["width"]), min(height, self.screen.region["height"])
+
     def poll(self, check, timeout: float = 1.0) -> tuple[Status, np.ndarray] | None:
         """A frame whose strip passes `check` (a Status -> bool), grabbed within `timeout`: its
         status and the raw frame; None when none did (and then, if a menu is open over the map, the
-        step stops: read)."""
+        step stops: read). Once the strip is located, it is watched in its own corner of the screen
+        (strip_box), and a whole frame grabbed once that passes (the frame the caller gets), or to
+        look for a menu while the strip can't be read."""
         deadline = time.time() + timeout
+        box = self.strip_box()
         while time.time() < deadline:
+            if box is not None:
+                require_focus()
+                corner = self.screen.grab(box)
+                require_focus()
+                seen = self.strip.read(corner)
+                if seen is None or not check(seen):
+                    if seen is None and time.time() >= self._menu_checked:
+                        self.read(self.raw_grab())  # (a menu over the map: GamePaused)
+                    time.sleep(0.02)
+                    continue
             raw = self.raw_grab()
             status = self.read(raw)
             if status is not None and check(status):
@@ -160,7 +182,16 @@ class Session:
         strip polled until it shows that number: the command has been carried out and the frame
         rendered. Returns the status and that raw frame; None when the map never answered (sent
         `sends` times, `timeout` seconds each). Before each retry, the chat's "focus" gives the
-        box the keyboard back, in case it lost it (see map/script.galaxy's command box)."""
+        box the keyboard back, in case it lost it (see map/script.galaxy's command box). Its round
+        trip is counted for its stage's line in the diagnostic log (runlog.command_time)."""
+        words = command.split()
+        verb = " ".join(words[:2]) if words[:1] == ["el"] else (words[0] if words else "")
+        started = time.time()
+        answer = self._send(command, timeout, sends)
+        command_time(verb, time.time() - started, answer is not None)
+        return answer
+
+    def _send(self, command: str, timeout: float, sends: int) -> tuple[Status, np.ndarray] | None:
         for attempt in range(sends):
             self.read(self.raw_grab())  # a menu opened since the last command: wait, rather than type into it
             if attempt:
@@ -499,7 +530,9 @@ def shoot_chaos(session: Session, tile: dict, settle_time: float, manifest: dict
     frame = whole_frame(session, session.blank(raw), reference)[0] if raw is not None else None
     if frame is None or team_boxes(manifest, status.camera, frame.shape) is None:
         return None
-    return frame, shot_over_black(session, frame) if matting else None
+    # (No shot over black: the stitch takes the see-through share from the tile's pair from Order,
+    # stitch.Shots.load.)
+    return frame, None
 
 
 def shoot(session: Session, tile: dict, settle_time: float, manifest: dict):
@@ -692,7 +725,7 @@ def capture_team_side(session: Session, manifest: dict, settle_time: float, out:
         for tile in todo:
             log(f"tile {tile['index'] + 1} of {len(manifest['tiles'])}")
             shots = step(lambda: shoot_chaos(session, tile, settle_time, manifest), f"tile {tile['index'] + 1} as red")
-            if shots is not None and shots[0] is not None and (shots[1] is not None or not matting):
+            if shots is not None and shots[0] is not None:
                 saver.submit(save_frame, tile_stem(out, tile["index"], chaos=True), shots[0])
                 if shots[1] is not None:
                     saver.submit(save_frame, tile_stem(out, tile["index"], black=True, chaos=True), shots[1])

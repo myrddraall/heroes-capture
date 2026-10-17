@@ -10,6 +10,8 @@ from heroes_capture.common import ui
 
 _path: Path | None = None
 _timings: list[tuple[str, float]] = []
+# The map's commands answered in each open stage, by verb: [count, seconds, unanswered] (command_time).
+_commands: list[dict[str, list]] = []
 # The stage running and the last message logged (watch.py names its frames by them).
 current = {"stage": "", "message": ""}
 
@@ -59,17 +61,42 @@ def paused(text: str, after: str | None = None):
         yield
 
 
+def command_time(verb: str, seconds: float, answered: bool) -> None:
+    """One of the map's commands sent and answered (or not) in `seconds`, for its stage's line in
+    the diagnostic log (stage)."""
+    if _commands:
+        found = _commands[-1].setdefault(verb, [0, 0.0, 0])
+        found[0] += 1
+        found[1] += seconds
+        found[2] += 0 if answered else 1
+
+
 @contextmanager
 def stage(name: str, total: int | None = None, done: int = 0):
     """A stage of the run: a folder of the tree (ui.folder: yields it, to count what it does), timed
-    for log_timings."""
+    for log_timings; the map's commands sent in it, by verb, how many and their average round
+    trip, a detail line as it closes (counted in the stages it is in too)."""
     started = time.time()
     outer = current["stage"]
     current["stage"] = name
+    _commands.append({})
     try:
         with ui.folder(name, total, done) as node:
-            yield node
+            try:
+                yield node
+            finally:
+                commands = _commands[-1]
+                if commands:
+                    count, seconds = sum(c[0] for c in commands.values()), sum(c[1] for c in commands.values())
+                    detail(f"commands: {count} in {seconds:.1f} s; " + ", ".join(
+                        f"{verb} {n}× {s / n:.2f} s" + (f" ({missed} unanswered)" if missed else "")
+                        for verb, (n, s, missed) in sorted(commands.items(), key=lambda kv: -kv[1][1])))
     finally:
+        commands = _commands.pop()
+        if _commands:
+            for verb, (n, s, missed) in commands.items():
+                found = _commands[-1].setdefault(verb, [0, 0.0, 0])
+                found[0], found[1], found[2] = found[0] + n, found[1] + s, found[2] + missed
         current["stage"] = outer
         _timings.append((name, time.time() - started))
 

@@ -66,17 +66,22 @@ class ScreenGrabber:
     def method(self) -> str:
         return "desktop duplication" if self.camera is not None else "mss"
 
-    def grab(self) -> np.ndarray:
+    def grab(self, part: tuple[int, int, int, int] | None = None) -> np.ndarray:
+        """The region as it is on screen; `part` (x0, y0, x1, y1 from its corner) only that much
+        of it (the status strip's corner, polled many times a second)."""
+        x0, y0, x1, y1 = part or (0, 0, self.region["width"], self.region["height"])
         if self.camera is not None:
+            box = (self.box[0] + x0, self.box[1] + y0, self.box[0] + x1, self.box[1] + y1)
             # A copy of its own (it may be saved in the background while the next is taken), and
             # the last frame again when nothing has changed since; None only before the first.
             for _ in range(25):
-                frame = self.camera.grab(region=self.box, copy=True, new_frame_only=False)
+                frame = self.camera.grab(region=box, copy=True, new_frame_only=False)
                 if frame is not None:
                     return frame
                 time.sleep(0.02)
-            return np.zeros((self.region["height"], self.region["width"], 3), np.uint8)
-        return np.asarray(self.sct.grab(self.region), dtype=np.uint8)[:, :, 2::-1]  # BGRA -> RGB
+            return np.zeros((y1 - y0, x1 - x0, 3), np.uint8)
+        area = {"left": self.region["left"] + x0, "top": self.region["top"] + y0, "width": x1 - x0, "height": y1 - y0}
+        return np.asarray(self.sct.grab(area), dtype=np.uint8)[:, :, 2::-1]  # BGRA -> RGB
 
     def __enter__(self) -> "ScreenGrabber":
         return self

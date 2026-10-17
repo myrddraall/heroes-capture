@@ -215,7 +215,7 @@ class Catalog:
             names = [send.split()[1] for terms, send in self.events(actor_id)
                      if "UnitDeathCustomize" in terms and for_player(terms, player) is True and send.startswith("DeathCustomize ")]
             for entry in self._chain(self.actors, actor_id) if names else ():
-                for el in entry["elements"]:
+                for el in reversed(entry["elements"]):  # (a later catalog's definition of a name wins: the map's over the base game's)
                     link = el.get("ModelLink")
                     if el.tag == "DeathCustoms" and el.get("Name") in names and link and link.replace("##unitName##", unit) in self.models:
                         return [link.replace("##unitName##", unit)]
@@ -231,6 +231,14 @@ class Catalog:
                 elif el.tag == "DeathCustoms" and link != "Invisible" and link not in customs:
                     customs.append(link)
         return [m for m in dict.fromkeys(([normal] if normal else []) + customs) if m in self.models]
+
+    def death_by_variation(self, actor_id: str) -> bool:
+        """Whether an actor's structure leaves its remains by its model variation ("UnitDeathCustomize;
+        ...; ModelVariation <n>" "DeathCustomize ...": Battlefield of Eternity's gates, whose normal
+        death is empty): a copy made of it leaves none unless its variation is set (ModelSwap's
+        second word)."""
+        return any("UnitDeathCustomize" in terms and "ModelVariation" in terms and send.startswith("DeathCustomize ")
+                   for terms, send in self.events(actor_id))
 
     def finished_model(self, actor_id: str, player: int | None = None) -> str | None:
         """The model an actor shows once built: the one it swaps to when its build animation ends
@@ -417,7 +425,8 @@ def tree_models(tree: list[dict]) -> list[str]:
 def report(storage, map_mods: list[str], own_texts: list[str], unit_types: list[str], doodad_types: list[str], own_strings: str = "") -> dict:
     """The calibration's data report: each structure type's actor tree, finished model (the
     standing timing restarts it) and death models, and each team's where the actor picks them by
-    player ("teams": {type: {team: {stand, deaths}}}), its name as the game shows it (unit_names;
+    player ("teams": {type: {team: {stand, deaths}}}), the types whose remains are picked by their
+    model variation ("variationDeaths": Catalog.death_by_variation), its name as the game shows it (unit_names;
     `own_strings`: the map's GameStrings), and the moving parts and animations of every model those
     show and of every doodad type placed (a doodad's type is its model)."""
     catalog = Catalog(catalog_texts(storage, map_mods) + own_texts)
@@ -425,11 +434,13 @@ def report(storage, map_mods: list[str], own_texts: list[str], unit_types: list[
     # Each type's finished model: its unit actor's (the actor named for the unit, else the first its
     # birth creates).
     # Each team's, where the actor picks them by player (Battlefield of Eternity's Heaven and Hell).
-    finished, deaths, teams = {}, {}, {}
+    finished, deaths, teams, by_variation = {}, {}, {}, []
     for t in unit_types:
         actor = t if t in catalog.actors else next(iter(catalog.born.get(t, [])), None)
         if not actor:
             continue
+        if catalog.death_by_variation(actor):
+            by_variation.append(t)
         if (model := catalog.finished_model(actor)) and not model.startswith("##"):
             finished[t] = model
         deaths[t] = catalog.death_models(actor)
@@ -441,4 +452,5 @@ def report(storage, map_mods: list[str], own_texts: list[str], unit_types: list[
     models = model_parts(storage, catalog, list(dict.fromkeys([m for t in trees.values() for m in tree_models(t)] + list(finished.values())
                                                               + [m for d in deaths.values() for m in d] + team_models + doodad_types)))
     return {"structures": trees, "names": unit_names(storage, map_mods, own_strings, unit_types), "standModels": finished,
-            "deathModels": deaths, "teams": teams, "models": models, "doodads": {t: models[t] for t in doodad_types}}
+            "deathModels": deaths, "teams": teams, "variationDeaths": by_variation, "models": models,
+            "doodads": {t: models[t] for t in doodad_types}}

@@ -101,6 +101,7 @@ def survey(manifest: dict) -> dict:
         "copies": {"structures": len(candidates), "spots": sum(len(v) for v in candidates.values()),
                    "excluded": sorted({u.get("name") or u["type"] for u in structures if u["type"] in COPY_EXCLUDED}),
                    "withFort": sum(goes_with_a_fort(u, structures) for u in structures)},
+        "byVariation": sorted({u.get("name") or u["type"] for u in structures if u["type"] in (report.get("variationDeaths") or [])}),
         "teamColouredDoodads": len(manifest.get("teamColoured") or []),
         "movingDoodads": moving,
         "lone": [{"name": u.get("name") or u["type"], "x": u["x"], "y": u["y"]} for u in lone],
@@ -131,6 +132,8 @@ def plan(found: dict, structures: list[dict], candidates: dict) -> dict:
             f"team colour standing: {', '.join(known_side)}" if known_side else None,
             "no water" if not found["waterCells"] else f"water: {found['waterCells']} cells with its shore, left out of the team colour",
             f"{found['overlaps']} pairs of structures can overlap on screen (their models' reach)",
+            f"remains picked by the model's variation: {', '.join(found['byVariation'])} (their copies are set to variation 0 first)"
+            if found["byVariation"] else None,
             "fall lengths: " + ", ".join(f"{k['name']} {'/'.join(f'{s:g}' for s in k['fall'])} s" for k in found["kinds"] if k["fall"])
             if any(k["fall"] for k in found["kinds"]) else None,
         ],

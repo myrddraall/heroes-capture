@@ -51,7 +51,7 @@ from PIL import Image
 from scipy import ndimage
 
 from heroes_capture.capture.shots import still_frame, tile_command
-from heroes_capture.categories.battleground.elements import called, rubble_radius, stand_kind, stand_model, standing_team_colour
+from heroes_capture.categories.battleground.elements import called, death_setup, rubble_radius, stand_kind, stand_model, standing_team_colour
 from heroes_capture.common import ui
 from heroes_capture.common.game_control import Recoverable, settle, step
 from heroes_capture.common.geometry import circle_box, screen_point
@@ -819,6 +819,8 @@ def calibrate(session, manifest: dict, base: Path, stages: list[str] = ("motion"
         kind and team filmed). The copy is gone after (its rubble cleared)."""
         x, y = spot
         send(f"el copy 0 make {u['x']:g} {u['y']:g} {x:g} {y:g}")
+        if setup := death_setup(u, found.get("report") or {}):  # (its model variation, which picks its remains)
+            send(f"el copy 0 msg {setup}")
         state["copy"] = True
         send(f"el at {x:.2f} {y:.2f}")
         settle(COPY_SETTLE)
@@ -882,7 +884,7 @@ def calibrate(session, manifest: dict, base: Path, stages: list[str] = ("motion"
         state["shown"] = u
         frame, centre, box = look(u, u["radius"], f"structure-{key}")
         if frame is None:
-            warn(f"  {u['type']} {key}: no frame")
+            warn(f"{called(u)}: no picture")
             return
         own = appearance(frame, centre, u["radius"] * ppc)
         # What moves on it by itself while paused (left out of the side switch's comparison).
@@ -922,7 +924,7 @@ def calibrate(session, manifest: dict, base: Path, stages: list[str] = ("motion"
                 used.append((x, y, rubble))
                 return
             failed.append((x, y))
-        warn(f"  {u['type']} {key}: no spot passed ({tried} tried); it falls itself in the render")
+        warn(f"{called(u)}: no copy spot passed ({tried} tried); brought down in place in the render")
 
     def rubble_at_home(u: dict) -> None:
         """A structure brought down on its own cell, paused at its kind's fall wait, its rubble shot
@@ -932,6 +934,8 @@ def calibrate(session, manifest: dict, base: Path, stages: list[str] = ("motion"
         wait = home_wait(u, falls)
         send(f"el at {u['x']:.2f} {u['y']:.2f} {u['x']:g} {u['y']:g} 1")
         camera = session.camera({"x": u["x"], "y": u["y"]})
+        if setup := death_setup(u, found.get("report") or {}):  # (its model variation, which picks its remains)
+            send(f"el msg {u['x']:g} {u['y']:g} {setup}")
         send(f"el kill {u['x']:g} {u['y']:g} {wait:g}", timeout=wait + 6.0)
         hidden = session.grab(dark_ok=True)
         send("el env on", timeout=10.0)

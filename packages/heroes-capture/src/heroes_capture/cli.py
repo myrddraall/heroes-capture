@@ -601,13 +601,26 @@ def render_some(map_spec: str, name: str, options: list[str], output_dir: Path, 
         manifest_path = prepare.main([map_spec, *options], specifics_of_map)
     planned = read_json(manifest_path)
     plan_render(structures, capturing, only, planned)
-    write_manifest(manifest_path, {**planned, "renderOptions": options, "tool": tool_fingerprint()})
+    # The kept run's tiles past the grid's edge (its capture added them where the map ran on past
+    # the edge; their shots are kept) under a key of their own, which the preparing and the grid's
+    # re-planning leave alone: a run that stops still has them for the next to carry on.
+    past = [t for t in kept["tiles"] if t.get("edge")] or kept.get("keptEdgeTiles") or []
+    write_manifest(manifest_path, {**planned, "renderOptions": options, "tool": tool_fingerprint(),
+                                   **({"keptEdgeTiles": past} if past and "tiles" not in only else {})})
     with ui.step(capturing):
         run_capture([str(manifest_path), "--parts", ",".join(job.capture_parts(only)), "--reuse", *capture_options])
     if "tiles" not in only:
-        now = [(t["index"], t.get("x"), t.get("y")) for t in read_json(manifest_path)["tiles"]]
-        if now != [(t["index"], t.get("x"), t.get("y")) for t in kept["tiles"]]:
+        # The grid as planned now against the kept run's (its tiles past the edge left out); the
+        # same, the kept tiles past the edge go back in this run's tiles.
+        current = read_json(manifest_path)
+
+        def grid(tiles: list[dict]) -> list[tuple]:
+            return [(t["index"], t.get("x"), t.get("y")) for t in tiles if not t.get("edge")]
+
+        if grid(current["tiles"]) != grid(kept["tiles"]):
             raise SystemExit(f"{name}'s grid came out differently this time: the kept tiles don't fit it; run tiles too")
+        if past:
+            write_manifest(manifest_path, {**current, "tiles": [t for t in current["tiles"] if not t.get("edge")] + past})
     with ui.step("Stitching and packing"):
         stitch.main([str(manifest_path), "--output-dir", str(output_dir)], specifics_of)
     write_manifest(manifest_path, {**read_json(manifest_path), "finished": True})

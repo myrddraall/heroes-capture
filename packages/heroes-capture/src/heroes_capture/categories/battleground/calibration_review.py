@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from heroes_capture.categories.battleground.elements import FALL_WAITS, LIGHT_WAIT, STRUCTURE_RADIUS, rubble_radius
+from heroes_capture.categories.battleground.elements import FALL_WAITS, GENERIC_DEATH, LIGHT_WAIT, STRUCTURE_RADIUS, death_models, rubble_radius
 
 # A passing copy spot is settled without asking when it passed by this much: drawn over at least
 # CLEAR_DRAWN of its structure's pixels, its brightness within CLEAR_BRIGHTNESS, its colour cast
@@ -67,11 +67,19 @@ def review_data(calibration: dict) -> dict:
         unit, owner = kind.split("|")
         return next((w for prefix, suffix, o, w in FALL_WAITS if unit.startswith(prefix) and unit.endswith(suffix) and o == owner), None)
 
+    names = ((calibration.get("report") or {}).get("names") or {})
+
+    def split(kind: str) -> tuple[str, str]:
+        """A film's type and team (a standing film is by type, or "<type>|<team>" where the teams'
+        looks differ: elements.stand_kind)."""
+        unit, _, owner = kind.partition("|")
+        return unit, owner
+
     # (A film without columns is an earlier one: its frames in one row.)
-    standing = [{"kind": kind, "type": kind, "owner": "", "film": f["film"], "frames": f["frames"], "columns": f.get("columns", f["frames"]), "seconds": f.get("seconds"),
+    standing = [{"kind": kind, "type": split(kind)[0], "owner": split(kind)[1], "name": names.get(split(kind)[0], split(kind)[0]), "film": f["film"], "frames": f["frames"], "columns": f.get("columns", f["frames"]), "seconds": f.get("seconds"),
                  "step": f["step"], "preset": max(0, min(f["frames"] - 1, round(LIGHT_WAIT / f["step"])))}
                 for kind, f in sorted((calibration.get("standing") or {}).items()) if f.get("film")]
-    falls = [{"kind": kind, "type": kind.split("|")[0], "owner": kind.split("|")[1], "film": f["film"], "frames": f["frames"], "columns": f.get("columns", f["frames"]),
+    falls = [{"kind": kind, "type": split(kind)[0], "owner": split(kind)[1], "name": names.get(split(kind)[0], split(kind)[0]), "film": f["film"], "frames": f["frames"], "columns": f.get("columns", f["frames"]),
               "step": f["step"], "settle": f.get("settle"), "table": table_wait(kind), "preset": preset_frame(f, table_wait(kind))}
              for kind, f in sorted((calibration.get("falls") or {}).items()) if f.get("film")]
     spots, settled_spots = [], 0
@@ -174,7 +182,8 @@ def debris_reach(picture: np.ndarray, centre: tuple[float, float] | None) -> tup
 def rubble_radii(run: Path, calibration: dict, answers: dict) -> tuple[dict[str, float], list[str]]:
     """Each kind's rubble circle (cells), measured: its debris at the moment picked in the review,
     in its fall film; a kind without one (a keep, a fort: never copied), in its rubble shot at home
-    (at its wait); the furthest for its structure type, RUBBLE_ROOM times. And the kinds whose
+    (at its wait); the furthest for its structure type (for every type that dies only the game's
+    generic death: the cannon towers' levels alike), RUBBLE_ROOM times. And the kinds whose
     debris reached the edge of what was shot (their circle may be short: an earlier calibration
     shot only the old circle; filmed wider now)."""
     ppc = calibration.get("pxPerCell") or PX_PER_CELL
@@ -210,10 +219,20 @@ def rubble_radii(run: Path, calibration: dict, answers: dict) -> tuple[dict[str,
         found, limit = debris_reach(np.asarray(Image.open(source).convert("RGB")), h.get("centre"))
         if found:
             keep(kind, found, limit, h.get("cellsPerPixel") or 1 / ppc)
+    report = calibration.get("report") or {}
+
+    def group(kind: str) -> str:
+        """Kinds measured together: a structure type; all the types whose remains come only from the
+        game's generic death (no death model of their own: every cannon tower, whatever its level,
+        dies into the same explosions), one group."""
+        unit, _, owner = kind.partition("|")
+        own = [m for m in death_models({"type": unit, "owner": owner}, report) if m != GENERIC_DEATH]
+        return GENERIC_DEATH if report and not own else unit
+
     furthest: dict[str, float] = {}
     for kind, cells in reach.items():
-        furthest[kind.split("|")[0]] = max(furthest.get(kind.split("|")[0], 0.0), cells)
-    return {kind: round(furthest[kind.split("|")[0]] * RUBBLE_ROOM, 2) for kind in reach}, sorted(edged)
+        furthest[group(kind)] = max(furthest.get(group(kind), 0.0), cells)
+    return {kind: round(furthest[group(kind)] * RUBBLE_ROOM, 2) for kind in reach}, sorted(edged)
 
 
 def empty_kinds(run: Path, review: dict) -> tuple[list[str], list[str]]:

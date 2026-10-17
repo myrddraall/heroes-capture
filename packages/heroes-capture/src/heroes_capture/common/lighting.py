@@ -75,13 +75,17 @@ def parse_directional(xml: str) -> list[dict]:
     direction}: the colour times its multiplier is what it lights with, along `direction` (the way
     the light travels: the Play screen tutorial's key lights all travel the way its camera looks,
     its back lights the opposite way). A colour channel left out is 1 (white; every one of the
-    game's palettes reads naturally so, and none does as 0), a multiplier left out 1."""
+    game's palettes reads naturally so, and none does as 0), a multiplier left out 1. A light with
+    no colour at all gives none: the tutorial flyby's second light has a key with a direction and
+    a specular multiplier only, and the tutorial's own shot of Korhal under it shows no key light
+    (it is lit flat and blue, by the ambient and the back light), where a white key would light
+    its top brightly."""
     lights = []
     for attrs, body in _entries(xml, "DirectionalLight"):
         color = re.search(r"<Color\b[^>]*/?>", body)
         direction = re.search(r"<Direction\b[^>]*/?>", body)
         lights.append({"index": attrs.get("index", ""),
-                       "color": _xyz(color.group(0), 1.0) if color else [1.0, 1.0, 1.0],
+                       "color": _xyz(color.group(0), 1.0) if color else [0.0, 0.0, 0.0],
                        "multiplier": float(attrs.get("ColorMultiplier", "1")),
                        "direction": _xyz(direction.group(0), 0.0) if direction else [0.0, 0.0, 0.0]})
     return lights
@@ -109,7 +113,7 @@ def parse_lights(xml: str, into: dict | None = None) -> dict:
         directional = parse_directional(tod.group(1) if tod else body)
         if directional:
             light["directional"] = directional
-        for param, field in (("HDRExposure", "hdrExposure"), ("HDRWhitePoint", "hdrWhitePoint")):
+        for param, field in (("HDRExposure", "hdrExposure"), ("HDRWhitePoint", "hdrWhitePoint"), ("HDRBloomThreshold", "hdrBloomThreshold")):
             value = re.search(rf'<Param index="{param}" value="([^"]+)"', tod.group(1) if tod else body)
             if value:
                 light[field] = float(value.group(1))
@@ -117,11 +121,15 @@ def parse_lights(xml: str, into: dict | None = None) -> dict:
 
 
 def light_hdr(table: dict, light_id: str) -> dict | None:
-    """A light's HDR tone mapping, {exposure, whitePoint}, from it or its parents; None where the
-    data doesn't set both."""
+    """A light's HDR tone mapping, {exposure, whitePoint, bloomThreshold?} (the brightness its
+    bloom starts from, where set), from it or its parents; None where the data doesn't set both
+    the exposure and the white point."""
     exposure = _inherited(table, light_id, "hdrExposure")
     white = _inherited(table, light_id, "hdrWhitePoint")
-    return None if exposure is None or white is None else {"exposure": exposure, "whitePoint": white}
+    if exposure is None or white is None:
+        return None
+    bloom = _inherited(table, light_id, "hdrBloomThreshold")
+    return {"exposure": exposure, "whitePoint": white, **({"bloomThreshold": bloom} if bloom is not None else {})}
 
 
 def _inherited(table: dict, id_: str, field: str, seen: set | None = None):

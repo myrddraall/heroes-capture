@@ -497,6 +497,14 @@ bool hrsCap_gt_Element_Func (bool testConds, bool runActions) {
         hrsCap_statusPlayer = hrsCap_cmdPlayer;
         hrsCap_WaitCameraStill();
     }
+    else if ((lv_verb == "msg")) {
+        // "el msg <x> <y> <message>": an actor message ("~" for its spaces) to the structure there
+        // (its model variation set before it falls: the variation picks a gate's or a wall's remains).
+        lv_unit = hrsCap_StructureAt(StringToFixed(StringWord(hrsCap_cmd, 3)), StringToFixed(StringWord(hrsCap_cmd, 4)));
+        if ((lv_unit != null)) {
+            ActorScopeSend(ActorScopeFromUnit(lv_unit), StringReplaceWord(StringWord(hrsCap_cmd, 5), "~", " ", c_stringReplaceAll, c_stringCase));
+        }
+    }
     else if ((lv_verb == "pausemsg")) {
         // The message with "~" for its spaces (the command's words are split at spaces).
         hrsCap_PauseSend(StringReplaceWord(StringWord(hrsCap_cmd, 3), "~", " ", c_stringReplaceAll, c_stringCase));
@@ -529,15 +537,21 @@ bool hrsCap_gt_Element_Func (bool testConds, bool runActions) {
         ActorWorldParticleFXDestroy();
     }
     else if ((lv_verb == "restart")) {
-        // One structure swapped to its finished model (the model it shows once built: swapping to a
-        // model starts its animations from the start, and Blizzard's structure template restarts
-        // its global loops on every swap) and let run: the standing timing's fixed start.
+        // "el restart <x> <y> [<model>|-] [<seconds>]": one structure swapped to its finished model
+        // (the model it shows once built: swapping to a model starts its animations from the start,
+        // and Blizzard's structure template restarts its global loops on every swap; "-" or none:
+        // no swap) and let run: the standing timing's fixed start. With seconds, paused again that
+        // many real seconds later, before the answer: the restart and the pause in one command.
         lv_unit = hrsCap_StructureAt(StringToFixed(StringWord(hrsCap_cmd, 3)), StringToFixed(StringWord(hrsCap_cmd, 4)));
         if ((lv_unit != null)) {
-            if ((StringWord(hrsCap_cmd, 5) != "")) {
+            if ((StringWord(hrsCap_cmd, 5) != "") && (StringWord(hrsCap_cmd, 5) != "-")) {
                 ActorScopeSend(ActorScopeFromUnit(lv_unit), ("ModelSwap " + StringWord(hrsCap_cmd, 5)));
             }
             ActorScopeSend(ActorScopeFromUnit(lv_unit), "AnimSetPausedAll 0");
+            if ((StringWord(hrsCap_cmd, 6) != "")) {
+                Wait(StringToFixed(StringWord(hrsCap_cmd, 6)), c_timeReal);
+                ActorScopeSend(ActorScopeFromUnit(lv_unit), "AnimSetPausedAll");
+            }
         }
     }
     else if ((lv_verb == "hold")) {

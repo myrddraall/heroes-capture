@@ -1,10 +1,11 @@
 # What run.cmd runs: a job (heroes_capture/job.py describes it). Kept current with whatever the next
 # test or render needs. run.cmd --resume carries on a job that stopped.
 #
-# Now: Battlefield of Eternity, step 2 of a new map: its whole calibration (step 1, `map survey`,
-# was read from the game's data). The data answers whether each structure draws team colour for
-# each team (Heaven and Hell look different), so no side switch is timed; each team's look is
-# filmed standing on its own. The review form follows from what it shoots.
+# Now: Battlefield of Eternity's rubble again over its kept render, to try gates and walls set to
+# model variation 0 before they fall where they stand too ("el msg" as each wave is faded in): the
+# last run's copies left rubble, but the gates brought down in place, still in the variations the
+# map placed them in (2, 3), fell to nothing. Expected: no "empty" gate or wall rubble at all.
 runs:
   - map: Battlefield of Eternity
-    calibrate: all
+    render: elements
+    only: [rubble]

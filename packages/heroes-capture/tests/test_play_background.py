@@ -75,7 +75,7 @@ def test_a_light_s_ambient_and_directional_lights_with_what_a_channel_left_out_m
     assert light["ambient"] == [0, 0, 0]  # a channel left out of the ambient is 0
     key, back = light["directional"]
     assert key == {"index": "Key", "color": [1.0, 0.62, 0.44], "multiplier": 0.676, "direction": [-0.34, 0.16, 0.93]}
-    assert back["color"] == [1.0, 1.0, 1.0]  # no colour: white
+    assert back["color"] == [0.0, 0.0, 0.0]  # no colour at all: no light (measured on the flyby's Korhal)
 
 
 def test_tracks_between_their_keys_and_bone_matrices():
@@ -92,7 +92,7 @@ def test_the_play_screen_s_sky_from_the_game_s_data(storage, tmp_path: Path):
     scene = play_background.export(storage, tmp_path)
     assert scene["source"]["animation"] == "Stand"
     assert scene["camera"]["eye"] == pytest.approx([0, -41.2, 5.6], abs=0.05)
-    assert scene["tone"] == {"exposure": 1.0, "whitePoint": 1.85}
+    assert scene["tone"] == {"exposure": 1.0, "whitePoint": 1.85, "bloomThreshold": 0.85}
     assert set(scene["meshes"]) == {
         "Sky_Cylinder_Stars", "Cylinder001", "TwinkleStarsEmitter",
         # the planets, each with its atmosphere (a billboard of the bone's own)

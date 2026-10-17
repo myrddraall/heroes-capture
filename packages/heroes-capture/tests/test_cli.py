@@ -652,6 +652,19 @@ def test_a_job_s_run_of_some_parts_builds_on_the_kept_run(monkeypatch, tmp_path)
     assert [c[0] for c in calls] == ["prepare", "capture", "stitch"]
     assert calls[1] == ("capture", [manifest, "--parts", "tiles", "--reuse"])
     assert "reshooting tiles (10); the rest kept" in result.output
+    # A tile past the grid's edge the kept run's capture added: the grid still fits, and it stays.
+    manifest_data = json.loads(Path(manifest).read_text())
+    past = {"index": len(manifest_data["tiles"]), "row": -1, "col": 0, "x": 0, "y": 99, "edge": True}
+    Path(manifest).write_text(json.dumps({**manifest_data, "tiles": manifest_data["tiles"] + [past]}))
+    result = runner.invoke(cli.app, ["job", str(write_job(tmp_path, "runs:\n  - map: Dragon Shire\n    render: keep\n    only: [skies]\n"))])
+    assert result.exit_code == 0, result.output
+    assert json.loads(Path(manifest).read_text())["tiles"][-1] == past
+    # A run of some parts that stopped part way left them under a key of their own: the next has them.
+    manifest_data = json.loads(Path(manifest).read_text())
+    Path(manifest).write_text(json.dumps({**manifest_data, "tiles": manifest_data["tiles"][:-1], "keptEdgeTiles": [past]}))
+    result = runner.invoke(cli.app, ["job", str(write_job(tmp_path, "runs:\n  - map: Dragon Shire\n    render: keep\n    only: [skies]\n"))])
+    assert result.exit_code == 0, result.output
+    assert json.loads(Path(manifest).read_text())["tiles"][-1] == past
     # Only skies: the kept tiles must fit the grid as planned now.
     manifest_data = json.loads(Path(manifest).read_text())
     manifest_data["tiles"][0]["x"] = 99

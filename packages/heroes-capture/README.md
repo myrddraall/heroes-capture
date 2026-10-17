@@ -336,13 +336,31 @@ puts each and how big); and, from the tutorial's flyby (`tutorial_cutscene_plane
 doodad `Storm_Doodad_Nexus_PlanetsFlyby`), three worlds (Azeroth, Korhal, Sanctuary, with their own
 meshes and layered materials, its space station left out as too heavy) and nine painted spheres
 (their textures on the Play screen's hemisphere, which is smooth where theirs are not). Each is
-taken as the flyby shows it best (largest while wholly in its camera's view: the end of the
-approach to it) under the light the cutscene has on then, which it switches as the camera passes
-each world, so each is seen under the light of its approach; the light goes in the file (ambient,
-the directional lights' directions in the planet's space and colours times their multipliers, the
-HDR exposure) for the app to light it the same way. Each flyby planet also wears the Play screen's
-hex grid and atmosphere, which the game never puts on them, so they belong in the Play screen's
-sky. A model whose entry gives no file is found through its parents' (`Doodad`:
+taken as the flyby shows it best (a world at the moment of the tutorial's own big shot of it,
+read off a recording; a painted sphere when it is largest while well within the camera's view)
+under the light the cutscene has on then, which it switches as the camera passes each world, so
+each is seen under the light of its approach; the light goes in the file (ambient, the
+directional lights the way they travel in the planet's space and their colours times their
+multipliers, the HDR exposure) for the app to light it the same way. A light's direction is the
+way it travels in the world (z up), taken into the planet's frame as the flyby's camera sees it
+then, its bank included, which is what matches the tutorial's shots of each world's approach (lit
+sides, rims). A flyby world wears only its own atmosphere, as the game shows it. A planet's file
+describes its body as parts, not meshes: each of the game's meshes is read for what it is (a
+sphere, seen from outside or, for the inside-out atmosphere shells, from inside; a flat ring), with
+the rule that maps its surface to its texture coordinates fitted to the mesh's own (a uv sphere
+about a pole, linear in the point, or round the ring; a mesh that fits neither gets a plain uv
+sphere, and the export says so), its materials and its vertex colour, so the app draws it with no
+mesh at all. A layer reading a mesh's second texture coordinates gets their rule too where one
+fits (the worlds' clouds); where none does (the Play screen planets' masks and painting are an
+unwrap), the layer is baked into a texture over the first coordinates, as the mesh interpolates
+it, and the material rewritten to read that (`<planet>-<texture>-<slot>.webp`). Each part has a
+role (surface, layer, shell, ring). A style (`planets/style-<id>.json`) is parts to put about any
+planet and a light to shade it by: `nexus` is the Play screen's look, from its large planet (its
+hex-grid shield and ring; its shade, a darkening from a side, is this tool's own, set by eye
+against the Play screen's painting). A planet's `tuning` (`TUNING` in planets.py: light strength,
+glow, shade, its parts' strengths by role) is how the app shows it where the data alone isn't
+right, set by eye against the tutorial's shots. A model whose entry gives no file is found through
+its parents' (`Doodad`:
 `Assets\Doodads\##id##\##id##.m3`).
 
 ## How it works

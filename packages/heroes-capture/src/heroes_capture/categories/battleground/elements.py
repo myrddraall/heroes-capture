@@ -250,6 +250,16 @@ def by_stand_kind(table: dict, u: dict):
     return found if found is not None else table.get(u["type"])
 
 
+def death_setup(u: dict, report: dict) -> str | None:
+    """What a structure (or its copy) needs before it falls to leave remains, as an actor message
+    ("~" for its spaces): its finished model with variation 0 for a type whose remains are picked by
+    its model variation (the data report's "variationDeaths": gates and walls; a copy the game makes
+    has none of the variations its deaths name, and Battlefield of Eternity places its gates in
+    variations 2 and 3, which its Heaven and Hell deaths don't name); None for any other."""
+    model = stand_model(u, report)
+    return f"ModelSwap~{model}~0" if model and u["type"] in (report.get("variationDeaths") or []) else None
+
+
 def death_models(u: dict, report: dict) -> list[str]:
     """A structure's death models: its team's where the data picks them by team, else its type's."""
     team = ((report.get("teams") or {}).get(u["type"]) or {}).get(u.get("owner")) or {}

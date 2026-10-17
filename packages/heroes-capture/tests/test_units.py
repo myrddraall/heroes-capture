@@ -136,7 +136,7 @@ def test_the_elements_capture_s_commands_are_in_the_script():
     assert 'if ((lp_word == "el")) { return hrsCap_gt_Element; }' in text
     verbs = ("hideall", "kill", "core", "at", "fades", "killall", "clear", "keep", "camp", "copy", "wide", "fadeall",
              "copykill", "play", "freeze", "holes", "env", "pausemsg", "clock", "typemsg", "worldfx", "light", "restart", "hold", "farclip", "water",
-             "paint")
+             "paint", "msg")
     assert sorted(set(re.findall(r'\(lv_verb == "(\w+)"\)', text))) == sorted(verbs)
     assert 'AbilityCommand("TowerDeadMorph", 0)' in text and 'UnitBehaviorAdd(lp_unit, "TownCannonTowerInvulnerable"' in text
     # A tower by its morph, not the Tower attribute (town halls have it too, and never fell).
@@ -947,14 +947,14 @@ def test_rubble_waves_keep_each_one_s_rubble_out_of_the_others_shots():
 
 def test_each_structure_is_restarted_and_paused_at_its_standing_time(element_capture, tmp_path):
     """Each structure, faded in under the camera, started over ("el restart": its animations from
-    the start, its effects lit by the camera) and paused ("el hold") at its kind's standing time
-    before its shots: the same moment every run."""
+    the start, its effects lit by the camera) and paused at its kind's standing time before its
+    shots, in the same command (its seconds: one round trip): the same moment every run."""
     session = _FakeSession()
     element_capture.capture_elements(session, ELEMENTS_MANIFEST, tmp_path)
     seq = session.everything
     first = seq.index("el at 1.00 2.00 1 2 1")
-    assert seq[first + 1:first + 4] == ["el restart 1 2", "el hold 1 2", "black"]
-    assert seq.count("el restart 3 1") == 1
+    assert seq[first + 1:first + 3] == ["el restart 1 2 - 2", "black"]  # restarted and paused in one command
+    assert sum(c.startswith("el restart 3 1 ") for c in seq) == 1 and not any(c.startswith("el hold ") for c in seq)
 
 
 def test_a_structure_runs_its_kind_s_picked_standing_time():
@@ -1378,4 +1378,56 @@ def test_a_look_that_differs_by_team_is_filmed_and_timed_per_team():
     assert elements.stand_model(blue, report) == "HeavenFort" and elements.stand_model(tower, report) == "Tower"
     waits = {"Fort|order": 2.5, "Fort|chaos": 0.0, "Tower": 1.0}
     assert [elements.stand_wait(u, waits) for u in (blue, red, tower)] == [2.5, 0.0, 1.0]  # (0 s is a time, not none)
+
+
+def test_a_copy_of_a_kind_whose_remains_the_variation_picks_gets_variation_0_first():
+    """A gate's (and a wall's) normal death is empty: its remains come from a death variation picked
+    by player AND model variation ("UnitDeathCustomize; PlayerId 11 11; ModelVariation 0"), so a copy
+    the game makes, with none of those variations, falls to nothing (Battlefield of Eternity's gate
+    copies). The data report names such types; their copies get their finished model with
+    variation 0 (ModelSwap's second word, as Blizzard's own data swaps it) before they fall."""
+    from heroes_capture.categories.battleground import elements
+    from heroes_capture.common.actors import Catalog
+
+    catalog = Catalog(['''<Catalog>
+      <CActorUnit id="Gate" unitName="Gate">
+        <On Terms="UnitDeathCustomize; PlayerId 11 11; ModelVariation 0" Send="DeathCustomize Variation0"/>
+        <DeathArray index="Normal" ModelLink=""/>
+      </CActorUnit>
+      <CActorUnit id="Tower" unitName="Tower"><On Terms="UnitDeathCustomize; PlayerId 11 11" Send="DeathCustomize Variation0"/></CActorUnit>
+    </Catalog>'''])
+    assert catalog.death_by_variation("Gate") and not catalog.death_by_variation("Tower")
+    report = {"standModels": {"Gate": "GateHell", "Tower": "Tower"}, "variationDeaths": ["Gate"],
+              "teams": {"Gate": {"order": {"stand": "GateHeaven", "deaths": []}}}}
+    assert elements.death_setup({"type": "Gate", "owner": "order"}, report) == "ModelSwap~GateHeaven~0"
+    assert elements.death_setup({"type": "Gate", "owner": "chaos"}, report) == "ModelSwap~GateHell~0"
+    assert elements.death_setup({"type": "Tower", "owner": "order"}, report) is None
+
+
+def test_a_structure_whose_remains_the_variation_picks_gets_variation_0_before_it_falls(element_capture, tmp_path):
+    """Brought down where it stands too: its variation as the map placed it may be none its deaths
+    name (Battlefield of Eternity's gates in variations 2 and 3: they fell to nothing), so it is set
+    to 0 ("el msg") before its kill, in a command of its own."""
+    manifest = json.loads(json.dumps(ELEMENTS_MANIFEST))
+    manifest["elements"]["report"] = {"standModels": {"TownCannonTowerL2": "TowerModel"}, "variationDeaths": ["TownCannonTowerL2"]}
+    session = _FakeSession()
+    element_capture.capture_elements(session, manifest, tmp_path)
+    sent = session.sent
+    setup, kill = sent.index("el msg 1 2 ModelSwap~TowerModel~0"), sent.index("el kill 1 2 -1")
+    assert setup < kill and not any(c.startswith("el msg 3 1 ") for c in sent)  # (the core's remains aren't picked so)
+
+
+def test_a_team_s_death_variation_is_the_map_s_where_it_redefines_one():
+    """A variation name defined by the base game and again by the map's mod (Battlefield of
+    Eternity's gates: base Variation2 = TownGateDamagedDeath02, the map's = its Hell gate's): the
+    map's, read later, is the one a team's death picks."""
+    from heroes_capture.common.actors import Catalog
+
+    base = '''<Catalog><CActorUnit id="Gate" unitName="Gate">
+      <DeathCustoms ModelLink="BaseDeath02" Name="Variation2"/></CActorUnit>
+      <CModel id="BaseDeath02"/><CModel id="HellDeath0"/></Catalog>'''
+    mod = '''<Catalog><CActorUnit id="Gate" unitName="Gate">
+      <On Terms="UnitDeathCustomize; PlayerId 12 12; ModelVariation 0" Send="DeathCustomize Variation2"/>
+      <DeathCustoms ModelLink="HellDeath0" Name="Variation2"/></CActorUnit></Catalog>'''
+    assert Catalog([base, mod]).death_models("Gate", 12) == ["HellDeath0"]
 

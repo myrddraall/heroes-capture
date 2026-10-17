@@ -1,6 +1,6 @@
-tmp/
-logs/
-maps/
+/tmp/
+/logs/
+/maps/
 # the interface textures (heroes-capture ui extract): Blizzard's assets, never committed
 assets/
 __pycache__/
