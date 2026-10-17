@@ -201,6 +201,8 @@ def test_the_planets_from_the_game_s_data(storage, tmp_path: Path):
     assert [p["role"] for p in nexus["parts"]] == ["shield", "ring"] and nexus["kind"] == "style"
     assert nexus["parts"][0]["pattern"] == {"kind": "hex"}  # its hexes drawn by the app
     assert all(nexus["materials"][k]["blend"] != "opaque" for k in nexus["parts"][0]["materials"])
+    assert nexus["tuning"] == {"materials": {k: planets.NEXUS_SHIELD for k in nexus["parts"][0]["materials"]}}
+    assert all(k in korhal["materials"] for k in korhal["tuning"]["materials"])  # its tuning names its own materials
     assert "light" not in nexus and 0 < nexus["shade"]["strength"] <= 1 and [p["role"] for p in korhal["parts"]][:1] == ["surface"]
 
     painted = json.loads((tmp_path / "planets" / "planet-1.json").read_text())

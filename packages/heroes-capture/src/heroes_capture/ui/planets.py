@@ -103,21 +103,20 @@ BAKE_SIZE = 512
 # the upper right, as the Play screen's painting has its planets (strength: how dark; softness:
 # how gradually it comes on, the facing to this power).
 NEXUS_SHADE = {"direction": [-0.78, -0.3, -0.55], "strength": 0.85, "softness": 1.0}
-# How the nexus style's parts show (the app's knobs, set by eye): its hex grid is drawn by the
-# app (the game's grid texture is too soft to read at a planet's size: `pattern`), spread over
-# the face (a floor under its fresnel), its lines of a width and softly aglow about themselves,
-# and glowing on their own (into the bloom), so they read over a world's own lights.
-NEXUS_TUNING = {"spreads": {"shield": 0.6}, "scales": {"shield": 1.0}, "widths": {"shield": 0.08},
-                "softs": {"shield": 0.3}, "glows": {"shield": 2.5}}
+# How the nexus style's shield material shows (the app's knobs, set by eye): its hex grid is
+# drawn by the app (the game's grid texture is too soft to read at a planet's size: `pattern`),
+# spread over the face (a floor under its fresnel), its lines of a width and softly aglow about
+# themselves, and glowing on their own (into the bloom), so they read over a world's own lights.
+NEXUS_SHIELD = {"spread": 0.6, "scale": 1.0, "width": 0.08, "soft": 0.3, "glow": 2.5}
 # How each planet is best shown where the data alone isn't it, set by eye against the tutorial's
-# own shots (the app's defaults otherwise): lighting (its light times this), glow (its emissive
-# layers into the bloom), shade, strengths (of its parts by role: layer, shell, ring, shield).
+# own shots (the app's defaults otherwise): lighting (its light times this), shade, and its
+# materials' settings by name (strength, blend, glow, spread, its pattern's scale, cut, width, soft).
 TUNING: dict[str, dict] = {
     # Korhal: its lights at half (the user's eye, against the tutorial's dim shot of it); its
     # edge-light haze at 0.42 (the user's choice); its blue back light's crescent at the upper
     # left shaded down, where the shot shows only a lighter patch (the shade faces where that
     # light comes from).
-    "korhal": {"lighting": 0.5, "strengths": {"layer": 0.42},
+    "korhal": {"lighting": 0.5, "materials": {"edgeLight222-korhal": {"strength": 0.42}},
                "shade": {"direction": [-0.71, 0.47, 0.53], "strength": 0.55, "softness": 1.0}},
 }
 
@@ -523,7 +522,8 @@ def nexus_style(export: Export, large: Planet) -> dict:
     if not shield:
         raise SystemExit("the Play screen's large planet has no hex grid to make the nexus style's shield of")
     parts = [{**surface, "role": "shield", "pattern": {"kind": "hex"}, "materials": shield}] + [p for p in large.parts if p["role"] == "ring"]
-    return {**planet_file(export, "style", parts, None, NEXUS_SHADE), "tuning": NEXUS_TUNING}
+    tuning = {"materials": {key: dict(NEXUS_SHIELD) for key in shield}}
+    return {**planet_file(export, "style", parts, None, NEXUS_SHADE), "tuning": tuning}
 
 def play_planets(storage: Storage, export: Export, baked: dict) -> dict[str, Planet]:
     """The Play screen's planets, each about its root bone, its body a unit radius (the large and

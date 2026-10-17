@@ -358,8 +358,9 @@ role (surface, layer, shell, ring). A style (`planets/style-<id>.json`) is parts
 planet and a light to shade it by: `nexus` is the Play screen's look, from its large planet (its
 hex-grid shield and ring; its shade, a darkening from a side, is this tool's own, set by eye
 against the Play screen's painting). A planet's `tuning` (`TUNING` in planets.py: light strength,
-glow, shade, its parts' strengths by role) is how the app shows it where the data alone isn't
-right, set by eye against the tutorial's shots. A model whose entry gives no file is found through
+shade, and its materials' settings by name: strength, blend, glow, spread, its pattern's scale,
+cut, width and softness; the nexus style's `NEXUS_SHIELD` for its shield material) is how the
+app shows it where the data alone isn't right, set by eye against the tutorial's shots. A model whose entry gives no file is found through
 its parents' (`Doodad`:
 `Assets\Doodads\##id##\##id##.m3`).
 

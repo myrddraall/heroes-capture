@@ -1431,3 +1431,22 @@ def test_a_team_s_death_variation_is_the_map_s_where_it_redefines_one():
       <DeathCustoms ModelLink="HellDeath0" Name="Variation2"/></CActorUnit></Catalog>'''
     assert Catalog([base, mod]).death_models("Gate", 12) == ["HellDeath0"]
 
+
+def test_a_tile_from_chaos_s_side_needs_no_shot_over_black():
+    """A team-coloured tile from Chaos's side is shot over the light sky only: its colour comes from
+    that shot with the see-through share of its pair from Order (matting.matte_with_alpha), the same
+    colour the pair of its own (over light and over black) gave, see-through pixels included."""
+    import numpy as np
+
+    from heroes_capture.capture.matting import matte, matte_with_alpha
+
+    level = 198.0
+    colour = np.array([[[200, 40, 30], [10, 20, 220], [120, 120, 120]]], np.float32)  # red, blue, grey
+    alpha = np.array([[1.0, 0.5, 0.25]], np.float32)
+    white = (colour * alpha[..., None] + (1 - alpha[..., None]) * level).round().astype(np.uint8)
+    black = (colour * alpha[..., None]).round().astype(np.uint8)
+    pair = matte(white, black, level, animated=False)
+    alone = matte_with_alpha(white, pair[..., 3], level)
+    assert np.array_equal(alone[..., 3], pair[..., 3])
+    assert np.abs(alone[..., :3].astype(int) - pair[..., :3].astype(int)).max() <= 2
+

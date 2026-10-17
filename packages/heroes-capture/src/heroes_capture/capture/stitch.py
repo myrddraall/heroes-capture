@@ -32,7 +32,7 @@ from PIL import Image
 from heroes_capture.capture import edge_black
 from heroes_capture.capture import pack
 from heroes_capture.capture import sky_stitch
-from heroes_capture.capture.matting import light_level, matte, moved_pixels
+from heroes_capture.capture.matting import light_level, matte, matte_with_alpha, moved_pixels
 from heroes_capture.capture.sky import LIGHT_LEVEL
 from heroes_capture.capture.team_colour import aligned, team_mask
 from heroes_capture.map import water

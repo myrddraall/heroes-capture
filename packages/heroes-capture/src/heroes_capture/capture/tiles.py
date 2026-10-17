@@ -511,13 +511,13 @@ def shoot_once(session: Session, tile: dict, settle_time: float, manifest: dict)
     return status, frame, black, mismatch
 
 
-def shoot_chaos(session: Session, tile: dict, settle_time: float, manifest: dict):
+def shoot_chaos(session: Session, tile: dict, settle_time: float, manifest: dict) -> np.ndarray | None:
     """A team-coloured tile again from Chaos's side, shot as the tiles from Order are: our player
     was put on Chaos once before the pass, so the view is drawn in its colours as the camera gets
     there (no wait for them to change: where little team colour shows, nothing visibly changes,
-    and that wait sat out its whole cap). Its shot over black when matting. None without a view or
-    anything team-coloured in it."""
-    matting = (manifest.get("sky") or {}).get("mode") == "matte"
+    and that wait sat out its whole cap). Over the light sky only, matting or not: the stitch takes
+    the see-through share from the tile's pair from Order. None without a view or anything
+    team-coloured in it."""
     answer = session.send(tile_command(tile), timeout=3.0)
     if answer is None:
         return None
@@ -530,9 +530,7 @@ def shoot_chaos(session: Session, tile: dict, settle_time: float, manifest: dict
     frame = whole_frame(session, session.blank(raw), reference)[0] if raw is not None else None
     if frame is None or team_boxes(manifest, status.camera, frame.shape) is None:
         return None
-    # (No shot over black: the stitch takes the see-through share from the tile's pair from Order,
-    # stitch.Shots.load.)
-    return frame, None
+    return frame  # (no shot over black: the stitch takes the see-through share from the tile's pair from Order, stitch.Shots.load)
 
 
 def shoot(session: Session, tile: dict, settle_time: float, manifest: dict):
@@ -710,7 +708,6 @@ def capture_team_side(session: Session, manifest: dict, settle_time: float, out:
     team-colour mask), in one pass after them all: our player put on Chaos once and back once, not
     twice a tile (the scene is paused: the two passes are the same pixels but for the team colour).
     The tiles whose shots from Chaos's side are missing only (a resumed run carries on)."""
-    matting = (manifest.get("sky") or {}).get("mode") == "matte"
     shape = (int(manifest["screen"]["h"]), int(manifest["screen"]["w"]))
     todo = [t for t in manifest["tiles"] if str(t["index"]) in positions and frame_exists(tile_stem(out, t["index"]))
             and not frame_exists(tile_stem(out, t["index"], chaos=True)) and team_boxes(manifest, positions[str(t["index"])], shape)]
@@ -724,11 +721,9 @@ def capture_team_side(session: Session, manifest: dict, settle_time: float, out:
     with stage("Tiles (red)", len(todo)) as counter:
         for tile in todo:
             log(f"tile {tile['index'] + 1} of {len(manifest['tiles'])}")
-            shots = step(lambda: shoot_chaos(session, tile, settle_time, manifest), f"tile {tile['index'] + 1} as red")
-            if shots is not None and shots[0] is not None:
-                saver.submit(save_frame, tile_stem(out, tile["index"], chaos=True), shots[0])
-                if shots[1] is not None:
-                    saver.submit(save_frame, tile_stem(out, tile["index"], black=True, chaos=True), shots[1])
+            frame = step(lambda: shoot_chaos(session, tile, settle_time, manifest), f"tile {tile['index'] + 1} as red")
+            if frame is not None:
+                saver.submit(save_frame, tile_stem(out, tile["index"], chaos=True), frame)
             else:
                 warn(f"tile {tile['index'] + 1}: no picture as red")
             counter.advance()

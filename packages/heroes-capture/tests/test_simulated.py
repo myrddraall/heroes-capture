@@ -59,9 +59,10 @@ def test_scenario(name, tmp_path):
 
 def test_tiles_with_team_coloured_doodads_are_also_shot_from_chaos_s_side(tmp_path):
     """A tile with a team-coloured doodad in view (manifest teamColoured) is shot from both sides:
-    its shots from Chaos's side next to Order's (tile_<n>-chaos, -chaos-black), all in one pass
-    after every tile (our player put on Chaos once, and back once), each once its discs differ
-    from its shot from Order; a tile with none is shot once, as before. Order's shots don't change."""
+    its shot from Chaos's side next to Order's (tile_<n>-chaos: over the light sky only, the stitch
+    taking the see-through share from Order's pair), all in one pass after every tile (our player
+    put on Chaos once, and back once); a tile with none is shot once, as before. Order's shots don't
+    change."""
     import numpy as np
 
     run = simulate(tmp_path, "matte", FAKE_TEAM="1")
@@ -70,16 +71,16 @@ def test_tiles_with_team_coloured_doodads_are_also_shot_from_chaos_s_side(tmp_pa
     tiles = tmp_path / "test-map" / "tiles"
     chaos = sorted(p.name for p in tiles.glob("tile_*-chaos.npy"))
     assert chaos and len(chaos) < len(list(tiles.glob("tile_????.npy")))
-    assert len(list(tiles.glob("tile_*-chaos-black.npy"))) == len(chaos)
-    # The discs: blue from Order's side (both shots), red from Chaos's (both shots).
+    assert not list(tiles.glob("tile_*-chaos-black.npy"))
+    # The discs: blue from Order's side (both shots), red from Chaos's.
     blue, red = np.array([40, 90, 255]), np.array([255, 60, 40])
     for name in chaos:
         index = name.removesuffix("-chaos.npy")
-        shots = {k: np.load(tiles / f"{index}{k}.npy") for k in ("", "-black", "-chaos", "-chaos-black")}
+        shots = {k: np.load(tiles / f"{index}{k}.npy") for k in ("", "-black", "-chaos")}
         disc = (np.abs(shots[""].astype(int) - blue).max(axis=2) < 4)
         if disc.sum() < 100:
             continue  # the disc in the margin past the view: nothing of it on screen
-        for k, colour in (("", blue), ("-black", blue), ("-chaos", red), ("-chaos-black", red)):
+        for k, colour in (("", blue), ("-black", blue), ("-chaos", red)):
             assert (np.abs(shots[k][disc].astype(int) - colour).max(axis=1) < 4).mean() > 0.99, (name, k)
         break
     else:
@@ -100,3 +101,18 @@ def test_stitch_of_a_simulated_render(tmp_path):
     assert sorted(p.name for p in out.iterdir()) == ["pack", "raw"]
     description = json.loads((out / "pack" / "pack.json").read_text())
     assert [l["id"] for l in description["layers"]] == ["fixed", "background", "haze", "map"]
+
+
+def test_stitch_of_a_team_coloured_render_without_chaos_s_shots_over_black(tmp_path):
+    """A map shot over white and black whose team-coloured tiles were shot from Chaos's side over the
+    light sky only: the stitch takes their see-through share from Order's pairs, and the map has its
+    team-colour layer."""
+    run = simulate(tmp_path, "matte", FAKE_TEAM="1")
+    assert run["outcome"] == "finished", run["outcome"]
+    with sim_slot():
+        result = subprocess.run([sys.executable, "-m", "heroes_capture", "stitch", "test-map.json"], cwd=tmp_path,
+                                capture_output=True, text=True, env={"PYTHONPATH": str(PACKAGE / "src")})
+    assert result.returncode == 0, result.stderr[-3000:]
+    out = tmp_path / "maps" / "test-map"
+    assert (out / "pack" / "map-team.pmtiles").exists() or (out / "raw" / "map-team.png").exists(), sorted(p.name for p in (out / "raw").iterdir())
+
