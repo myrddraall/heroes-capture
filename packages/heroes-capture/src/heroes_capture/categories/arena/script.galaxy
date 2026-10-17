@@ -1,0 +1,11 @@
+//--------------------------------------------------------------------------------------------------
+// The arenas' part: a map of rounds (its script includes LibAREN: Punisher Arena), where a core
+// killed ends only the round.
+//--------------------------------------------------------------------------------------------------
+
+// The match ended: the other team first given all but its last round win, so the round the core
+// kill ends is the last, then the core killed (as the map's own part does).
+void hrsCap_EndMatch () {
+    libAREN_gv_aRM_RoundScore[libGame_gf_EnemyTeam(libGame_gf_TeamNumberOfPlayer(hrsCap_cmdPlayer))] = libAREN_gv_victoriesCount - 1;
+    UnitKill(libGame_gv_teams[libGame_gf_TeamNumberOfPlayer(hrsCap_cmdPlayer)].lv_core);
+}

@@ -9,7 +9,8 @@ import pyvips
 from PIL import Image
 from scipy import ndimage
 
-from heroes_capture import minimap_svg, pack
+from heroes_capture.capture import minimap_svg
+from heroes_capture.capture import pack
 
 BLACK, LIGHT, BODY, PART = (0, 0, 0), (110, 80, 130), (44, 27, 55), (92, 65, 108)
 
@@ -80,9 +81,12 @@ def test_the_custom_minimap_lies_at_the_map_s_scale_below_the_camera_bounds_midd
 
 
 def test_a_map_s_minimap_placement_correction_applies():
-    """minimap-placement.json corrects maps that don't follow the rule exactly (Volskaya Foundry's
+    """A map's own module corrects a minimap that doesn't follow the rule exactly (Volskaya Foundry's
     is drawn 2 cells shorter: its top comes down)."""
-    bounds = pack.custom_minimap_bounds(drawn_minimap(), {"width": 120, "height": 90}, CAMERA, "Volskaya Foundry")
+    from heroes_capture import cli
+
+    correction = cli.specifics_for("Volskaya Foundry", "battleground").minimap_correction
+    bounds = pack.custom_minimap_bounds(drawn_minimap(), {"width": 120, "height": 90}, CAMERA, correction)
     assert bounds == {"left": 0.0, "bottom": -1.25, "right": 120.0, "top": 86.75}
 
 
@@ -90,15 +94,15 @@ def test_the_pack_s_svg_entry(tmp_path):
     (tmp_path / "images").mkdir()
     drawn_minimap().save(tmp_path / "images" / "custom-minimap.png")
     custom = {"file": "images/custom-minimap.png", "size": [240, 180], "source": "CustomMiniMap.dds"}
-    entry = pack.minimap_svg_image(tmp_path, custom, {"width": 120, "height": 90}, CAMERA)
+    entry = pack.minimap_svg_image(tmp_path, tmp_path / "pack", custom, {"width": 120, "height": 90}, CAMERA)
     assert entry == {"file": "images/custom-minimap.svg", "size": [240, 180], "source": "CustomMiniMap.dds",
                      "boundsCells": {"left": 0.0, "bottom": -1.25, "right": 120.0, "top": 88.75}}
-    assert (tmp_path / entry["file"]).read_text().startswith("<svg ")
+    assert (tmp_path / "pack" / entry["file"]).read_text().startswith("<svg ")
 
 
 def test_a_custom_minimap_that_can_t_be_redrawn_leaves_the_pack_without_its_svg(tmp_path, capsys):
     (tmp_path / "images").mkdir()
     Image.new("RGBA", (64, 64), (0, 0, 0, 0)).save(tmp_path / "images" / "custom-minimap.png")
     custom = {"file": "images/custom-minimap.png", "size": [64, 64], "source": "CustomMiniMap.dds"}
-    assert pack.minimap_svg_image(tmp_path, custom, {"width": 32, "height": 32}, CAMERA) is None
-    assert not (tmp_path / "images" / "custom-minimap.svg").exists()
+    assert pack.minimap_svg_image(tmp_path, tmp_path / "pack", custom, {"width": 32, "height": 32}, CAMERA) is None
+    assert not (tmp_path / "pack" / "images" / "custom-minimap.svg").exists()
