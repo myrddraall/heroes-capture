@@ -463,6 +463,7 @@ def baked_material(export: Export, storage: Storage, key: str, planet: str, data
             if texture_key not in baked:
                 image = bake_layer(texture_image(storage, export.textures[layer["texture"]]), layer, data["uvs"], data["uvs2"], data["triangles"])
                 baked[texture_key] = (image, slot == "alphaMasks" or layer.get("channel") in ("a", "rgba"))
+                export.baked_from[texture_key] = layer["texture"]
             layer.update({"texture": texture_key, "offset": [0.0, 0.0], "angle": 0.0, "tiling": [1.0, 1.0], "wrap": [False, False]})
             del layer["uvSet"]
             layer.pop("scroll", None)
@@ -702,7 +703,7 @@ def export(storage: Storage, out: Path) -> dict:
     files["style-nexus"] = nexus_style(ex, planets["play-large"])
     folder = out / "planets"
     folder.mkdir(parents=True, exist_ok=True)
-    textures = texture_files(storage, ex.textures, ex.alpha_read, out, baked)
+    textures = texture_files(storage, ex.textures, ex.alpha_read, out, baked, ex.sources, ex.baked_from)
     for key, file in files.items():
         file["textures"] = {t: textures[t] for t in file["textures"]}
         (folder / f"{key}.json").write_text(json.dumps(file, separators=(",", ":")), encoding="utf-8", newline="\n")

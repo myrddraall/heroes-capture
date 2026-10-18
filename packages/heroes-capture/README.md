@@ -322,7 +322,9 @@ the horizon, the twinkling stars and the planets (their atmospheres, and the fai
 them), not the floor. `scene.json` holds the camera, the light's HDR exposure and white point, the
 meshes (the planets' with their normals, their billboards turned to face the camera), their
 materials' layers (colours, fresnels and emissive blends included) and the stars' particle system;
-the textures go beside it as WebP (about 1 MB in all). From the game's
+the textures go beside it as WebP (about 1 MB in all), each with its size and where it is in the
+game data (`source`; one baked onto a planet's own mapping says `baked`, its source the texture it
+was baked from). From the game's
 data (`ui/play_background.py`): the cutscene the Play screen runs (`gluebackground.stormcutscene`:
 its camera, the model its actor shows, the light and animation in effect while it holds the Play
 screen) and that model (`common/m3.py` reads it: its meshes placed by the Stand pose, its

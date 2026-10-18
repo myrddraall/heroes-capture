@@ -128,6 +128,8 @@ class Export:
         self.m3, self.tracks = m3, tracks
         self.materials: dict[str, dict] = {}
         self.textures: dict[str, str] = {}  # key -> the texture's file name
+        self.sources: dict[str, str] = {}  # key -> the texture's path in the game data
+        self.baked_from: dict[str, str] = {}  # a baked texture's key -> the key of the texture it was baked from
         self.alpha_read: set[str] = set()  # the textures a layer reads the alpha of
         self.keys: dict[tuple[int, int], str] = {}  # material record (its model, its offset in the file) -> its key
 
@@ -146,9 +148,11 @@ class Export:
                 return None
             b, g, r, a = self.value(layer["color"])
             return {"color": [r, g, b, a], "brightMult": round(self.value(layer["brightMult"])[0], 5), **self.fresnel(layer)}
-        image = layer.text("image").replace("\\", "/").rsplit("/", 1)[-1]
+        source = layer.text("image").replace("\\", "/")
+        image = source.rsplit("/", 1)[-1]
         key = re.sub(r"[^a-z0-9]+", "-", image.lower().rsplit(".", 1)[0]).strip("-")
         self.textures[key] = image
+        self.sources[key] = source
         channel = CHANNELS[layer["channels"]]
         if channel in ("a", "rgba"):
             self.alpha_read.add(key)
@@ -257,10 +261,12 @@ def texture_image(storage: Storage, name: str) -> Image.Image:
 
 
 def texture_files(storage: Storage, names: dict[str, str], alpha_read: set[str], out: Path,
-                  baked: dict[str, tuple[Image.Image, bool]] | None = None) -> dict:
+                  baked: dict[str, tuple[Image.Image, bool]] | None = None,
+                  sources: dict[str, str] | None = None, baked_from: dict[str, str] | None = None) -> dict:
     """The textures as WebP: lossless where a layer reads the texture's alpha (the stars' mask is in
     it), else without the alpha, lossy at WEBP_QUALITY. `baked` images (key -> image, whether
-    lossless) are written beside them."""
+    lossless) are written beside them. Each says where it came from in the game data (`source`,
+    from `sources` by key; a baked one its original's, by `baked_from`, and `baked`)."""
     found = {}
     images = {}
     for key, name in names.items():
@@ -276,6 +282,11 @@ def texture_files(storage: Storage, names: dict[str, str], alpha_read: set[str],
         else:
             image.convert("RGB").save(out / file, "WEBP", quality=WEBP_QUALITY, method=6)
         found[key] = {"file": file, "width": image.width, "height": image.height}
+        original = (baked_from or {}).get(key, key)
+        if sources and original in sources:
+            found[key]["source"] = sources[original]
+        if key in (baked or {}):
+            found[key]["baked"] = True
     return found
 
 
@@ -333,7 +344,7 @@ def export(storage: Storage, out: Path) -> dict:
     scene = {"source": {"build": storage.build(), "cutscene": CUTSCENE, "model": scene_info["model"],
                         "animation": scene_info["animation"], "light": scene_info["light"]},
              "camera": view, "tone": tone, "meshes": meshes,
-             "materials": ex.materials, "particles": systems, "textures": texture_files(storage, ex.textures, ex.alpha_read, out)}
+             "materials": ex.materials, "particles": systems, "textures": texture_files(storage, ex.textures, ex.alpha_read, out, sources=ex.sources)}
     written = {"scene.json"} | {t["file"] for t in scene["textures"].values()}
     for stale in out.glob("*.webp"):
         if stale.name not in written:
