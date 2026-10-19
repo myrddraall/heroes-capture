@@ -156,7 +156,8 @@ def test_the_planets_from_the_game_s_data(storage, tmp_path: Path):
     index = planets.export(storage, tmp_path)
     ids = {p["id"]: p["kind"] for p in index["planets"]}
     templates = {"play-large", "play-medium", "play-small"}
-    assert {k for k, v in ids.items() if v == "play"} == templates | {f"{k}-bare" for k in templates}
+    assert {k for k, v in ids.items() if v == "play"} == templates
+    assert {p["id"] for p in index["planets"] if p.get("style") == "nexus"} == templates  # each wears it unless told otherwise
     assert {k for k, v in ids.items() if v == "world"} == {"azeroth", "korhal", "sanctuary"}
     assert {k for k, v in ids.items() if v == "painted"} == {f"planet-{n}" for n in range(1, 10)}
     # The Play screen's own set, where the game puts it (its camera at y -41 looking along +y).
@@ -166,24 +167,30 @@ def test_the_planets_from_the_game_s_data(storage, tmp_path: Path):
     assert play["play-small"]["radius"] < play["play-medium"]["radius"] < play["play-large"]["radius"]
 
     large = json.loads((tmp_path / "planets" / "play-large.json").read_text())
-    body, ring = large["parts"]
-    assert body["shape"] == {"kind": "sphere", "radius": pytest.approx(1, abs=1e-3), "side": "near"}  # the body's radius is the unit
+    # A base: its painting and glow; its hex grid and ring are the nexus style's.
+    [body] = large["parts"]
+    assert body["role"] == "surface" and body["shape"] == {"kind": "sphere", "radius": pytest.approx(1, abs=1e-3), "side": "near"}  # the body's radius is the unit
     assert body["mapping"]["kind"] == "sphere" and body["mapping"]["pole"][2] > 0.95  # a uv sphere about z
-    assert len(body["materials"]) >= 2  # its painting, its hex grid among the rest
+    assert len(body["materials"]) >= 2  # its painting and its glow
+    assert all(large["materials"][k]["blend"] == "opaque" or (large["materials"][k]["diffuse"] or {}).get("texture")
+               for k in body["materials"])  # no hex grid
     # Its masks read the mesh's second texture coordinates: baked over the first, per planet.
     masks = [m["alphaMasks"][0] for m in (large["materials"][k] for k in body["materials"]) if m["alphaMasks"]]
     assert masks and all("uvSet" not in m and m["texture"].startswith("play-large-") for m in masks)
     assert all(large["textures"][m["texture"]]["width"] == planets.BAKE_SIZE for m in masks)
-    assert "mapping2" not in body
-    assert ring["shape"]["kind"] == "ring" and ring["shape"]["inner"] < ring["shape"]["outer"] < 1 and ring["shape"]["depth"] < 0
-    assert ring["mapping"]["kind"] == "ring" and large.get("light") is None
-    # Bare, to wear the nexus style: its painting and glow, no hex grid, no ring (the style brings both).
-    bare = json.loads((tmp_path / "planets" / "play-large-bare.json").read_text())
-    assert [p["role"] for p in bare["parts"]] == ["surface"]
-    assert set(bare["parts"][0]["materials"]) < set(body["materials"])
-    assert all(bare["materials"][k]["blend"] == "opaque" or (bare["materials"][k]["diffuse"] or {}).get("texture")
-               for k in bare["parts"][0]["materials"])
-    assert "play-large-bare" not in play  # not the Play screen's own
+    assert "mapping2" not in body and large.get("light") is None
+    # It wears the nexus style as its own shield is: unshaded, the grid as the data has it.
+    nexus = json.loads((tmp_path / "planets" / "style-nexus.json").read_text())
+    [grid] = nexus["parts"][0]["materials"]
+    worn = {k: json.loads((tmp_path / "planets" / f"{k}.json").read_text())["tuning"] for k in templates}
+    assert all(t["style"] == "nexus" and t["variants"]["nexus"]["shade"] == {"strength": 0} for t in worn.values())
+    shields = {k: t["variants"]["nexus"]["materials"][grid] for k, t in worn.items()}
+    assert shields["play-large"]["scale"] == 1 and shields["play-large"]["strength"] == 1  # the style's own grid
+    assert shields["play-medium"]["scale"] == pytest.approx(1.5) and shields["play-small"]["scale"] == pytest.approx(6)  # tiled 6, 4, 1 round
+    assert shields["play-medium"]["strength"] == pytest.approx(0.8) and shields["play-small"]["spread"] == pytest.approx(0.2)
+    for shield in shields.values():
+        assert math.hypot(*shield["spreadFrom"]) == pytest.approx(1, abs=1e-3) and shield["spreadFrom"][1] < 0  # on its face
+    assert shields["play-large"]["spreadFrom"][0] < 0 < shields["play-medium"]["spreadFrom"][0]  # leaning left, and right
 
     korhal = json.loads((tmp_path / "planets" / "korhal.json").read_text())
     shells = [p for p in korhal["parts"] if p["shape"]["kind"] == "sphere" and p["shape"]["side"] == "far"]
@@ -197,15 +204,14 @@ def test_the_planets_from_the_game_s_data(storage, tmp_path: Path):
     # The body's rim glow: an additive colour over it, there only where the surface turns away.
     adds = [korhal["materials"][m] for m in body["materials"] if korhal["materials"][m]["blend"] == "add"]
     assert any(m["diffuse"] and "color" in m["diffuse"] and m["diffuse"]["fresnel"]["type"] == 1 for m in adds)
-    assert large["parts"][0]["materials"][1] not in body["materials"]  # no hex grid
+    assert grid not in body["materials"]  # no hex grid
     assert len(korhal["light"]["directional"]) == 3 and korhal["light"]["exposure"] == 1.5
-    assert korhal["tuning"] == planets.TUNING["korhal"] and "tuning" not in large
+    assert korhal["tuning"] == planets.TUNING["korhal"]
     for light in korhal["light"]["directional"]:
         assert math.hypot(*light["direction"]) == pytest.approx(1, abs=1e-3)
 
     # The nexus style: the Play planet's hex grid as a shield, its ring, and a light that shades.
     assert index["styles"] == [{"id": "nexus"}]
-    nexus = json.loads((tmp_path / "planets" / "style-nexus.json").read_text())
     assert [p["role"] for p in nexus["parts"]] == ["shield", "ring"] and nexus["kind"] == "style"
     assert nexus["parts"][0]["pattern"] == {"kind": "hex"}  # its hexes drawn by the app
     assert all(nexus["materials"][k]["blend"] != "opaque" for k in nexus["parts"][0]["materials"])

@@ -4,8 +4,9 @@ own so the app loads only the ones a set uses.
 
 Everything comes from the game's data:
   - the Play screen's own three planets (ui/play_background.py's model, the bones PLAY_TEMPLATES):
-    each about its root bone, the big painted hemisphere with its hex grid and the ring of its
-    atmosphere, the size the app gives it;
+    each about its root bone, the big painted hemisphere, the size the app gives it; its hex-grid
+    shield and atmosphere ring are the nexus style's, which each wears as its own, set as its own
+    shield is (see below);
   - the planets of the tutorial's flyby (its cutscene FLYBY_CUTSCENE flies its camera past the
     doodad FLYBY_MODEL): three worlds (Azeroth, Korhal, Sanctuary, named by their name plates) with
     their own layered materials and atmosphere shells, lit as the flyby lights them, and nine
@@ -25,12 +26,12 @@ right, y away from the eye, z up (the app turns it to face its camera, as the ga
 do), in units of the body's radius; with its light (ambient, directional lights the way they
 travel in that frame, and the flyby's exposure).
 
-    <out>/planets/index.json   the planets: id, kind (play, world, painted); the Play screen's own
-                               set: each where the game puts it and its size; and the styles
+    <out>/planets/index.json   the planets: id, kind (play, world, painted), the style each wears
+                               unless a scene says otherwise; the Play screen's own set: each where
+                               the game puts it and its size; and the styles
     <out>/planets/<id>.json    kind, parts (role, shape, mapping, mapping2?, materials, color),
-                               materials, textures, light?, tuning? (TUNING); each Play screen
-                               planet also bare (`<id>-bare`: no shield, no ring), to wear the
-                               nexus style (which brings both) or none
+                               materials, textures, light?, tuning? (TUNING; a Play screen planet's:
+                               its style and how it wears it, `variants`)
     <out>/planets/style-<id>.json  a style: parts to put about any body (the same form), and a
                                shade (direction, strength, softness) darkening it from a side
 
@@ -38,6 +39,11 @@ A style dresses any planet as another: "nexus" is the Play screen's look for a w
 Play screen's large planet: its hex-grid shield and its atmosphere ring about the world's own
 surface, and a shade that leaves most of it dark but a crescent, as the Play screen paints its
 own (the shade is this tool's, set by eye against that painting: the game lights nothing there).
+The Play screen's planets wear it as their own, each as the data has its own shield: the grid's
+brightness, size (its tiling against the large one's), how far it spreads (its fresnel's floor)
+and the side it spreads from (its fresnel's turn), glowing as the data has it (no boost: there
+are no lights to read over), and no shade (their painting is shaded already). Where the shields
+differ otherwise (each one's ring and mask), they take the large one's.
     <out>/<planet>-<texture>.webp  a layer baked into the first texture coordinates (see below)
 
 A layer that reads a mesh's second texture coordinates gets their mapping too (mapping2) where
@@ -533,18 +539,43 @@ def shield_materials(export: Export, surface: dict) -> list[str]:
             if export.materials[k]["blend"] != "opaque" and not (export.materials[k]["diffuse"] or {}).get("texture")]
 
 
-def bare_play(export: Export, planet: Planet) -> dict:
-    """A Play screen planet without what the nexus style puts about a world: its surface without
-    the shield (the hex grid), and no ring (the style brings its own), to wear the style or none."""
-    parts = []
+def towards(yaw: float, pitch: float) -> list[float]:
+    """The point on a body's face (its frame: y away from the eye) a fresnel turned by `yaw` (to
+    the right) and `pitch` (upwards, negative) leans to: where what faced the eye has moved."""
+    return [round(math.cos(pitch) * math.sin(yaw), 4), round(-math.cos(pitch) * math.cos(yaw), 4), round(-math.sin(pitch), 4)]
+
+
+def worn_shield(export: Export, own: str, style: str) -> dict:
+    """How a Play screen planet shows the nexus style's shield material (`style`) as its own
+    shield (`own`) is in the data: its grid's brightness and size against the style's, its
+    fresnel's floor (how far it spreads) and turn (the side it spreads from), its glow the data's."""
+    mine, theirs = export.materials[own]["emissive"], export.materials[style]["emissive"]
+    fresnel = mine["fresnel"]
+    return {"strength": round(mine["brightMult"] / theirs["brightMult"], 4),
+            "scale": round(theirs["tiling"][0] / mine["tiling"][0], 4),
+            "spread": fresnel["min"], "spreadFrom": towards(fresnel["yaw"], fresnel["pitch"]), "glow": 1.0}
+
+
+def play_base(export: Export, planet: Planet, style_id: str, style: dict) -> dict:
+    """A Play screen planet as a base: its surface without its shield (the hex grid) and no ring,
+    wearing the style (`style_id`) that brings both, set as its own shield is (and not shaded:
+    its painting is)."""
+    parts, own = [], None
     for part in planet.parts:
         if part["role"] == "ring":
             continue
         if part["role"] == "surface":
-            shield = set(shield_materials(export, part))
-            part = {**part, "materials": [k for k in part["materials"] if k not in shield]}
+            shield = shield_materials(export, part)
+            if len(shield) != 1:
+                raise SystemExit(f"{planet.name}: {len(shield)} hex-grid materials, not one")
+            own = shield[0]
+            part = {**part, "materials": [k for k in part["materials"] if k != own]}
         parts.append(part)
-    return planet_file(export, planet.kind, parts, planet.light)
+    worn = next(p for p in style["parts"] if p["role"] == "shield")["materials"][0]
+    out = planet_file(export, planet.kind, parts, planet.light)
+    out["tuning"] = {"style": style_id, "variants": {style_id: {
+        "shade": {"strength": 0}, "materials": {worn: worn_shield(export, own, worn)}}}}
+    return out
 
 
 def play_planets(storage: Storage, export: Export, baked: dict) -> dict[str, Planet]:
@@ -722,16 +753,17 @@ def export(storage: Storage, out: Path) -> dict:
     planets.update(flyby_planets(storage, ex, baked))
     files = {key: planet.file() for key, planet in planets.items()}
     files["style-nexus"] = nexus_style(ex, planets["play-large"])
-    # Each Play screen planet bare too (no shield, no ring), to wear the nexus style or none.
+    # The Play screen's planets as bases, wearing the nexus style as their shields are.
     for key in PLAY_TEMPLATES:
-        files[f"{key}-bare"] = bare_play(ex, planets[key])
+        files[key] = play_base(ex, planets[key], "nexus", files["style-nexus"])
     folder = out / "planets"
     folder.mkdir(parents=True, exist_ok=True)
     textures = texture_files(storage, ex.textures, ex.alpha_read, out, baked, ex.sources, ex.baked_from)
     for key, file in files.items():
         file["textures"] = {t: textures[t] for t in file["textures"]}
         (folder / f"{key}.json").write_text(json.dumps(file, separators=(",", ":")), encoding="utf-8", newline="\n")
-    index = {"planets": [{"id": key, "kind": file["kind"]} for key, file in files.items() if file["kind"] != "style"],
+    index = {"planets": [{"id": key, "kind": file["kind"], **({"style": file["tuning"]["style"]} if "style" in file.get("tuning", {}) else {})}
+                         for key, file in files.items() if file["kind"] != "style"],
              "play": [{"id": key, "position": planet.placed[0], "radius": planet.placed[1]}
                       for key, planet in planets.items() if planet.placed],
              "styles": [{"id": key.removeprefix("style-")} for key, file in files.items() if file["kind"] == "style"]}
