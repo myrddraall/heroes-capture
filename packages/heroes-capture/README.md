@@ -359,7 +359,9 @@ it, and the material rewritten to read that (`<planet>-<texture>-<slot>.webp`). 
 role (surface, layer, shell, ring). A style (`planets/style-<id>.json`) is parts to put about any
 planet and a light to shade it by: `nexus` is the Play screen's look, from its large planet (its
 hex-grid shield and ring; its shade, a darkening from a side, is this tool's own, set by eye
-against the Play screen's painting). A planet's `tuning` (`TUNING` in planets.py: light strength,
+against the Play screen's painting). Each Play screen planet also comes bare (`<id>-bare`: its
+surface without the shield's materials and with no ring), to wear a style such as `nexus` without
+a second shield; the bare ones aren't in the index's `play` set. A planet's `tuning` (`TUNING` in planets.py: light strength,
 shade, and its materials' settings by name: strength, blend, glow, spread, its pattern's scale,
 cut, width and softness; the nexus style's `NEXUS_SHIELD` for its shield material) is how the
 app shows it where the data alone isn't right, set by eye against the tutorial's shots. A model whose entry gives no file is found through

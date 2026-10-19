@@ -28,7 +28,9 @@ travel in that frame, and the flyby's exposure).
     <out>/planets/index.json   the planets: id, kind (play, world, painted); the Play screen's own
                                set: each where the game puts it and its size; and the styles
     <out>/planets/<id>.json    kind, parts (role, shape, mapping, mapping2?, materials, color),
-                               materials, textures, light?, tuning? (TUNING)
+                               materials, textures, light?, tuning? (TUNING); each Play screen
+                               planet also bare (`<id>-bare`: no shield, no ring), to wear the
+                               nexus style (which brings both) or none
     <out>/planets/style-<id>.json  a style: parts to put about any body (the same form), and a
                                shade (direction, strength, softness) darkening it from a side
 
@@ -518,13 +520,32 @@ def nexus_style(export: Export, large: Planet) -> dict:
     """The nexus style from the Play screen's large planet: its surface's additive materials but
     its painting (the hex grid) as a shield about the body, its ring, and the shade."""
     surface = next(p for p in large.parts if p["role"] == "surface")
-    shield = [k for k in surface["materials"]
-              if export.materials[k]["blend"] != "opaque" and not (export.materials[k]["diffuse"] or {}).get("texture")]
+    shield = shield_materials(export, surface)
     if not shield:
         raise SystemExit("the Play screen's large planet has no hex grid to make the nexus style's shield of")
     parts = [{**surface, "role": "shield", "pattern": {"kind": "hex"}, "materials": shield}] + [p for p in large.parts if p["role"] == "ring"]
     tuning = {"materials": {key: dict(NEXUS_SHIELD) for key in shield}}
     return {**planet_file(export, "style", parts, None, NEXUS_SHADE), "tuning": tuning}
+
+def shield_materials(export: Export, surface: dict) -> list[str]:
+    """A Play screen planet's shield: its surface's blended materials with no painting (the hex grid)."""
+    return [k for k in surface["materials"]
+            if export.materials[k]["blend"] != "opaque" and not (export.materials[k]["diffuse"] or {}).get("texture")]
+
+
+def bare_play(export: Export, planet: Planet) -> dict:
+    """A Play screen planet without what the nexus style puts about a world: its surface without
+    the shield (the hex grid), and no ring (the style brings its own), to wear the style or none."""
+    parts = []
+    for part in planet.parts:
+        if part["role"] == "ring":
+            continue
+        if part["role"] == "surface":
+            shield = set(shield_materials(export, part))
+            part = {**part, "materials": [k for k in part["materials"] if k not in shield]}
+        parts.append(part)
+    return planet_file(export, planet.kind, parts, planet.light)
+
 
 def play_planets(storage: Storage, export: Export, baked: dict) -> dict[str, Planet]:
     """The Play screen's planets, each about its root bone, its body a unit radius (the large and
@@ -701,6 +722,9 @@ def export(storage: Storage, out: Path) -> dict:
     planets.update(flyby_planets(storage, ex, baked))
     files = {key: planet.file() for key, planet in planets.items()}
     files["style-nexus"] = nexus_style(ex, planets["play-large"])
+    # Each Play screen planet bare too (no shield, no ring), to wear the nexus style or none.
+    for key in PLAY_TEMPLATES:
+        files[f"{key}-bare"] = bare_play(ex, planets[key])
     folder = out / "planets"
     folder.mkdir(parents=True, exist_ok=True)
     textures = texture_files(storage, ex.textures, ex.alpha_read, out, baked, ex.sources, ex.baked_from)

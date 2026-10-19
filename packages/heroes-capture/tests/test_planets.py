@@ -155,7 +155,8 @@ def test_a_layer_on_the_second_coordinates_is_baked_over_the_first():
 def test_the_planets_from_the_game_s_data(storage, tmp_path: Path):
     index = planets.export(storage, tmp_path)
     ids = {p["id"]: p["kind"] for p in index["planets"]}
-    assert {k for k, v in ids.items() if v == "play"} == {"play-large", "play-medium", "play-small"}
+    templates = {"play-large", "play-medium", "play-small"}
+    assert {k for k, v in ids.items() if v == "play"} == templates | {f"{k}-bare" for k in templates}
     assert {k for k, v in ids.items() if v == "world"} == {"azeroth", "korhal", "sanctuary"}
     assert {k for k, v in ids.items() if v == "painted"} == {f"planet-{n}" for n in range(1, 10)}
     # The Play screen's own set, where the game puts it (its camera at y -41 looking along +y).
@@ -176,6 +177,13 @@ def test_the_planets_from_the_game_s_data(storage, tmp_path: Path):
     assert "mapping2" not in body
     assert ring["shape"]["kind"] == "ring" and ring["shape"]["inner"] < ring["shape"]["outer"] < 1 and ring["shape"]["depth"] < 0
     assert ring["mapping"]["kind"] == "ring" and large.get("light") is None
+    # Bare, to wear the nexus style: its painting and glow, no hex grid, no ring (the style brings both).
+    bare = json.loads((tmp_path / "planets" / "play-large-bare.json").read_text())
+    assert [p["role"] for p in bare["parts"]] == ["surface"]
+    assert set(bare["parts"][0]["materials"]) < set(body["materials"])
+    assert all(bare["materials"][k]["blend"] == "opaque" or (bare["materials"][k]["diffuse"] or {}).get("texture")
+               for k in bare["parts"][0]["materials"])
+    assert "play-large-bare" not in play  # not the Play screen's own
 
     korhal = json.loads((tmp_path / "planets" / "korhal.json").read_text())
     shells = [p for p in korhal["parts"] if p["shape"]["kind"] == "sphere" and p["shape"]["side"] == "far"]
