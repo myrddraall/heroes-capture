@@ -366,7 +366,9 @@ unless a scene says otherwise), set in its tuning's `variants` as its own shield
 as its spread and its fresnel's turn as the side it spreads from, `spreadFrom`; its glow the
 data's, and no shade, its painting being shaded); its ring and mask are the large one's. A planet's `tuning` (`TUNING` in planets.py: light strength,
 shade, and its materials' settings by name: strength, blend, glow, spread, its pattern's scale,
-cut, width and softness; the nexus style's `NEXUS_SHIELD` for its shield material) is how the
+cut, width and softness; the nexus style's `NEXUS_SHIELD` for its shield material, its hexes 2.5 times the game's
+size; the pattern says how many hexes a tile of the grid texture has, `HEX_ACROSS`, counted in it,
+so the app's size 1 is the game's) is how the
 app shows it where the data alone isn't right, set by eye against the tutorial's shots. A model whose entry gives no file is found through
 its parents' (`Doodad`:
 `Assets\Doodads\##id##\##id##.m3`).

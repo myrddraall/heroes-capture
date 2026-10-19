@@ -190,7 +190,7 @@ def test_the_planets_from_the_game_s_data(storage, tmp_path: Path):
     assert shields["play-medium"]["strength"] == pytest.approx(0.8) and shields["play-small"]["spread"] == pytest.approx(0.2)
     for shield in shields.values():
         assert math.hypot(*shield["spreadFrom"]) == pytest.approx(1, abs=1e-3) and shield["spreadFrom"][1] < 0  # on its face
-    assert shields["play-large"]["spreadFrom"][0] < 0 < shields["play-medium"]["spreadFrom"][0]  # leaning left, and right
+    assert shields["play-medium"]["spreadFrom"][0] < 0 < shields["play-large"]["spreadFrom"][0]  # brightest on the left, and right
 
     korhal = json.loads((tmp_path / "planets" / "korhal.json").read_text())
     shells = [p for p in korhal["parts"] if p["shape"]["kind"] == "sphere" and p["shape"]["side"] == "far"]
@@ -213,7 +213,7 @@ def test_the_planets_from_the_game_s_data(storage, tmp_path: Path):
     # The nexus style: the Play planet's hex grid as a shield, its ring, and a light that shades.
     assert index["styles"] == [{"id": "nexus"}]
     assert [p["role"] for p in nexus["parts"]] == ["shield", "ring"] and nexus["kind"] == "style"
-    assert nexus["parts"][0]["pattern"] == {"kind": "hex"}  # its hexes drawn by the app
+    assert nexus["parts"][0]["pattern"] == {"kind": "hex", "across": planets.HEX_ACROSS}  # its hexes drawn by the app, as many as the texture's
     assert all(nexus["materials"][k]["blend"] != "opaque" for k in nexus["parts"][0]["materials"])
     assert nexus["tuning"] == {"materials": {k: planets.NEXUS_SHIELD for k in nexus["parts"][0]["materials"]}}
     assert all(k in korhal["materials"] for k in korhal["tuning"]["materials"])  # its tuning names its own materials

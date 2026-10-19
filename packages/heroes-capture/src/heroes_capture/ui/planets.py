@@ -111,11 +111,16 @@ BAKE_SIZE = 512
 # the upper right, as the Play screen's painting has its planets (strength: how dark; softness:
 # how gradually it comes on, the facing to this power).
 NEXUS_SHADE = {"direction": [-0.78, -0.3, -0.55], "strength": 0.85, "softness": 1.0}
+# The hexes across one tile of the Play screen planets' grid texture (Storm_LootUI_Grid_DIff):
+# counted in it, ten across and twelve rows down; the app draws the pattern standing for it as
+# many round a part as the texture's tiling makes them, so its size 1 is the game's.
+HEX_ACROSS = 10
 # How the nexus style's shield material shows (the app's knobs, set by eye): its hex grid is
 # drawn by the app (the game's grid texture is too soft to read at a planet's size: `pattern`),
-# spread over the face (a floor under its fresnel), its lines of a width and softly aglow about
-# themselves, and glowing on their own (into the bloom), so they read over a world's own lights.
-NEXUS_SHIELD = {"spread": 0.6, "scale": 1.0, "width": 0.08, "soft": 0.3, "glow": 2.5}
+# its hexes 2.5 times the game's on the large planet (24 round a world, not 60), spread over the
+# face (a floor under its fresnel), its lines of a width and softly aglow about themselves, and
+# glowing on their own (into the bloom), so they read over a world's own lights.
+NEXUS_SHIELD = {"spread": 0.6, "scale": 2.5, "width": 0.08, "soft": 0.3, "glow": 2.5}
 # How each planet is best shown where the data alone isn't it, set by eye against the tutorial's
 # own shots (the app's defaults otherwise): lighting (its light times this), shade, and its
 # materials' settings by name (strength, blend, glow, spread, its pattern's scale, cut, width, soft).
@@ -529,7 +534,7 @@ def nexus_style(export: Export, large: Planet) -> dict:
     shield = shield_materials(export, surface)
     if not shield:
         raise SystemExit("the Play screen's large planet has no hex grid to make the nexus style's shield of")
-    parts = [{**surface, "role": "shield", "pattern": {"kind": "hex"}, "materials": shield}] + [p for p in large.parts if p["role"] == "ring"]
+    parts = [{**surface, "role": "shield", "pattern": {"kind": "hex", "across": HEX_ACROSS}, "materials": shield}] + [p for p in large.parts if p["role"] == "ring"]
     tuning = {"materials": {key: dict(NEXUS_SHIELD) for key in shield}}
     return {**planet_file(export, "style", parts, None, NEXUS_SHADE), "tuning": tuning}
 
@@ -539,10 +544,10 @@ def shield_materials(export: Export, surface: dict) -> list[str]:
             if export.materials[k]["blend"] != "opaque" and not (export.materials[k]["diffuse"] or {}).get("texture")]
 
 
-def towards(yaw: float, pitch: float) -> list[float]:
+def spread_from(yaw: float, pitch: float) -> list[float]:
     """The point on a body's face (its frame: y away from the eye) a fresnel turned by `yaw` (to
-    the right) and `pitch` (upwards, negative) leans to: where what faced the eye has moved."""
-    return [round(math.cos(pitch) * math.sin(yaw), 4), round(-math.cos(pitch) * math.cos(yaw), 4), round(-math.sin(pitch), 4)]
+    the right) and `pitch` (upwards, negative) is brightest on: opposite where the turn leans."""
+    return [round(-math.cos(pitch) * math.sin(yaw), 4), round(-math.cos(pitch) * math.cos(yaw), 4), round(math.sin(pitch), 4)]
 
 
 def worn_shield(export: Export, own: str, style: str) -> dict:
@@ -553,7 +558,7 @@ def worn_shield(export: Export, own: str, style: str) -> dict:
     fresnel = mine["fresnel"]
     return {"strength": round(mine["brightMult"] / theirs["brightMult"], 4),
             "scale": round(theirs["tiling"][0] / mine["tiling"][0], 4),
-            "spread": fresnel["min"], "spreadFrom": towards(fresnel["yaw"], fresnel["pitch"]), "glow": 1.0}
+            "spread": fresnel["min"], "spreadFrom": spread_from(fresnel["yaw"], fresnel["pitch"]), "glow": 1.0}
 
 
 def play_base(export: Export, planet: Planet, style_id: str, style: dict) -> dict:
