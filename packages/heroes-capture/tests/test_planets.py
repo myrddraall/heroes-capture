@@ -116,11 +116,15 @@ def test_a_linear_mapping_is_fitted_where_it_fits_better():
 
 def test_a_ring_s_mapping_u_greatest_at_one_azimuth():
     t = np.linspace(-math.pi, math.pi, 72, endpoint=False)
-    points = np.c_[np.cos(t), np.full(72, -0.6), np.sin(t)]
     top = 1.0  # u greatest where the azimuth is 1 radian
-    uvs = np.c_[0.5 * (1 - np.abs(((t - top + math.pi) % (2 * math.pi)) - math.pi) / math.pi), np.zeros(72)]
+    u = 0.5 * (1 - np.abs(((t - top + math.pi) % (2 * math.pi)) - math.pi) / math.pi)
+    # Three circles of vertices: the edges (v 0) at radii 1 and 2, the brightest (v 1) at 1.25.
+    radii = np.repeat([1.0, 1.25, 2.0], 72)
+    points = np.c_[np.tile(np.cos(t), 3) * radii, np.full(216, -0.6), np.tile(np.sin(t), 3) * radii]
+    uvs = np.c_[np.tile(u, 3), np.repeat([0.0, 1.0, 0.0], 72)]
     mapping = planets.mapping_of({"kind": "ring"}, points, uvs, "a test ring")
-    assert mapping == {"kind": "ring", "from": pytest.approx(top, abs=0.05), "uMax": pytest.approx(0.5, abs=0.01)}
+    assert mapping == {"kind": "ring", "from": pytest.approx(top, abs=0.05), "uMax": pytest.approx(0.5, abs=0.01),
+                       "mid": pytest.approx(0.25, abs=1e-3)}
 
 
 def test_a_region_of_several_spheres_is_several_parts_about_their_own_centres():
@@ -185,9 +189,24 @@ def test_the_planets_from_the_game_s_data(storage, tmp_path: Path):
     worn = {k: json.loads((tmp_path / "planets" / f"{k}.json").read_text())["tuning"] for k in templates}
     assert all(t["style"] == "nexus" and t["variants"]["nexus"]["shade"] == {"strength": 0} for t in worn.values())
     shields = {k: t["variants"]["nexus"]["materials"][grid] for k, t in worn.items()}
-    assert shields["play-large"]["scale"] == 1 and shields["play-large"]["strength"] == 1  # the style's own grid
+    assert shields["play-large"]["scale"] == 1  # the style's own grid
+    assert shields["play-large"]["strength"] == planets.PLAY_GRID["strength"]  # as the game shows it
+    assert all(shield["falloff"] == planets.PLAY_GRID["falloff"] for shield in shields.values())
     assert shields["play-medium"]["scale"] == pytest.approx(1.5) and shields["play-small"]["scale"] == pytest.approx(6)  # tiled 6, 4, 1 round
-    assert shields["play-medium"]["strength"] == pytest.approx(0.8) and shields["play-small"]["spread"] == pytest.approx(0.2)
+    assert shields["play-medium"]["strength"] == pytest.approx(0.8 * planets.PLAY_GRID["strength"]) and shields["play-small"]["spread"] == pytest.approx(0.2)
+    assert all(shield["drawAs"] == "texture" for shield in shields.values())  # the game's grid, as the game draws it
+    # Each its own mask (its file lists it, to load), on its own mapping, and its own ring.
+    medium = json.loads((tmp_path / "planets" / "play-medium.json").read_text())
+    worn_medium = medium["tuning"]["variants"]["nexus"]
+    [mask] = worn_medium["materials"][grid]["masks"]
+    assert mask.startswith("play-medium-") and mask in medium["textures"]
+    assert worn_medium["parts"]["shield"]["mapping"] == medium["parts"][0]["mapping"]
+    assert worn_medium["parts"]["ring"]["shape"]["kind"] == "ring"
+    assert 3 < worn_medium["parts"]["ring"]["shape"]["seen"] < 20  # seen from the game's camera, in its radii
+    # The rings' brightest circle where the mesh has it: the large one's a third across, on its limb.
+    assert worn["play-large"]["variants"]["nexus"]["parts"]["ring"]["mapping"]["mid"] == pytest.approx(0.31, abs=0.01)
+    assert worn_medium["parts"]["ring"]["mapping"]["mid"] == pytest.approx(0.65, abs=0.01)
+    assert worn_medium["parts"]["ring"]["shape"] != worn["play-large"]["variants"]["nexus"]["parts"]["ring"]["shape"]
     for shield in shields.values():
         assert math.hypot(*shield["spreadFrom"]) == pytest.approx(1, abs=1e-3) and shield["spreadFrom"][1] < 0  # on its face
     assert shields["play-medium"]["spreadFrom"][0] < 0 < shields["play-large"]["spreadFrom"][0]  # brightest on the left, and right

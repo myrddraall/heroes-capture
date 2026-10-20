@@ -364,7 +364,7 @@ surface alone, wearing `nexus` for its shield and ring (the index names the styl
 unless a scene says otherwise), set in its tuning's `variants` as its own shield is in the data
 (the grid's brightness, its size from its tiling against the large one's, its fresnel's floor
 as its spread and its fresnel's turn as the side it spreads from, `spreadFrom`; its glow the
-data's, and no shade, its painting being shaded); its ring and mask are the large one's. A planet's `tuning` (`TUNING` in planets.py: light strength,
+data's, drawn with the game's grid texture, no shade, its painting being shaded; and its own mask, on its own surface's mapping, and its own ring, in the variant's `masks` and `parts`). A Play screen planet's ring carries the distance, in its body's radii, the game's camera sees it from (`seen`): modelled to lie on the limb from there, the app keeps it there from anywhere. Their grid shows as the game shows it by `PLAY_GRID` (its fresnel's `falloff` and a share of its brightness, measured band by band inside the large planet's outline against a Quick Match screenshot). A ring's mapping says where across it its v peaks (`mid`: its mesh is three circles, the edges at v 0 and one between at v 1). A planet's `tuning` (`TUNING` in planets.py: light strength,
 shade, and its materials' settings by name: strength, blend, glow, spread, its pattern's scale,
 cut, width and softness; the nexus style's `NEXUS_SHIELD` for its shield material, its hexes 2.5 times the game's
 size; the pattern says how many hexes a tile of the grid texture has, `HEX_ACROSS`, counted in it,

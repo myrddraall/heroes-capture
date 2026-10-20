@@ -39,11 +39,11 @@ A style dresses any planet as another: "nexus" is the Play screen's look for a w
 Play screen's large planet: its hex-grid shield and its atmosphere ring about the world's own
 surface, and a shade that leaves most of it dark but a crescent, as the Play screen paints its
 own (the shade is this tool's, set by eye against that painting: the game lights nothing there).
-The Play screen's planets wear it as their own, each as the data has its own shield: the grid's
-brightness, size (its tiling against the large one's), how far it spreads (its fresnel's floor)
+The Play screen's planets wear it as their own, each as the data has its own shield: drawn as the
+game draws it (its grid texture, not the style's hexes), the grid's brightness, size (its tiling against the large one's), how far it spreads (its fresnel's floor)
 and the side it spreads from (its fresnel's turn), glowing as the data has it (no boost: there
-are no lights to read over), and no shade (their painting is shaded already). Where the shields
-differ otherwise (each one's ring and mask), they take the large one's.
+are no lights to read over), and no shade (their painting is shaded already); each its own mask
+(where its grid shows) on its own surface's mapping, and its own ring.
     <out>/<planet>-<texture>.webp  a layer baked into the first texture coordinates (see below)
 
 A layer that reads a mesh's second texture coordinates gets their mapping too (mapping2) where
@@ -121,6 +121,13 @@ HEX_ACROSS = 10
 # face (a floor under its fresnel), its lines of a width and softly aglow about themselves, and
 # glowing on their own (into the bloom), so they read over a world's own lights.
 NEXUS_SHIELD = {"spread": 0.6, "scale": 2.5, "width": 0.08, "soft": 0.3, "glow": 2.5}
+# How the Play screen planets' grid (their own shield, worn as the nexus style's) shows as the
+# game shows it, measured against a Quick Match screenshot of the Play screen: its brightness
+# just inside the large planet's outline, band by band from 0.8 to 0.98 of its radius, against
+# ours with its shield on and off. The app's fresnel (its formula squared, the default `falloff`
+# 2) rose too steeply toward the edge; to the power 1.3 it rises as the game's does (the ratio
+# flat across the bands), and at 0.63 of the data's brightness it matches them, each within 8%.
+PLAY_GRID = {"falloff": 1.3, "strength": 0.63}
 # How each planet is best shown where the data alone isn't it, set by eye against the tutorial's
 # own shots (the app's defaults otherwise): lighting (its light times this), shade, and its
 # materials' settings by name (strength, blend, glow, spread, its pattern's scale, cut, width, soft).
@@ -309,12 +316,18 @@ def fit_linear_mapping(positions: np.ndarray, uvs: np.ndarray) -> tuple[dict, fl
 def ring_mapping(positions: np.ndarray, uvs: np.ndarray) -> dict:
     """A ring's texture coordinates, as the Play screen's atmospheres have them: u greatest at
     one azimuth (radians in the xz plane, from +x towards +z), falling to nothing at the
-    opposite side either way round; v nothing at both edges, all midway."""
-    u = uvs[:, 0]
+    opposite side either way round; v nothing at both edges, all at one circle between (its
+    vertices are on three circles), `mid` of the way across from the inner edge (the large
+    planet's, a third: where its limb is from the game's camera, so its brightest lies there)."""
+    u, v = uvs[:, 0], uvs[:, 1]
     azimuth = np.arctan2(positions[:, 2], positions[:, 0])
     top = azimuth[u > u.max() - 0.02]
     where = math.atan2(np.sin(top).mean(), np.cos(top).mean())
-    return {"kind": "ring", "from": round(where, 5), "uMax": round(float(u.max()), 5)}
+    radius = np.hypot(positions[:, 0], positions[:, 2])
+    lo, hi = radius.min(), radius.max()
+    peak = radius[v > v.max() - 0.02].mean()
+    mid = (peak - lo) / (hi - lo) if hi > lo else 0.5
+    return {"kind": "ring", "from": round(where, 5), "uMax": round(float(u.max()), 5), "mid": round(float(mid), 4)}
 
 
 def mapping_of(shape: dict, positions: np.ndarray, uvs: np.ndarray, what: str) -> dict:
@@ -552,34 +565,47 @@ def spread_from(yaw: float, pitch: float) -> list[float]:
 
 def worn_shield(export: Export, own: str, style: str) -> dict:
     """How a Play screen planet shows the nexus style's shield material (`style`) as its own
-    shield (`own`) is in the data: its grid's brightness and size against the style's, its
-    fresnel's floor (how far it spreads) and turn (the side it spreads from), its glow the data's."""
+    shield (`own`) is in the data: as the game draws it (its grid texture, not the style's drawn
+    hexes), its grid's brightness and size against the style's, its fresnel's floor (how far it
+    spreads) and turn (the side it spreads from), its glow the data's."""
     mine, theirs = export.materials[own]["emissive"], export.materials[style]["emissive"]
     fresnel = mine["fresnel"]
-    return {"strength": round(mine["brightMult"] / theirs["brightMult"], 4),
+    return {"strength": round(mine["brightMult"] / theirs["brightMult"] * PLAY_GRID["strength"], 4),
+            "falloff": PLAY_GRID["falloff"],
             "scale": round(theirs["tiling"][0] / mine["tiling"][0], 4),
-            "spread": fresnel["min"], "spreadFrom": spread_from(fresnel["yaw"], fresnel["pitch"]), "glow": 1.0}
+            "spread": fresnel["min"], "spreadFrom": spread_from(fresnel["yaw"], fresnel["pitch"]), "glow": 1.0,
+            "drawAs": "texture"}
 
 
 def play_base(export: Export, planet: Planet, style_id: str, style: dict) -> dict:
     """A Play screen planet as a base: its surface without its shield (the hex grid) and no ring,
-    wearing the style (`style_id`) that brings both, set as its own shield is (and not shaded:
-    its painting is)."""
-    parts, own = [], None
+    wearing the style (`style_id`) that brings both, set as its own are in the data (and not
+    shaded: its painting is): the style's shield on its own surface's mapping, with its own mask
+    (the texture listed in its file, for the app to load), and the style's ring as its own ring."""
+    parts, own, ring, surface = [], None, None, None
     for part in planet.parts:
         if part["role"] == "ring":
+            ring = part
             continue
         if part["role"] == "surface":
+            surface = part
             shield = shield_materials(export, part)
             if len(shield) != 1:
                 raise SystemExit(f"{planet.name}: {len(shield)} hex-grid materials, not one")
             own = shield[0]
             part = {**part, "materials": [k for k in part["materials"] if k != own]}
         parts.append(part)
+    if ring is None or surface is None:
+        raise SystemExit(f"{planet.name}: no surface and ring to wear the {style_id} style as its own")
     worn = next(p for p in style["parts"] if p["role"] == "shield")["materials"][0]
+    masks = [layer["texture"] for layer in export.materials[own]["alphaMasks"]]
     out = planet_file(export, planet.kind, parts, planet.light)
+    out["textures"] = sorted(set(out["textures"]) | set(masks))
     out["tuning"] = {"style": style_id, "variants": {style_id: {
-        "shade": {"strength": 0}, "materials": {worn: worn_shield(export, own, worn)}}}}
+        "shade": {"strength": 0},
+        "materials": {worn: {**worn_shield(export, own, worn), "masks": masks}},
+        "parts": {"shield": {"mapping": surface["mapping"]},
+                  "ring": {"shape": ring["shape"], "mapping": ring["mapping"]}}}}}
     return out
 
 
@@ -588,6 +614,7 @@ def play_planets(storage: Storage, export: Export, baked: dict) -> dict[str, Pla
     medium ones a hemisphere towards -Y, the small one a sphere), as the model poses them without
     a camera to face (their billboards as modelled: facing -Y)."""
     info = play.cutscene(storage)
+    eye = play.camera(info["camera"])["eye"]
     m3 = M3(model_file(storage, info["model"]))
     groups = m3.groups()
     played = list(groups[info["animation"]])
@@ -615,6 +642,12 @@ def play_planets(storage: Storage, export: Export, baked: dict) -> dict[str, Pla
         for i, region in sorted(regions, key=lambda ir: ir != body):
             materials = [r for ref in region_materials.get(i, []) for r in m3.material(ref)]
             planet.add(m3, region, world, into, materials, f"{key}'s {names[m3.region_bone(region)]}")
+        # Its ring as the game's camera sees it: modelled to lie on the body's limb from there (the
+        # app keeps it there seen from elsewhere), so how far that is, in the body's radii.
+        seen = round(float(np.linalg.norm(np.array(planet.placed[0]) - np.array(eye))) / planet.placed[1], 4)
+        for part in planet.parts:
+            if part["role"] == "ring":
+                part["shape"]["seen"] = seen
         planets[key] = planet
     return planets
 
