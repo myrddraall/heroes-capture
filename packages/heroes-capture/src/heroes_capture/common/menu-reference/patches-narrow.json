@@ -1,0 +1,29 @@
+{
+ "source": "main menu at 1680x1344, the narrow layout (the game draws 5:4 on a 7:6 monitor); templates at half size, fractions of the interface height 1260",
+ "patches": [
+  {
+   "name": "nav",
+   "anchor": "top-left",
+   "w": 0.42857142857142855,
+   "h": 0.06349206349206349,
+   "dx": 0.0,
+   "dy": 0.0
+  },
+  {
+   "name": "chat",
+   "anchor": "bottom-right",
+   "w": 0.2746031746031746,
+   "h": 0.04285714285714286,
+   "dx": 0.23015873015873015,
+   "dy": 0.009523809523809525
+  },
+  {
+   "name": "buttons",
+   "anchor": "bottom-right",
+   "w": 0.13174603174603175,
+   "h": 0.04285714285714286,
+   "dx": 0.09523809523809523,
+   "dy": 0.009523809523809525
+  }
+ ]
+}

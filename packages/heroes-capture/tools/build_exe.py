@@ -78,7 +78,7 @@ def main() -> None:
     binaries = [arg for name in LIBRARIES for arg in ("--add-binary", f"{PACKAGE / 'native' / name}{os.pathsep}.")]
     run(sys.executable, "-m", "PyInstaller", "--onefile", "--noconfirm", "--console", "--name", NAME,
         "--version-file", str(BUILD / "version_info.txt"),
-        "--collect-data", "heroes_capture",  # the Galaxy template, menu templates, viewer page, opening timers
+        "--collect-data", "heroes_capture",  # the map script parts, menu templates, viewer page, validated maps
         "--collect-submodules", "heroes_capture",  # imported lazily by the command
         "--hidden-import", "_libvips",  # pyvips' compiled binding, imported inside a try
         *(["--collect-submodules", "dxcam"] if sys.platform == "win32" else []),  # its compiled kernel is imported by name

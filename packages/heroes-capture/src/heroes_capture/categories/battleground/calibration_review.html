@@ -1,0 +1,373 @@
+<meta charset="utf-8">
+<title>Calibration Review</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* One working column of question cards, a sticky submit bar; Order blue for actions, Chaos orange only where a team is meant. */
+:root {
+  --bg: #eef0f3; --surface: #ffffff; --ink: #1a2130; --muted: #5a6475; --line: #d5dae2;
+  --accent: #2b62c9; --accent-ink: #ffffff; --chaos: #c4502a; --good: #2b7d50; --warn: #9a6512; --pick: #2b62c9;
+  --display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --body: "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #10141b; --surface: #18202b; --ink: #e5e9ef; --muted: #98a3b3; --line: #2a3442;
+  --accent: #6d9cff; --accent-ink: #0d1320; --chaos: #e5825c; --good: #5cbf86; --warn: #dcaa4a; --pick: #8fb3ff; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #10141b; --surface: #18202b; --ink: #e5e9ef; --muted: #98a3b3; --line: #2a3442;
+  --accent: #6d9cff; --accent-ink: #0d1320; --chaos: #e5825c; --good: #5cbf86; --warn: #dcaa4a; --pick: #8fb3ff; color-scheme: dark }
+body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--body); }
+.page { max-width: 1280px; margin: 0 auto; padding-inline: 16px; padding-block: 28px 120px; display: grid; gap: 36px; }
+h1, h2, h3 { font-family: var(--display); font-weight: 700; letter-spacing: 0.01em; text-wrap: balance; margin: 0; line-height: 1.1; }
+h1 { font-size: 2.4rem; }
+h2 { font-size: 1.65rem; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+h3 { font-size: 1.2rem; font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+.muted { color: var(--muted); }
+.mono, .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.eyebrow { font: 500 0.75rem/1 var(--mono); text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+header { display: grid; gap: 10px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { font: 500 0.8rem/1 var(--mono); padding: 6px 9px; border-radius: 4px; border: 1px solid var(--line); background: var(--surface); }
+.chip b { font-weight: 500; color: var(--good); }
+.chip.warn b { color: var(--warn); }
+.count { font: 500 0.85rem/1 var(--mono); color: var(--muted); }
+section { display: grid; gap: 14px; }
+.cards { display: grid; gap: 14px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.team-order { color: var(--accent); } .team-chaos { color: var(--chaos); }
+.empty { color: var(--muted); font-style: italic; }
+.todo { display: none; margin-left: 10px; font: 500 0.8rem/1 var(--mono); color: var(--warn); vertical-align: middle; }
+.unanswered { border-color: var(--warn); }
+.unanswered .todo { display: inline; }
+/* Films */
+.film-body { display: grid; grid-template-columns: minmax(0, 720px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.big { width: 100%; max-width: 720px; aspect-ratio: 1; background-repeat: no-repeat; border-radius: 4px; border: 1px solid var(--line); background-color: #000; }
+.frames { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; }
+.frame { padding: 0; border: 2px solid transparent; border-radius: 4px; background-color: #000; background-repeat: no-repeat; aspect-ratio: 1; cursor: pointer; position: relative; }
+.frame span { position: absolute; left: 2px; bottom: 2px; font: 500 0.66rem/1 var(--mono); color: #fff; background: rgba(0,0,0,0.6); padding: 2px 3px; border-radius: 2px; }
+.frame.mark-settle::after, .frame.mark-table::before { content: ""; position: absolute; top: 3px; width: 7px; height: 7px; border-radius: 50%; }
+.frame.mark-settle::after { right: 3px; background: var(--warn); }
+.frame.mark-table::before { right: 13px; background: var(--good); }
+.frame[aria-pressed="true"] { border-color: var(--pick); box-shadow: 0 0 0 2px var(--pick); }
+.frame:focus-visible, button:focus-visible, textarea:focus-visible, input:focus-visible + label { outline: 2px solid var(--pick); outline-offset: 2px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 0.85rem; color: var(--muted); }
+.legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.picked { font: 500 1rem/1.3 var(--mono); }
+/* Pictures */
+/* Pictures to compare: big, two to a row (one on a narrow screen); each opens at full size. */
+.shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 560px), 1fr)); gap: 12px; }
+.shot { display: grid; gap: 4px; margin: 0; min-width: 0; }
+.shot img { width: 100%; max-width: 100%; aspect-ratio: 1; object-fit: contain; background: #000; border-radius: 4px; border: 1px solid var(--line); }
+.shot a { display: block; }
+.shot figcaption { font-size: 0.85rem; color: var(--muted); }
+dl.measures { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px 16px; margin: 0; }
+dl.measures div { display: grid; gap: 2px; }
+dt { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+dd { margin: 0; font: 500 0.95rem/1.2 var(--mono); }
+dd.off { color: var(--warn); }
+/* Choices */
+.choice { display: inline-flex; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+.choice input { position: absolute; opacity: 0; pointer-events: none; }
+.choice label { padding: 7px 14px; cursor: pointer; font-weight: 500; border-left: 1px solid var(--line); }
+.choice label:first-of-type { border-left: 0; }
+.choice input:checked + label { background: var(--accent); color: var(--accent-ink); }
+textarea { width: 100%; box-sizing: border-box; min-height: 64px; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 8px 10px; resize: vertical; }
+.parts { font: 0.85rem/1.45 var(--mono); color: var(--muted); }
+.bar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--surface); border-top: 1px solid var(--line); padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)); }
+.bar-inner { max-width: 1280px; margin: 0 auto; display: flex; gap: 14px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.submit { font: 600 1rem/1 var(--body); padding: 11px 20px; border: 0; border-radius: 5px; background: var(--accent); color: var(--accent-ink); cursor: pointer; }
+.submit[disabled] { opacity: 0.55; cursor: progress; }
+.status { font-size: 0.9rem; color: var(--muted); min-width: 0; }
+.status.ok { color: var(--good); } .status.err { color: var(--warn); }
+.banner { border: 1px solid var(--line); border-left: 4px solid var(--good); background: var(--surface); border-radius: 6px; padding: 10px 14px; }
+.fallback { display: grid; gap: 8px; }
+@media (max-width: 900px) { .film-body { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 640px) { h1 { font-size: 2rem; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<main class="page" id="page">
+  <header>
+    <span class="eyebrow">heroes-capture · map calibration</span>
+    <h1 id="title">Calibration review</h1>
+    <p class="muted" id="intro">What the calibration settled by itself is summed up below. The rest needs your eye. Submit sends your answers back, and the render is prepared from them.</p>
+    <div class="chips" id="settled"></div>
+    <div class="banner" id="submitted" hidden></div>
+  </header>
+  <section id="falls-section">
+    <h2>Fall timing <span class="count" id="falls-count"></span></h2>
+    <p><b>Pick the frame where the rubble looks right for the map:</b> debris landed, smoke and dust still there. Each kind of structure, on each team, was filmed falling, a frame every quarter second. The render shoots that kind's rubble at the moment you pick.</p>
+    <div class="legend"><span><i style="background: var(--good)"></i>Battlefield of Eternity's wait for this kind</span><span><i style="background: var(--warn)"></i>When the debris stopped moving</span></div>
+    <div class="cards" id="falls"></div>
+  </section>
+  <section id="standing-section">
+    <h2>Standing timing <span class="count" id="standing-count"></span></h2>
+    <p><b>Pick the frame where the structure looks right standing:</b> fully built, its fires and lights on. Each type was restarted and filmed through its standing animation. The render restarts every structure of the type and pauses it at the moment you pick, so it looks the same every run.</p>
+    <div class="cards" id="standing"></div>
+  </section>
+  <section id="spots-section">
+    <h2>Copy spots to check <span class="count" id="spots-count"></span></h2>
+    <p><b>Does the copy look like the structure?</b> A structure's rubble is shot from a copy of it standing on another spot. These copies only just passed the automatic check. Reject one and that structure falls by itself in the render.</p>
+    <div class="cards" id="spots"></div>
+  </section>
+  <section id="colour-section">
+    <h2>Team colour <span class="count" id="colour-count"></span></h2>
+    <p><b>Does this kind of structure change colour with its team</b> (blue for Order, red for Chaos)? When the side was switched, some structures of the kind seemed to change and some didn't, so the calibration couldn't tell. Click a picture to see it at full size.</p>
+    <div class="cards" id="colour"></div>
+  </section>
+  <section>
+    <h2>Notes</h2>
+    <textarea id="notes" aria-label="Notes for the review" placeholder="Anything else about this calibration"></textarea>
+  </section>
+</main>
+<div class="bar">
+  <div class="bar-inner">
+    <span class="status" id="status" role="status" aria-live="polite">Not submitted yet.</span>
+    <button class="submit" id="submit" type="button">Submit answers</button>
+  </div>
+</div>
+<div class="page fallback" id="fallback" hidden>
+  <p>Saving isn't available in this view. Copy these answers and paste them to Claude:</p>
+  <textarea id="fallback-text" readonly></textarea>
+</div>
+
+<script>
+const REVIEW = /*REVIEW*/null;
+const img = name => (REVIEW.images || {})[name] || "";
+const el = (tag, attrs = {}, ...kids) => {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") node.className = v; else if (k === "text") node.textContent = v; else if (v !== undefined && v !== null) node.setAttribute(k, v);
+  }
+  for (const kid of kids) if (kid) node.append(kid);
+  return node;
+};
+const answers = { falls: {}, standing: {}, spots: {}, colour: {}, motion: {}, notes: "" };
+// The questions answered (by a pick here, or listed in a saved submission), as "section:kind"; every
+// question, the same way. Submit warns while some aren't.
+const answered = new Set(), questions = new Set();
+const ask = key => questions.add(key);
+function answer(key) { answered.add(key); updateProgress(); }
+function updateProgress() {
+  const left = [...questions].filter(q => !answered.has(q)).length;
+  const status = document.getElementById("status");
+  if (!status.classList.contains("ok")) status.textContent = left ? `${answered.size} of ${questions.size} answered: ${left} still to pick.` : `All ${questions.size} answered.`;
+  document.querySelectorAll("[data-question]").forEach(n => { n.classList.toggle("unanswered", !answered.has(n.dataset.question)); });
+}
+const teamName = owner => owner === "order" ? "blue" : owner === "chaos" ? "red" : "";
+const secs = s => `${Number(s).toFixed(2)} s`;
+const shot = (name, caption) => name && img(name) ? el("figure", { class: "shot" },
+  el("a", { href: img(name), target: "_blank", rel: "noopener", title: "Open at full size" }, el("img", { src: img(name), alt: caption, loading: "lazy" })),
+  el("figcaption", { text: caption })) : null;
+
+function choice(id, options, value, onChange) {
+  const box = el("div", { class: "choice", role: "radiogroup" });
+  options.forEach(([val, label], k) => {
+    const input = el("input", { type: "radio", name: id, id: `${id}-${k}`, value: String(val) });
+    input.checked = String(value) === String(val);
+    input.addEventListener("change", () => onChange(val));
+    box.append(input, el("label", { for: `${id}-${k}`, text: label }));
+  });
+  return box;
+}
+
+// A film's card: the big frame, its time, and every frame to pick from (the answer: its index). The
+// film's picture holds its frames in rows of f.columns; it loads once the card comes near the view.
+const filmsShown = new IntersectionObserver(entries => entries.forEach(e => {
+  if (e.isIntersecting) { filmsShown.unobserve(e.target); e.target.dispatchEvent(new Event("film-near")); }
+}), { rootMargin: "800px 0px" });
+function filmCard(f, chosen, after, facts, marks = {}, section = "") {
+  if (chosen[f.kind] === undefined) chosen[f.kind] = f.preset;
+  const key = `${section}:${f.kind}`;
+  ask(key);
+  const strip = img(f.film);
+  const columns = Math.max(1, Math.min(f.columns || f.frames, f.frames));
+  const rows = Math.ceil(f.frames / columns);
+  const big = el("div", { class: "big", role: "img", "aria-label": `${f.name || f.type} ${teamName(f.owner)} filmed` });
+  const picked = el("div", { class: "picked" });
+  const frames = el("div", { class: "frames" });
+  const place = (node, k) => {
+    const col = k % columns, row = Math.floor(k / columns);
+    node.style.backgroundSize = `${columns * 100}% ${rows * 100}%`;
+    node.style.backgroundPosition = `${columns > 1 ? (col / (columns - 1)) * 100 : 0}% ${rows > 1 ? (row / (rows - 1)) * 100 : 0}%`;
+  };
+  const show = k => {
+    place(big, k);
+    picked.textContent = `Frame ${k + 1} of ${f.frames} · ${secs(k * f.step)} ${after}`;
+    frames.querySelectorAll(".frame").forEach((b, i) => b.setAttribute("aria-pressed", String(i === k)));
+  };
+  for (let k = 0; k < f.frames; k++) {
+    const b = el("button", { type: "button", class: "frame" + (k === marks.settle ? " mark-settle" : "") + (k === marks.table ? " mark-table" : ""),
+      "aria-label": `${secs(k * f.step)}`, "aria-pressed": "false" }, el("span", { text: (k * f.step).toFixed(2) }));
+    place(b, k);
+    b.addEventListener("click", () => { chosen[f.kind] = k; show(k); answer(key); });
+    frames.append(b);
+  }
+  const card = el("article", { class: "card", "data-question": key },
+    el("div", { class: "card-head" }, el("h3", {}, document.createTextNode(`${f.name || f.type} `), el("span", { class: `team-${f.owner}`, text: teamName(f.owner) }), el("span", { class: "todo", text: "not picked yet" })), el("span", { class: "muted mono", text: `${f.type} · ${facts}` })),
+    el("div", { class: "film-body" }, el("div", {}, big, picked), frames));
+  card.addEventListener("film-near", () => [big, ...frames.children].forEach(node => { node.style.backgroundImage = `url("${strip}")`; }));
+  filmsShown.observe(card);
+  show(chosen[f.kind]);
+  return card;
+}
+
+function renderFalls() {
+  const list = document.getElementById("falls");
+  document.getElementById("falls-count").textContent = `${REVIEW.falls.length} filmed`;
+  if (!REVIEW.falls.length) list.append(el("p", { class: "empty", text: "No falls were filmed: no copy passed." }));
+  for (const f of REVIEW.falls) {
+    const facts = [f.settle != null ? `debris still at ${secs(f.settle)}` : "debris never stopped moving", f.table != null ? `Battlefield of Eternity: ${secs(f.table)}` : "no Battlefield of Eternity wait for this kind"].join(" · ");
+    list.append(filmCard(f, answers.falls, "after the fall", facts,
+      { settle: f.settle == null ? -1 : Math.round(f.settle / f.step), table: f.table == null ? -1 : Math.round(f.table / f.step) }, "falls"));
+  }
+}
+
+function renderStanding() {
+  const list = document.getElementById("standing");
+  const films = REVIEW.standing || [];
+  document.getElementById("standing-count").textContent = `${films.length} kinds`;
+  if (!films.length) list.append(el("p", { class: "empty", text: "No standing films in this calibration (its standing stage hasn't run)." }));
+  for (const f of films) list.append(filmCard(f, answers.standing, "after the restart", `filmed ${secs(f.seconds || f.frames * f.step)}`, {}, "standing"));
+}
+
+function renderSpots() {
+  const list = document.getElementById("spots");
+  document.getElementById("spots-count").textContent = `${REVIEW.spots.length} to check`;
+  document.getElementById("spots-section").hidden = !REVIEW.spots.length;
+  for (const s of REVIEW.spots) {
+    if (!answers.spots[s.id]) answers.spots[s.id] = "accept";
+    const m = s.margins;
+    const measure = (label, value, off) => el("div", {}, el("dt", { text: label }), el("dd", { class: off ? "off" : "", text: value }));
+    ask(`spots:${s.id}`);
+    list.append(el("article", { class: "card", "data-question": `spots:${s.id}` },
+      el("div", { class: "card-head" }, el("h3", {}, document.createTextNode(`${s.type} ${s.id} `), el("span", { class: "todo", text: "not answered yet" })), el("span", { class: "muted mono", text: `copy at (${s.x}, ${s.y})` })),
+      el("div", { class: "shots" }, shot(s.standing, "The structure"), shot(s.copy, "Its copy on the spot"), shot(s.rubble, "The copy's rubble")),
+      el("dl", { class: "measures" },
+        measure("Drawn", `${Math.round(m.drawn * 100)}% of it`, m.drawn < 0.7),
+        measure("Brightness", `${Math.round(m.brightness * 100)}%`, Math.abs(m.brightness - 1) > 0.15),
+        measure("Colour cast", `${m.cast}`, m.cast > 15),
+        measure("More black", `${Math.round(m.dark * 100)}%`, m.dark > 0.08)),
+      choice(`spot-${s.id}`, [["accept", "Use this spot"], ["reject", "Reject"]], answers.spots[s.id], v => { answers.spots[s.id] = v; answer(`spots:${s.id}`); })));
+  }
+}
+
+function renderColour() {
+  const list = document.getElementById("colour");
+  document.getElementById("colour-count").textContent = `${REVIEW.colour.length} kinds`;
+  document.getElementById("colour-section").hidden = !REVIEW.colour.length;
+  for (const c of REVIEW.colour) {
+    const majority = c.changes.length >= c.unchanged.length;
+    if (answers.colour[c.type] === undefined) answers.colour[c.type] = majority;
+    ask(`colour:${c.type}`);
+    const which = id => c.changes.includes(id) ? "seemed to change" : "didn't seem to change";
+    list.append(el("article", { class: "card", "data-question": `colour:${c.type}` },
+      el("div", { class: "card-head" }, el("h3", {}, document.createTextNode(`${c.type} `), el("span", { class: "todo", text: "not answered yet" })), el("span", { class: "muted mono", text: `${c.changes.length} seemed to change, ${c.unchanged.length} didn't` })),
+      el("div", { class: "shots" }, ...c.pictures.map((p, k) => { const id = [...c.changes, ...c.unchanged][k]; return shot(p, `Structure ${id || ""}: ${which(id)}`); })),
+      choice(`colour-${c.type}`, [[true, "Yes, it has team colour"], [false, "No team colour"]], answers.colour[c.type], v => { answers.colour[c.type] = v; answer(`colour:${c.type}`); })));
+  }
+}
+
+function renderHeader() {
+  document.title = `${REVIEW.map} Calibration`;
+  document.getElementById("title").textContent = `${REVIEW.map} calibration`;
+  const s = REVIEW.settled;
+  const chip = (good, text, warn) => el("span", { class: "chip" + (warn ? " warn" : "") }, el("b", { text: good }), document.createTextNode(` ${text}`));
+  document.getElementById("settled").append(
+    chip(`${s.spots}`, "copy spots checked by themselves"),
+    chip(`${s.failedSpots}`, "spots rejected (black, dark, colour cast)", s.failedSpots > 0),
+    chip(`${s.noSpot.length}`, "structures with no good spot: they fall by themselves", s.noSpot.length > 0),
+    chip(`${s.changing} of ${s.structures}`, "structures change colour with the side"),
+    chip(`${s.colourTypes}`, "kinds agreed on team colour"),
+    el("span", { class: "chip mono", text: `tool ${REVIEW.tool || "?"} · calibration v${REVIEW.version}` }));
+}
+
+function fill(saved) {
+  if (!saved || !saved.submitted) return;
+  Object.assign(answers.falls, saved.falls || {});
+  Object.assign(answers.standing, saved.standing || {});
+  Object.assign(answers.spots, saved.spots || {});
+  Object.assign(answers.colour, saved.colour || {});
+  Object.assign(answers.motion, saved.motion || {});
+  // (A submission lists what was answered; one from before that only gives the values to start from.)
+  for (const key of saved.answered || []) answered.add(key);
+  answers.notes = saved.notes || "";
+  const banner = document.getElementById("submitted");
+  banner.hidden = false;
+  banner.textContent = `Submitted ${saved.at ? new Date(saved.at).toLocaleString() : ""}. Submitting again replaces those answers.`;
+  document.getElementById("status").textContent = "Answers on file.";
+}
+
+let warned = false;
+async function submit() {
+  const button = document.getElementById("submit");
+  const status = document.getElementById("status");
+  const left = [...questions].filter(q => !answered.has(q));
+  if (left.length && !warned) {
+    warned = true;
+    status.className = "status err";
+    status.textContent = `${left.length} not picked yet (marked "not picked yet"). Click Submit again to send anyway, with their starting values.`;
+    const first = document.querySelector(".unanswered");
+    if (first) first.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+  const notes = document.getElementById("notes");
+  answers.notes = notes.value;
+  const payload = { submitted: true, at: new Date().toISOString(), ...answers, answered: [...answered] };
+  const text = JSON.stringify(payload, null, 1);
+  const artifact = window.claude ? await window.claude.use("artifact").catch(() => null) : null;
+  if (!artifact) {
+    document.getElementById("fallback").hidden = false;
+    document.getElementById("fallback-text").value = text;
+    status.className = "status err";
+    status.textContent = "Saving isn't available here; the answers are below to copy.";
+    return;
+  }
+  button.disabled = true;
+  status.className = "status";
+  status.textContent = "Saving…";
+  try {
+    await artifact.publish({ "answers.json": { content: text, contentType: "application/json" } });
+    status.className = "status ok";
+    status.textContent = `Submitted ${new Date().toLocaleTimeString()}. Telling Claude…`;
+    // A saved version wakes no one: a comment sent to Claude is what tells the session to carry on.
+    const comments = await window.claude.use("comments").catch(() => null);
+    const can = comments ? await comments.canSendToClaude().catch(() => "off") : "off";
+    if (can === "available") {
+      try {
+        await comments.sendToClaude({ anchor: await comments.anchorFor(button), text: `Calibration review submitted for ${REVIEW.map}: answers.json is saved. Apply it and queue the render.` });
+        status.textContent = `Submitted ${new Date().toLocaleTimeString()}. Claude has been told and carries on from here.`;
+      } catch (e) {
+        status.textContent = `Submitted ${new Date().toLocaleTimeString()}. Couldn't tell Claude from here (${e && e.code || "error"}): say "submitted" in the chat.`;
+      }
+    } else {
+      status.textContent = `Submitted ${new Date().toLocaleTimeString()}. Say "submitted" in the chat so Claude carries on${can === "no_session" ? " (no Claude session is listening right now)" : ""}.`;
+    }
+  } catch (e) {
+    status.className = "status err";
+    status.textContent = e && e.code === "not_writer" || e && e.code === "not_granted" ? "This view is read-only: open the review from your own account to submit."
+      : e && e.code === "conflict" ? "The review changed since it opened; it's reloading. Submit again after."
+      : `Couldn't save (${e && e.code || "error"}). Try again.`;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function start() {
+  let saved = null;
+  try { const r = await fetch("answers.json", { cache: "no-store" }); if (r.ok) saved = await r.json(); } catch (_) { /* first open */ }
+  fill(saved);
+  renderHeader();
+  renderFalls();
+  renderStanding();
+  renderSpots();
+  renderColour();
+  document.getElementById("notes").value = answers.notes;
+  document.getElementById("submit").addEventListener("click", submit);
+  updateProgress();
+}
+start();
+</script>

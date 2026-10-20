@@ -1,0 +1,12 @@
+# What run.cmd runs: a job (heroes_capture/job.py describes it). Kept current with whatever the next
+# test or render needs. run.cmd --resume carries on a job that stopped.
+#
+# Now: Battlefield of Eternity's rubble and tiles again over its kept render, to try two changes:
+# every cannon tower's rubble circle the widest measured among them (8.55 cells: they all die the
+# game's generic death; the level 3 ones had 2.63 and their debris was cut short), and the tiles
+# from Chaos's side shot over the light sky only (the stitch takes their see-through share from
+# Order's pairs: about 1.5 minutes less).
+runs:
+  - map: Battlefield of Eternity
+    render: elements
+    only: [rubble, tiles]

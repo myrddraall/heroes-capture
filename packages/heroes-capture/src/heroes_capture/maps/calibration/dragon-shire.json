@@ -1,0 +1,747 @@
+{
+ "standWaits": {
+  "KingsCore": 1.5,
+  "TownCannonTowerL2": 0.0,
+  "TownCannonTowerL3": 0.0,
+  "TownCannonTowerL3Standalone": 0.0,
+  "TownGateL215BLUR": 0.0,
+  "TownGateL215BRUL": 0.0,
+  "TownGateL3BLURBRVisionBlocked": 0.0,
+  "TownGateL3BLURTLVisionBlocked": 0.0,
+  "TownGateL3BRULBLVisionBlocked": 0.0,
+  "TownGateL3BRULTRVisionBlocked": 0.0,
+  "TownGateL3VerticalLeftVisionBlocked": 0.0,
+  "TownGateL3VerticalRightVisionBlocked": 0.0,
+  "TownMoonwellL2": 0.0,
+  "TownMoonwellL3": 0.0,
+  "TownTownHallL2": 0.0,
+  "TownTownHallL3": 0.0,
+  "TownWallRadial14L3": 0.0,
+  "TownWallRadial15L3": 0.0,
+  "TownWallRadial17L3": 0.0,
+  "TownWallRadial18L2": 0.0,
+  "TownWallRadial18L3": 0.0,
+  "TownWallRadial19L2": 0.0,
+  "TownWallRadial20L3": 0.0,
+  "TownWallRadial21L3": 0.0,
+  "TownWallRadial2L3": 0.0,
+  "TownWallRadial3L3": 0.0,
+  "TownWallRadial4L2": 0.0,
+  "TownWallRadial5L2": 0.0,
+  "TownWallRadial5L3": 0.0,
+  "TownWallRadial6L3": 0.0,
+  "TownWallRadial8L3": 0.0,
+  "TownWallRadial9L3": 0.0
+ },
+ "standModels": {
+  "KingsCore": "CoreKingsCrestBase",
+  "TownCannonTowerL2": "TownTowerL2KingsCrest",
+  "TownCannonTowerL3": "TownTowerL3KingsCrest",
+  "TownCannonTowerL3Standalone": "TownTowerL3KingsCrest",
+  "TownGateL215BLUR": "TownGateL2",
+  "TownGateL215BRUL": "TownGateL2",
+  "TownGateL3BLURBRVisionBlocked": "TownGateL3",
+  "TownGateL3BLURTLVisionBlocked": "TownGateL3",
+  "TownGateL3BRULBLVisionBlocked": "TownGateL3",
+  "TownGateL3BRULTRVisionBlocked": "TownGateL3",
+  "TownGateL3VerticalLeftVisionBlocked": "TownGateL3",
+  "TownGateL3VerticalRightVisionBlocked": "TownGateL3",
+  "TownMoonwellL2": "TownMoonwellL2",
+  "TownMoonwellL3": "TownMoonwellL3",
+  "TownTownHallL2": "TownTownHallL2",
+  "TownTownHallL3": "TownTownHallL3",
+  "TownWallRadial14L3": "WallRadial2",
+  "TownWallRadial15L3": "WallRadial3",
+  "TownWallRadial17L3": "WallRadial5",
+  "TownWallRadial18L2": "WallRadial0",
+  "TownWallRadial18L3": "WallRadial0",
+  "TownWallRadial19L2": "WallRadial1",
+  "TownWallRadial20L3": "WallRadial2",
+  "TownWallRadial21L3": "WallRadial3",
+  "TownWallRadial2L3": "WallRadial2",
+  "TownWallRadial3L3": "WallRadial3",
+  "TownWallRadial4L2": "WallRadial4",
+  "TownWallRadial5L2": "WallRadial5",
+  "TownWallRadial5L3": "WallRadial5",
+  "TownWallRadial6L3": "WallRadial0",
+  "TownWallRadial8L3": "WallRadial2",
+  "TownWallRadial9L3": "WallRadial3"
+ },
+ "version": 3,
+ "stages": {
+  "motion": 1,
+  "structures": 1,
+  "rubble-at-home": 1,
+  "pausing": 11,
+  "stacking": 1,
+  "standing": 1
+ },
+ "map": "Dragon Shire",
+ "tool": "0.0.0-dev",
+ "cameraBounds": {
+  "left": 20.0,
+  "bottom": 28.0,
+  "right": 228.0,
+  "top": 178.0
+ },
+ "copySpots": {
+  "13": {
+   "x": 120,
+   "y": 104
+  },
+  "16": {
+   "x": 124,
+   "y": 80
+  },
+  "33": {
+   "x": 130,
+   "y": 122
+  },
+  "36": {
+   "x": 128,
+   "y": 62
+  },
+  "43": {
+   "x": 132,
+   "y": 156
+  },
+  "44": {
+   "x": 144,
+   "y": 32
+  },
+  "47": {
+   "x": 164,
+   "y": 38
+  },
+  "57": {
+   "x": 122,
+   "y": 140
+  },
+  "85": {
+   "x": 102,
+   "y": 32
+  },
+  "86": {
+   "x": 110,
+   "y": 162
+  },
+  "87": {
+   "x": 84,
+   "y": 38
+  },
+  "89": {
+   "x": 88,
+   "y": 158
+  },
+  "2": {
+   "x": 190,
+   "y": 136
+  },
+  "27": {
+   "x": 58,
+   "y": 48
+  },
+  "54": {
+   "x": 40,
+   "y": 108
+  },
+  "55": {
+   "x": 50,
+   "y": 130
+  },
+  "63": {
+   "x": 208,
+   "y": 108
+  },
+  "88": {
+   "x": 212,
+   "y": 78
+  },
+  "93": {
+   "x": 66,
+   "y": 144
+  },
+  "94": {
+   "x": 48,
+   "y": 148
+  },
+  "114": {
+   "x": 36,
+   "y": 74
+  },
+  "143": {
+   "x": 190,
+   "y": 48
+  },
+  "144": {
+   "x": 210,
+   "y": 128
+  },
+  "149": {
+   "x": 208,
+   "y": 56
+  },
+  "871635734": {
+   "x": 174,
+   "y": 150
+  },
+  "1683659258": {
+   "x": 46,
+   "y": 34
+  },
+  "2052202555": {
+   "x": 68,
+   "y": 164
+  },
+  "35": {
+   "x": 150,
+   "y": 164
+  },
+  "133": {
+   "x": 38,
+   "y": 56
+  },
+  "1814": {
+   "x": 226,
+   "y": 110
+  },
+  "1810": {
+   "x": 28,
+   "y": 92
+  },
+  "1811": {
+   "x": 32,
+   "y": 128
+  },
+  "1815": {
+   "x": 226,
+   "y": 92
+  },
+  "1812": {
+   "x": 20,
+   "y": 110
+  },
+  "24": {
+   "x": 88.5,
+   "y": 110.5
+  },
+  "42": {
+   "x": 160.5,
+   "y": 110.5
+  },
+  "1609": {
+   "x": 168.5,
+   "y": 168.5
+  },
+  "1610": {
+   "x": 86.5,
+   "y": 68.5
+  },
+  "1619": {
+   "x": 158.5,
+   "y": 70.5
+  },
+  "1620": {
+   "x": 88.5,
+   "y": 122.5
+  },
+  "61": {
+   "x": 108.5,
+   "y": 118.5
+  },
+  "72": {
+   "x": 224.5,
+   "y": 68.5
+  },
+  "73": {
+   "x": 20.5,
+   "y": 78.5
+  },
+  "92": {
+   "x": 180.5,
+   "y": 32.5
+  },
+  "108": {
+   "x": 192.5,
+   "y": 152.5
+  },
+  "1077": {
+   "x": 20.5,
+   "y": 60.5
+  },
+  "493": {
+   "x": 128.5,
+   "y": 44.5
+  },
+  "484": {
+   "x": 192.5,
+   "y": 32
+  },
+  "486": {
+   "x": 134.5,
+   "y": 172
+  },
+  "491": {
+   "x": 226.5,
+   "y": 130.5
+  },
+  "488": {
+   "x": 32.5,
+   "y": 146.5
+  },
+  "48": {
+   "x": 96.5,
+   "y": 174
+  },
+  "481": {
+   "x": 66.5,
+   "y": 34
+  },
+  "489": {
+   "x": 24.5,
+   "y": 46.5
+  }
+ },
+ "structures": {
+  "13": {
+   "type": "TownCannonTowerL2",
+   "changes": true
+  },
+  "16": {
+   "type": "TownCannonTowerL2",
+   "changes": true
+  },
+  "33": {
+   "type": "TownCannonTowerL2",
+   "changes": true
+  },
+  "36": {
+   "type": "TownCannonTowerL2",
+   "changes": true
+  },
+  "43": {
+   "type": "TownCannonTowerL2",
+   "changes": true
+  },
+  "44": {
+   "type": "TownCannonTowerL2",
+   "changes": true
+  },
+  "47": {
+   "type": "TownCannonTowerL2",
+   "changes": true
+  },
+  "57": {
+   "type": "TownCannonTowerL2",
+   "changes": true
+  },
+  "85": {
+   "type": "TownCannonTowerL2",
+   "changes": true
+  },
+  "86": {
+   "type": "TownCannonTowerL2",
+   "changes": true
+  },
+  "87": {
+   "type": "TownCannonTowerL2",
+   "changes": true
+  },
+  "89": {
+   "type": "TownCannonTowerL2",
+   "changes": true
+  },
+  "2": {
+   "type": "TownCannonTowerL3",
+   "changes": true
+  },
+  "27": {
+   "type": "TownCannonTowerL3",
+   "changes": true
+  },
+  "54": {
+   "type": "TownCannonTowerL3",
+   "changes": true
+  },
+  "55": {
+   "type": "TownCannonTowerL3",
+   "changes": true
+  },
+  "63": {
+   "type": "TownCannonTowerL3",
+   "changes": true
+  },
+  "88": {
+   "type": "TownCannonTowerL3",
+   "changes": true
+  },
+  "93": {
+   "type": "TownCannonTowerL3",
+   "changes": true
+  },
+  "94": {
+   "type": "TownCannonTowerL3",
+   "changes": true
+  },
+  "114": {
+   "type": "TownCannonTowerL3",
+   "changes": true
+  },
+  "143": {
+   "type": "TownCannonTowerL3",
+   "changes": true
+  },
+  "144": {
+   "type": "TownCannonTowerL3",
+   "changes": true
+  },
+  "149": {
+   "type": "TownCannonTowerL3",
+   "changes": true
+  },
+  "871635734": {
+   "type": "TownCannonTowerL3Standalone",
+   "changes": true
+  },
+  "1581479597": {
+   "type": "TownCannonTowerL3Standalone",
+   "changes": true
+  },
+  "1683659258": {
+   "type": "TownCannonTowerL3Standalone",
+   "changes": true
+  },
+  "2052202555": {
+   "type": "TownCannonTowerL3Standalone",
+   "changes": true
+  },
+  "35": {
+   "type": "TownGateL215BLUR",
+   "changes": false
+  },
+  "41": {
+   "type": "TownGateL215BLUR",
+   "changes": false
+  },
+  "146": {
+   "type": "TownGateL215BLUR",
+   "changes": false
+  },
+  "19": {
+   "type": "TownGateL215BRUL",
+   "changes": false
+  },
+  "32": {
+   "type": "TownGateL215BRUL",
+   "changes": false
+  },
+  "133": {
+   "type": "TownGateL215BRUL",
+   "changes": false
+  },
+  "1814": {
+   "type": "TownGateL3BLURBRVisionBlocked",
+   "changes": false
+  },
+  "1810": {
+   "type": "TownGateL3BLURTLVisionBlocked",
+   "changes": false
+  },
+  "1811": {
+   "type": "TownGateL3BRULBLVisionBlocked",
+   "changes": false
+  },
+  "1815": {
+   "type": "TownGateL3BRULTRVisionBlocked",
+   "changes": false
+  },
+  "1812": {
+   "type": "TownGateL3VerticalLeftVisionBlocked",
+   "changes": false
+  },
+  "1813": {
+   "type": "TownGateL3VerticalRightVisionBlocked",
+   "changes": false
+  },
+  "24": {
+   "type": "TownMoonwellL2",
+   "changes": true
+  },
+  "42": {
+   "type": "TownMoonwellL2",
+   "changes": true
+  },
+  "1609": {
+   "type": "TownMoonwellL2",
+   "changes": true
+  },
+  "1610": {
+   "type": "TownMoonwellL2",
+   "changes": true
+  },
+  "1619": {
+   "type": "TownMoonwellL2",
+   "changes": true
+  },
+  "1620": {
+   "type": "TownMoonwellL2",
+   "changes": true
+  },
+  "61": {
+   "type": "TownMoonwellL3",
+   "changes": true
+  },
+  "72": {
+   "type": "TownMoonwellL3",
+   "changes": true
+  },
+  "73": {
+   "type": "TownMoonwellL3",
+   "changes": true
+  },
+  "92": {
+   "type": "TownMoonwellL3",
+   "changes": true
+  },
+  "108": {
+   "type": "TownMoonwellL3",
+   "changes": true
+  },
+  "1077": {
+   "type": "TownMoonwellL3",
+   "changes": true
+  },
+  "28": {
+   "type": "TownTownHallL2",
+   "changes": true
+  },
+  "46": {
+   "type": "TownTownHallL2",
+   "changes": true
+  },
+  "150": {
+   "type": "TownTownHallL2",
+   "changes": true
+  },
+  "151": {
+   "type": "TownTownHallL2",
+   "changes": true
+  },
+  "162": {
+   "type": "TownTownHallL2",
+   "changes": true
+  },
+  "163": {
+   "type": "TownTownHallL2",
+   "changes": true
+  },
+  "493": {
+   "type": "TownWallRadial14L3",
+   "changes": true
+  },
+  "494": {
+   "type": "TownWallRadial15L3",
+   "changes": true
+  },
+  "623": {
+   "type": "TownWallRadial17L3",
+   "changes": true
+  },
+  "484": {
+   "type": "TownWallRadial18L2",
+   "changes": false
+  },
+  "486": {
+   "type": "TownWallRadial18L2",
+   "changes": false
+  },
+  "593": {
+   "type": "TownWallRadial18L2",
+   "changes": false
+  },
+  "2215331": {
+   "type": "TownWallRadial18L2",
+   "changes": false
+  },
+  "622": {
+   "type": "TownWallRadial18L3",
+   "changes": true
+  },
+  "485": {
+   "type": "TownWallRadial19L2",
+   "changes": true
+  },
+  "594": {
+   "type": "TownWallRadial19L2",
+   "changes": true
+  },
+  "492": {
+   "type": "TownWallRadial20L3",
+   "changes": true
+  },
+  "491": {
+   "type": "TownWallRadial21L3",
+   "changes": true
+  },
+  "488": {
+   "type": "TownWallRadial2L3",
+   "changes": true
+  },
+  "487": {
+   "type": "TownWallRadial3L3",
+   "changes": true
+  },
+  "398": {
+   "type": "TownWallRadial4L2",
+   "changes": true
+  },
+  "591": {
+   "type": "TownWallRadial4L2",
+   "changes": true
+  },
+  "48": {
+   "type": "TownWallRadial5L2",
+   "changes": true
+  },
+  "481": {
+   "type": "TownWallRadial5L2",
+   "changes": true
+  },
+  "592": {
+   "type": "TownWallRadial5L2",
+   "changes": true
+  },
+  "2106815387": {
+   "type": "TownWallRadial5L2",
+   "changes": true
+  },
+  "620": {
+   "type": "TownWallRadial5L3",
+   "changes": false
+  },
+  "621": {
+   "type": "TownWallRadial6L3",
+   "changes": true
+  },
+  "489": {
+   "type": "TownWallRadial8L3",
+   "changes": true
+  },
+  "490": {
+   "type": "TownWallRadial9L3",
+   "changes": true
+  },
+  "210": {
+   "type": "KingsCore",
+   "changes": true
+  },
+  "346": {
+   "type": "KingsCore",
+   "changes": true
+  },
+  "62": {
+   "type": "TownTownHallL3",
+   "changes": true
+  },
+  "96": {
+   "type": "TownTownHallL3",
+   "changes": true
+  },
+  "153": {
+   "type": "TownTownHallL3",
+   "changes": true
+  },
+  "154": {
+   "type": "TownTownHallL3",
+   "changes": true
+  },
+  "268": {
+   "type": "TownTownHallL3",
+   "changes": true
+  },
+  "269": {
+   "type": "TownTownHallL3",
+   "changes": true
+  }
+ },
+ "fallWaits": {
+  "TownCannonTowerL2|chaos": 2.25,
+  "TownCannonTowerL2|order": 2.0,
+  "TownCannonTowerL3Standalone|chaos": 1.5,
+  "TownCannonTowerL3Standalone|order": 3.0,
+  "TownCannonTowerL3|chaos": 2.25,
+  "TownCannonTowerL3|order": 2.0,
+  "TownGateL215BLUR|chaos": 0.75,
+  "TownGateL3BLURBRVisionBlocked|chaos": 0.75,
+  "TownGateL3BLURTLVisionBlocked|order": 1.0,
+  "TownGateL3BRULBLVisionBlocked|order": 0.75,
+  "TownGateL3BRULTRVisionBlocked|chaos": 0.75,
+  "TownGateL3VerticalLeftVisionBlocked|order": 0.75,
+  "TownMoonwellL2|chaos": 3.0,
+  "TownMoonwellL2|order": 2.5,
+  "TownMoonwellL3|chaos": 1.5,
+  "TownMoonwellL3|order": 1.75,
+  "TownWallRadial14L3|chaos": 1.75,
+  "TownWallRadial18L2|chaos": 1.75,
+  "TownWallRadial21L3|chaos": 1.5,
+  "TownWallRadial2L3|order": 2.25,
+  "TownWallRadial5L2|order": 2.25,
+  "TownWallRadial8L3|order": 1.5
+ },
+ "reviewed": {
+  "at": "2026-10-14T22:35:02.193Z",
+  "notes": "",
+  "motion": {
+   "home:TownWallRadial5L3|order": "strange black circle in scene. i notices there are a lot of those shadows under building showing again",
+   "home:TownWallRadial4L2|order": "more black shape artifacts in scene",
+   "home:TownGateL215BRUL|order": "is this an issue with just the pobs but ore of those shadows in scene",
+   "home:TownGateL3BLURTLVisionBlocked|order": "same",
+   "home:TownGateL3BRULBLVisionBlocked|order": "sme",
+   "home:TownGateL3VerticalLeftVisionBlocked|order": "same",
+   "home:TownGateL215BLUR|chaos": "same",
+   "home:TownGateL3BLURBRVisionBlocked|chaos": "same"
+  },
+  "rejectedSpots": [],
+  "unanswered": []
+ },
+ "rubbleRadii": {
+  "TownCannonTowerL2|order": 8.18,
+  "TownCannonTowerL2|chaos": 8.18,
+  "TownCannonTowerL3|chaos": 7.44,
+  "TownCannonTowerL3|order": 7.44,
+  "TownCannonTowerL3Standalone|chaos": 7.94,
+  "TownCannonTowerL3Standalone|order": 7.94,
+  "TownGateL215BLUR|chaos": 4.86,
+  "TownGateL3BLURBRVisionBlocked|chaos": 4.84,
+  "TownGateL3BLURTLVisionBlocked|order": 3.7,
+  "TownGateL3BRULBLVisionBlocked|order": 4.86,
+  "TownGateL3BRULTRVisionBlocked|chaos": 4.86,
+  "TownGateL3VerticalLeftVisionBlocked|order": 4.87,
+  "TownMoonwellL2|order": 6.85,
+  "TownMoonwellL2|chaos": 6.85,
+  "TownMoonwellL3|order": 7.24,
+  "TownMoonwellL3|chaos": 7.24,
+  "TownWallRadial14L3|chaos": 6.82,
+  "TownWallRadial18L2|chaos": 6.52,
+  "TownWallRadial21L3|chaos": 7.02,
+  "TownWallRadial2L3|order": 7.16,
+  "TownWallRadial5L2|order": 6.81,
+  "TownWallRadial8L3|order": 7.55,
+  "TownGateL215BRUL|order": 3.73,
+  "TownGateL3VerticalRightVisionBlocked|chaos": 3.81,
+  "TownWallRadial15L3|chaos": 6.38,
+  "TownWallRadial17L3|chaos": 6.54,
+  "TownWallRadial18L3|chaos": 6.61,
+  "TownWallRadial19L2|chaos": 6.6,
+  "TownWallRadial20L3|chaos": 7.57,
+  "TownWallRadial3L3|order": 7.7,
+  "TownWallRadial4L2|order": 6.68,
+  "TownWallRadial5L3|order": 6.69,
+  "TownWallRadial6L3|order": 7.1,
+  "TownWallRadial9L3|order": 6.14,
+  "TownTownHallL2|order": 11.03,
+  "TownTownHallL2|chaos": 11.03,
+  "TownTownHallL3|order": 15.16,
+  "TownTownHallL3|chaos": 15.16
+ }
+}
