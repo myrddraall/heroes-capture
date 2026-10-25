@@ -72,21 +72,29 @@ def _xyz(element: str, default: float) -> list[float]:
 
 def parse_directional(xml: str) -> list[dict]:
     """A time of day's directional lights (Key, Fill, Back), each {index, color, multiplier,
-    direction}: the colour times its multiplier is what it lights with, along `direction` (the way
+    specular, specularMultiplier, direction}: the colour times its multiplier is what it lights
+    with, its specular colour times its own (SpecColorMultiplier, an attribute or a child) the shine
+    it puts on a material that has a specular layer, along `direction` (the way
     the light travels: the Play screen tutorial's key lights all travel the way its camera looks,
     its back lights the opposite way). A colour channel left out is 1 (white; every one of the
     game's palettes reads naturally so, and none does as 0), a multiplier left out 1. A light with
     no colour at all gives none: the tutorial flyby's second light has a key with a direction and
     a specular multiplier only, and the tutorial's own shot of Korhal under it shows no key light
     (it is lit flat and blue, by the ambient and the back light), where a white key would light
-    its top brightly."""
+    its top brightly. Its specular colour reads the same way: a channel left out 1, none at all
+    none (the flyby's first two keys set a specular multiplier and no specular colour)."""
     lights = []
     for attrs, body in _entries(xml, "DirectionalLight"):
         color = re.search(r"<Color\b[^>]*/?>", body)
+        specular = re.search(r"<SpecularColor\b[^>]*/?>", body)
+        specular_multiplier = attrs.get("SpecColorMultiplier") or (
+            m.group(1) if (m := re.search(r'<SpecColorMultiplier value="([^"]+)"', body)) else "1")
         direction = re.search(r"<Direction\b[^>]*/?>", body)
         lights.append({"index": attrs.get("index", ""),
                        "color": _xyz(color.group(0), 1.0) if color else [0.0, 0.0, 0.0],
                        "multiplier": float(attrs.get("ColorMultiplier", "1")),
+                       "specular": _xyz(specular.group(0), 1.0) if specular else [0.0, 0.0, 0.0],
+                       "specularMultiplier": float(specular_multiplier),
                        "direction": _xyz(direction.group(0), 0.0) if direction else [0.0, 0.0, 0.0]})
     return lights
 

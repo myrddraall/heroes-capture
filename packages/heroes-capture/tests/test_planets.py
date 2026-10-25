@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from heroes_capture.ui import planets
+from heroes_capture.ui import planets, play_relight
 
 
 def test_a_frame_faces_the_eye_along_minus_y_with_up_as_near_z_as_it_can():
@@ -42,13 +42,15 @@ def test_the_light_on_at_a_time_of_the_cutscene():
 def test_a_light_as_the_app_lights_with_it_about_the_camera():
     table = {"default": {"hdrExposure": 1.5, "hdrBloomThreshold": 0.6},
              "Flyby": {"parent": "default", "ambient": [0.1, 0.2, 0.3],
-                       "directional": [{"index": "Key", "color": [1, 0.5, 0.25], "multiplier": 2.0, "direction": [1, 0, 0]},
+                       "directional": [{"index": "Key", "color": [1, 0.5, 0.25], "multiplier": 2.0, "direction": [1, 0, 0],
+                                        "specular": [1, 0.5, 0.5], "specularMultiplier": 4.0},
                                        {"index": "Back", "color": [1, 1, 1], "multiplier": 1.0, "direction": [0, 1, -1]},
                                        {"index": "Fill", "color": [1, 1, 1], "multiplier": 1.0, "direction": [0, 0, 0]}]}}
     light = planets.light_in(table, "Flyby", np.eye(3))
     assert light["exposure"] == 1.5 and light["ambient"] == [0.1, 0.2, 0.3] and light["bloomThreshold"] == 0.6
-    assert light["directional"] == [{"direction": [1, 0, 0], "color": [2, 1, 0.5]},
-                                    {"direction": [0, 1, -1], "color": [1, 1, 1]}]  # one without a direction is no light
+    # Its specular colour times its multiplier, where it has one; one without a direction is no light.
+    assert light["directional"] == [{"direction": [1, 0, 0], "color": [2, 1, 0.5], "specular": [4, 2, 2]},
+                                    {"direction": [0, 1, -1], "color": [1, 1, 1]}]
     # Seen by a camera looking along -x (up +z), a light travelling +x in the world travels
     # towards the camera: -y in the planet's frame, which faces it.
     turn = planets.facing(np.array([-1.0, 0, 0]), np.array([0, 0, 1.0]))
@@ -182,7 +184,23 @@ def test_the_planets_from_the_game_s_data(storage, tmp_path: Path):
     masks = [m["alphaMasks"][0] for m in (large["materials"][k] for k in body["materials"]) if m["alphaMasks"]]
     assert masks and all("uvSet" not in m and m["texture"].startswith("play-large-") for m in masks)
     assert all(large["textures"][m["texture"]]["width"] == planets.BAKE_SIZE for m in masks)
-    assert "mapping2" not in body and large.get("light") is None
+    assert "mapping2" not in body
+    # Its painting taken apart: its surface evenly lit (made by this tool, from the game's texture),
+    # lit by the lights that paint it again, from behind it (the game's camera sees its dark side),
+    # at the Play screen's exposure.
+    [painting] = [large["materials"][k] for k in body["materials"] if large["materials"][k]["blend"] == "opaque"]
+    assert painting["unshaded"] is False and painting["diffuse"]["texture"].endswith("-base")
+    base = large["textures"][painting["diffuse"]["texture"]]
+    assert base["baked"] and base["source"].endswith("Storm_UI_HeroSelection_Floor_OrangePlanet.dds")
+    assert 1 <= len(large["light"]["directional"]) <= play_relight.MAX_LIGHTS and large["light"]["ambient"] == [0, 0, 0]
+    for light in large["light"]["directional"]:
+        assert math.hypot(*light["direction"]) == pytest.approx(1, abs=1e-3) and light["direction"][1] < 0
+    small = json.loads((tmp_path / "planets" / "play-small.json").read_text())
+    medium_painting = next(m for m in json.loads((tmp_path / "planets" / "play-medium.json").read_text())["materials"].values()
+                           if m["blend"] == "opaque")
+    small_painting = next(m for m in small["materials"].values() if m["blend"] == "opaque")
+    assert medium_painting["diffuse"]["texture"] == small_painting["diffuse"]["texture"]  # one texture: one surface
+    assert small["light"]["exposure"] == large["light"]["exposure"] > 0
     # It wears the nexus style as its own shield is: unshaded, the grid as the data has it.
     nexus = json.loads((tmp_path / "planets" / "style-nexus.json").read_text())
     [grid] = nexus["parts"][0]["materials"]

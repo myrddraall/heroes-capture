@@ -42,9 +42,12 @@ own (the shade is this tool's, set by eye against that painting: the game lights
 The Play screen's planets wear it as their own, each as the data has its own shield: drawn as the
 game draws it (its grid texture, not the style's hexes), the grid's brightness, size (its tiling against the large one's), how far it spreads (its fresnel's floor)
 and the side it spreads from (its fresnel's turn), glowing as the data has it (no boost: there
-are no lights to read over), and no shade (their painting is shaded already); each its own mask
-(where its grid shows) on its own surface's mapping, and its own ring.
+are no lights to read over), and no shade (their own lights paint them); each its own mask
+(where its grid shows) on its own surface's mapping, and its own ring. Their painting is taken
+apart (play_relight): each one's surface evenly lit, and lights that paint it again, so it can be
+turned and lit from anywhere.
     <out>/<planet>-<texture>.webp  a layer baked into the first texture coordinates (see below)
+    <out>/<texture>-base.webp  a Play screen planet's surface, evenly lit (play_relight)
 
 A layer that reads a mesh's second texture coordinates gets their mapping too (mapping2) where
 one fits (the worlds' cloud layers); where none does (the Play screen planets' masks and
@@ -65,8 +68,10 @@ from PIL import Image
 from heroes_capture.common import ui
 from heroes_capture.common.casclib import Storage
 from heroes_capture.common.game_data import light_sets
+from heroes_capture.common.lighting import light_hdr
 from heroes_capture.common.m3 import M3
 from heroes_capture.ui import play_background as play
+from heroes_capture.ui import play_relight
 from heroes_capture.ui.play_background import Export, model_file, texture_files, texture_image
 
 FLYBY_MODEL = "Storm_Doodad_Nexus_PlanetsFlyby"
@@ -157,8 +162,8 @@ def light_at(schedule: list[tuple[int, str]], ms: int) -> str:
 
 
 def light_in(table: dict, light_id: str, turn: np.ndarray) -> dict:
-    """A light as the app lights with it: {ambient, directional: [{direction, color}] (colour times
-    multiplier), exposure, bloomThreshold? (what the light's HDR blooms: the flyby lights' 0.6,
+    """A light as the app lights with it: {ambient, directional: [{direction, color, specular?}]
+    (each colour times its multiplier; the specular where it has one), exposure, bloomThreshold? (what the light's HDR blooms: the flyby lights' 0.6,
     below the Play screen's 0.85, is what spreads a world's city lights into a glow)}. Missing
     fields come from the light's parents. A light's direction is
     the way it travels in the world (z up, as the game's sun lights travel downwards); `turn`
@@ -178,7 +183,9 @@ def light_in(table: dict, light_id: str, turn: np.ndarray) -> dict:
 
     bloom = _inherited(table, light_id, "hdrBloomThreshold")
     return {"ambient": [round(c, 5) for c in (_inherited(table, light_id, "ambient") or [0, 0, 0])],
-            "directional": [{"direction": travel(d["direction"]), "color": [round(c * d["multiplier"], 5) for c in d["color"]]}
+            "directional": [{"direction": travel(d["direction"]), "color": [round(c * d["multiplier"], 5) for c in d["color"]],
+                             **({"specular": specular} if any(specular := [round(c * d.get("specularMultiplier", 1), 5)
+                                                                           for c in d.get("specular", [0, 0, 0])]) else {})}
                             for d in directional if any(d["direction"])],
             "exposure": exposure, **({"bloomThreshold": bloom} if bloom is not None else {})}
 
@@ -473,15 +480,16 @@ def baked_material(export: Export, storage: Storage, key: str, planet: str, data
     the first (into `baked`: texture key -> image, whether lossless), or the material itself where
     none does; its key."""
     material = export.materials[key]
-    layers = [("diffuse", material["diffuse"]), ("emissive", material["emissive"])] + [("alphaMasks", m) for m in material["alphaMasks"]]
+    layers = ([("diffuse", material["diffuse"]), ("emissive", material["emissive"]), ("specular", material.get("specular"))]
+              + [("alphaMasks", m) for m in material["alphaMasks"]])
     if not any(layer and layer.get("uvSet") == 2 for _, layer in layers):
         return key
     new_key = f"{key}-{planet}"
     if new_key in export.materials:
         return new_key
     copy = json.loads(json.dumps(material))
-    for slot in ("diffuse", "emissive", "alphaMasks"):
-        found = copy[slot] if slot == "alphaMasks" else ([copy[slot]] if copy[slot] else [])
+    for slot in ("diffuse", "emissive", "specular", "alphaMasks"):
+        found = copy[slot] if slot == "alphaMasks" else ([copy[slot]] if copy.get(slot) else [])
         for layer in found:
             if layer.get("uvSet") != 2:
                 continue
@@ -531,7 +539,7 @@ def planet_file(export: Export, kind: str, parts: list[dict], light: dict | None
     used = {key for part in parts for key in part["materials"]}
     materials = {key: export.materials[key] for key in sorted(used)}
     textures = {layer["texture"] for m in materials.values()
-                for layer in (m["diffuse"], m["emissive"], *m["alphaMasks"]) if layer and "texture" in layer}
+                for layer in (m["diffuse"], m["emissive"], m.get("specular"), *m["alphaMasks"]) if layer and "texture" in layer}
     out: dict = {"kind": kind, "parts": parts, "materials": materials, "textures": sorted(textures)}
     if light:
         out["light"] = light
@@ -580,7 +588,7 @@ def worn_shield(export: Export, own: str, style: str) -> dict:
 def play_base(export: Export, planet: Planet, style_id: str, style: dict) -> dict:
     """A Play screen planet as a base: its surface without its shield (the hex grid) and no ring,
     wearing the style (`style_id`) that brings both, set as its own are in the data (and not
-    shaded: its painting is): the style's shield on its own surface's mapping, with its own mask
+    shaded: its lights paint it, see play_relight): the style's shield on its own surface's mapping, with its own mask
     (the texture listed in its file, for the app to load), and the style's ring as its own ring."""
     parts, own, ring, surface = [], None, None, None
     for part in planet.parts:
@@ -794,6 +802,12 @@ def export(storage: Storage, out: Path) -> dict:
     # The Play screen's planets as bases, wearing the nexus style as their shields are.
     for key in PLAY_TEMPLATES:
         files[key] = play_base(ex, planets[key], "nexus", files["style-nexus"])
+    # Their painting taken apart: each one's surface evenly lit, and the lights that paint it again
+    # at the Play screen's exposure (play_relight).
+    tone = light_hdr(light_sets(storage)["lights"], play.cutscene(storage)["light"])
+    if tone is None:
+        raise SystemExit("the Play screen's light has no HDR exposure")
+    play_relight.relight(storage, ex, {key: files[key] for key in PLAY_TEMPLATES}, baked, tone["exposure"])
     folder = out / "planets"
     folder.mkdir(parents=True, exist_ok=True)
     textures = texture_files(storage, ex.textures, ex.alpha_read, out, baked, ex.sources, ex.baked_from)
@@ -810,7 +824,7 @@ def export(storage: Storage, out: Path) -> dict:
         if stale.stem not in files and stale.name != "index.json":
             stale.unlink()
     for stale in out.glob("*-*.webp"):  # a baked texture of an earlier export, no longer made
-        if stale.stem not in textures and re.search(r"-(diffuse|emissive|alphamasks)$", stale.stem):
+        if stale.stem not in textures and re.search(r"-(diffuse|emissive|specular|alphamasks|base)$", stale.stem):
             stale.unlink()
     ui.info(f"{len(files)} planets: " + ", ".join(files))
     return index

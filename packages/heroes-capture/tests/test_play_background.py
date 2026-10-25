@@ -74,8 +74,20 @@ def test_a_light_s_ambient_and_directional_lights_with_what_a_channel_left_out_m
     light = lights["Flyby"]
     assert light["ambient"] == [0, 0, 0]  # a channel left out of the ambient is 0
     key, back = light["directional"]
-    assert key == {"index": "Key", "color": [1.0, 0.62, 0.44], "multiplier": 0.676, "direction": [-0.34, 0.16, 0.93]}
+    assert key == {"index": "Key", "color": [1.0, 0.62, 0.44], "multiplier": 0.676, "specular": [0.0, 0.0, 0.0],
+                   "specularMultiplier": 1.0, "direction": [-0.34, 0.16, 0.93]}
     assert back["color"] == [0.0, 0.0, 0.0]  # no colour at all: no light (measured on the flyby's Korhal)
+
+
+def test_a_directional_light_s_specular_colour_and_multiplier_as_an_attribute_or_a_child():
+    lights = parse_lights("""
+      <CLight id="Shiny"><ToDInfoArray index="0">
+        <DirectionalLight index="Key" SpecColorMultiplier="31.623"><SpecularColor Y="0.54" Z="0.3"/><Direction Z="-1"/></DirectionalLight>
+        <DirectionalLight index="Fill"><SpecColorMultiplier value="2.5"/><SpecularColor X="0.5" Y="0.5" Z="0.5"/></DirectionalLight>
+      </ToDInfoArray></CLight>""")
+    key, fill = lights["Shiny"]["directional"]
+    assert key["specular"] == [1.0, 0.54, 0.3] and key["specularMultiplier"] == 31.623  # a channel left out is 1
+    assert fill["specular"] == [0.5, 0.5, 0.5] and fill["specularMultiplier"] == 2.5
 
 
 def test_tracks_between_their_keys_and_bone_matrices():
@@ -94,7 +106,7 @@ def test_the_play_screen_s_sky_from_the_game_s_data(storage, tmp_path: Path):
     assert scene["camera"]["eye"] == pytest.approx([0, -41.2, 5.6], abs=0.05)
     assert scene["tone"] == {"exposure": 1.0, "whitePoint": 1.85, "bloomThreshold": 0.85}
     assert set(scene["meshes"]) == {
-        "Sky_Cylinder_Stars", "Cylinder001", "TwinkleStarsEmitter",
+        "Sky_Cylinder_Stars", "TwinkleStarsEmitter",
         # the planets, each with its atmosphere (a billboard of the bone's own)
         "OrangePlanet", "Dummy001", "Dummy002", "Dummy002-17", "Dummy003", "Dummy003-19",
     }
@@ -110,11 +122,21 @@ def test_the_play_screen_s_sky_from_the_game_s_data(storage, tmp_path: Path):
     assert atmosphere["diffuse"]["wrap"] == [True, False] and atmosphere["alphaMasks"][0]["wrap"] == [False, False]
     # Each planet's meshes, named for its size as its atmosphere's material is.
     planets = {key: mesh.get("planet") for key, mesh in scene["meshes"].items()}
-    assert planets == {"Sky_Cylinder_Stars": None, "Cylinder001": None, "TwinkleStarsEmitter": None,
+    assert planets == {"Sky_Cylinder_Stars": None, "TwinkleStarsEmitter": None,
                        "OrangePlanet": "large", "Dummy001": "large", "Dummy002": "medium",
                        "Dummy002-17": "medium", "Dummy003": "small", "Dummy003-19": "small"}
-    energy = scene["materials"]["horizonEnergy"]
+    # The energy around the view: an overlay of the sky's, which the sky wears.
+    assert scene["wears"] == ["horizon-energy"]
+    horizon = scene["overlays"]["horizon-energy"]
+    assert horizon["label"] == "Horizon energy"
+    assert [(p["id"], p["shape"]["kind"], p["materials"]) for p in horizon["parts"]] == [
+        ("Cylinder001", "mesh", ["horizonEnergy"])]
+    assert len(horizon["parts"][0]["shape"]["positions"]) == 198 * 3  # its vertices, xyz
+    assert "horizonEnergy" not in scene["materials"]
+    energy = horizon["materials"]["horizonEnergy"]
     assert energy["diffuse"]["scroll"] == {"seconds": 200, "by": pytest.approx([0.33333, 4.0])}
+    assert set(horizon["textures"]) == {"energyringtilepurple-dark-blur"}
+    assert horizon["textures"]["energyringtilepurple-dark-blur"] == scene["textures"]["energyringtilepurple-dark-blur"]
     assert scene["particles"][0]["rate"] == 120 and scene["particles"][0]["vertexAlpha"]
     for texture in scene["textures"].values():
         assert (tmp_path / texture["file"]).stat().st_size > 0

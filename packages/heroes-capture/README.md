@@ -321,8 +321,11 @@ draws it with WebGL, at its `/play-background` page): its sky, the energy drifti
 the horizon, the twinkling stars and the planets (their atmospheres, and the faint hex grid over
 them), not the floor. `scene.json` holds the camera, the light's HDR exposure and white point, the
 meshes (the planets' with their normals, their billboards turned to face the camera), their
-materials' layers (colours, fresnels and emissive blends included) and the stars' particle system;
-the textures go beside it as WebP (about 1 MB in all), each with its size and where it is in the
+materials' layers (colours, fresnels and emissive blends included) and the stars' particle system,
+and the sky's overlays (`overlays`, by id, and the ones it wears, `wears`): parts of the sky set
+apart for the app's sky to wear or take off, each its meshes, materials and the textures they read
+(`SKY_OVERLAYS`: the energy funnel round the view, `horizon-energy`, which the sky wears, so it is
+drawn as before); the textures go beside it as WebP (about 1 MB in all), each with its size and where it is in the
 game data (`source`; one baked onto a planet's own mapping says `baked`, its source the texture it
 was baked from). From the game's
 data (`ui/play_background.py`): the cutscene the Play screen runs (`gluebackground.stormcutscene`:
@@ -336,7 +339,10 @@ three as templates (each in its own space, its body a unit sphere or hemisphere 
 app turning it to face the camera as the game's billboards do; `index.json` says where the game
 puts each and how big); and, from the tutorial's flyby (`tutorial_cutscene_planetflyby`, the
 doodad `Storm_Doodad_Nexus_PlanetsFlyby`), three worlds (Azeroth, Korhal, Sanctuary, with their own
-meshes and layered materials, its space station left out as too heavy) and nine painted spheres
+meshes and layered materials, its space station left out as too heavy; a lit material's shine
+too where it has a specular layer: the layer, its specularity and specular multiplier, the MAT_
+fields at 32, 44 and 76 as m3addon's structures give them; and each light's specular colour times
+its SpecColorMultiplier, an attribute or a child, a channel left out 1, none at all none) and nine painted spheres
 (their textures on the Play screen's hemisphere, which is smooth where theirs are not). Each is
 taken as the flyby shows it best (a world at the moment of the tutorial's own big shot of it,
 read off a recording; a painted sphere when it is largest while well within the camera's view)
@@ -355,8 +361,18 @@ sphere, and the export says so), its materials and its vertex colour, so the app
 mesh at all. A layer reading a mesh's second texture coordinates gets their rule too where one
 fits (the worlds' clouds); where none does (the Play screen planets' masks and painting are an
 unwrap), the layer is baked into a texture over the first coordinates, as the mesh interpolates
-it, and the material rewritten to read that (`<planet>-<texture>-<slot>.webp`). Each part has a
-role (surface, layer, shell, ring). A style (`planets/style-<id>.json`) is parts to put about any
+it, and the material rewritten to read that (`<planet>-<texture>-<slot>.webp`). The Play screen
+planets' painting is taken apart (`ui/play_relight.py`): the game paints each one's light into its
+surface texture (the lit side on the far side, the dark side towards its camera) and draws it
+unshaded, so the export finds that light (its direction, and its falloff fitted as up to three of
+the app's directional lights, the side the game's camera sees weighted most), divides it out of
+the texture where its texels hold detail, fills the rest from patches of what is kept
+(`ui/patch_fill.py`: multi-scale patch matching, in three charts so neither pole pinches) and
+writes the evenly lit surface (`<texture>-base.webp`) with the planet's surface material lit by
+those lights (the file's `light`, at the Play screen's exposure): seen from the game's camera it
+is drawn as the game paints it, and it can be turned and lit from anywhere. Making a surface takes
+minutes (the large planet's), once: it is kept in the cache (`play-relight/`), by its texture, its
+mapping and the generator's version. Each part has a role (surface, layer, shell, ring). A style (`planets/style-<id>.json`) is parts to put about any
 planet and a light to shade it by: `nexus` is the Play screen's look, from its large planet (its
 hex-grid shield and ring; its shade, a darkening from a side, is this tool's own, set by eye
 against the Play screen's painting). The Play screen's planets are bases: each its painted
@@ -528,7 +544,7 @@ object, `map/specifics.py`'s `Specifics`, which `cli.py` builds for each map.
 | --- | --- | --- |
 | | `cli.py` | the `heroes-capture` command (Typer, Rich): `map render`, `map survey`, `map calibrate`, `map list`, `map view`, `ui extract`, `ui search`, `ui background`, `prepare`, `capture`, `stitch`; picks a map's category and its own module (`specifics_for`) |
 | 1 everything | `common/` | the game's install and data (`game_data.py`, `casclib.py`, `stormlib.py`, `native.py`, `lighting.py`, `actors.py`: actor trees and models' moving parts, `m3.py`: model files' meshes, materials, particles and animation tracks), its process, window and input (`game_window.py`, `game_control.py`, `monitors.py`), screen grabs and comparisons (`screen.py`, `matching.py`), the game's states and menus (`game_state.py`, `game_menus.py`, `menu-reference/`), images, geometry, DDS textures, JSON and frames on disk, the log and the live view (`runlog.py`, `ui.py`, `watch.py`), the worker pool |
-| 2 the interface's textures | `ui/` | which textures the interface uses and what the game's data says about each (`catalogue.py`), their pictures (`extract.py`), the search by description (`search.py`), the Play screen's background (`play_background.py`) and the planets for it (`planets.py`) |
+| 2 the interface's textures | `ui/` | which textures the interface uses and what the game's data says about each (`catalogue.py`), their pictures (`extract.py`), the search by description (`search.py`), the Play screen's background (`play_background.py`), the planets for it (`planets.py`), the Play screen planets' painting taken apart (`play_relight.py`) and the patch fill it uses (`patch_fill.py`) |
 | 2 inside any map | `map/` | the script assembler and the map's own part (`script.py`, `script.galaxy`), the status strip (`status.py`), the Galaxy reader (`galaxy.py`), launching and leaving a match and the command box (`match.py`), what every preparation reads of a map (`prepare.py`), `specifics.py` |
 | 3 capturing maps | `capture/` | preparing for capture (`prepare.py`), the grid, the capture run (`tiles.py`, `shots.py`), a map's calibration (`calibration.py`), skies (`sky.py`, `sky_layers.py`, `sky_stitch.py`), matting and cut-outs (`matting.py`), the stitch (`stitch.py`, `edge_black.py`), the pack (`pack.py`, `minimap_svg.py`), the reference viewer and `map view` (`viewer.py`, `viewer.html`, `serve.py`), the capture's script part, `diagnostics/` (the `--probe-*` switches and their helpers) |
 | 4 categories of maps | `categories/` | `battleground/`: towns, outposts, camps, structure holes, the elements capture, stitch and pack, the calibration's measurements and its review (`calibrate.py`, `calibration_review.py` and its page), its script part; `arena/`: capture areas and rounds |

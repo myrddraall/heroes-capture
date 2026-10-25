@@ -11,7 +11,8 @@ Everything comes from the game's data:
     sequences that run alongside every other, GLstand), and the twinkling stars' particle system;
   - the light's HDR exposure and white point.
 
-    <out>/scene.json   camera, tone, meshes, materials, particles, textures (play-scene.ts in the app)
+    <out>/scene.json   camera, tone, meshes, materials, particles, textures, and the sky's overlays
+                       (play-scene.ts in the app)
     <out>/<texture>.webp  the textures the layers use: lossless where a channel is a mask, else lossy
 """
 
@@ -35,6 +36,10 @@ HOLD = "ScreenPlay.HeroSelect Start"  # the bookmark where the cutscene holds th
 # The model's parts that make the sky, by the bone each hangs on: the sky's cylinder (the nebula and
 # two layers of stars) and the funnel of energy around the view (HorizonEnergy).
 SKY_BONES = ("Sky_Cylinder_Stars", "Cylinder001")
+# The sky's parts set apart as overlays the app's sky wears (and may take off, or wear on another
+# sky), by the overlay's id: its name, and the bones of the parts it is made of. The sky wears them
+# all as the game does, so it is drawn as it was.
+SKY_OVERLAYS = {"horizon-energy": ("Horizon energy", ("Cylinder001",))}
 # The planets, by the bones their meshes hang on: the big one (OrangePlanet), and the blue one and
 # its moon with each one's atmosphere (Dummy001 to Dummy003).
 PLANET_BONES = ("OrangePlanet", "Dummy001", "Dummy002", "Dummy003")
@@ -208,13 +213,20 @@ class Export:
             if record["blendMode"] == 0 and record["cutoutThreshold"]:
                 # Opaque, but cut out where the alpha is below this.
                 self.materials[key]["cutout"] = round(record["cutoutThreshold"] / 255, 4)
+            specular = None if flags & UNSHADED else self.layer(record["specularLayer"])
+            if specular:
+                # A lit material's shine: where its specular layer says, the lights' specular colour
+                # times its multiplier, as tight as its specularity (the highlight's power).
+                self.materials[key].update({"specular": specular, "specularity": round(record["specularity"], 5),
+                                            "specularMult": round(record["specMult"], 5)})
         return key
 
     def layers_of(self, materials: list[str]) -> list[dict]:
         found = []
         for key in materials:
             material = self.materials[key]
-            found += [layer for layer in (material["diffuse"], material["emissive"], *material["alphaMasks"]) if layer]
+            found += [layer for layer in (material["diffuse"], material["emissive"], material.get("specular"), *material["alphaMasks"])
+                      if layer]
         return found
 
     def uses_second_uvs(self, materials: list[str]) -> bool:
@@ -290,6 +302,23 @@ def texture_files(storage: Storage, names: dict[str, str], alpha_read: set[str],
     return found
 
 
+def sky_overlay(label: str, bones: tuple[str, ...], meshes: dict, materials: dict, textures: dict) -> dict:
+    """A sky overlay of the sky's parts on `bones`, taken out of the sky's own meshes and materials:
+    {label, parts: [{id, shape: {kind: mesh, the mesh as the sky's are (world space: the game's
+    camera's)}, materials}], materials, textures} (the textures it reads, the scene's files)."""
+    parts = []
+    for bone in bones:
+        found = meshes.pop(bone)
+        names = found.pop("materials")
+        parts.append({"id": bone, "shape": {"kind": "mesh", **found}, "materials": names})
+    own = {name: materials.pop(name) for part in parts for name in part["materials"] if name in materials}
+    read = {layer["texture"] for m in own.values()
+            for layer in [m.get("diffuse"), m.get("emissive"), *m.get("alphaMasks", [])]
+            if layer and layer.get("texture")}
+    return {"label": label, "parts": parts, "materials": own,
+            "textures": {key: texture for key, texture in textures.items() if key in read}}
+
+
 def export(storage: Storage, out: Path) -> dict:
     """Export the Play screen's sky into `out` (see the module's description); the scene."""
     scene_info = cutscene(storage)
@@ -341,14 +370,21 @@ def export(storage: Storage, out: Path) -> dict:
     if tone is None:
         raise SystemExit(f"the light {scene_info['light']} has no HDR exposure and white point")
     out.mkdir(parents=True, exist_ok=True)
+    textures = texture_files(storage, ex.textures, ex.alpha_read, out, sources=ex.sources)
+    materials = dict(ex.materials)
+    overlays = {}
+    for overlay_id, (label, overlay_bones) in SKY_OVERLAYS.items():
+        overlays[overlay_id] = sky_overlay(label, overlay_bones, meshes, materials, textures)
     scene = {"source": {"build": storage.build(), "cutscene": CUTSCENE, "model": scene_info["model"],
                         "animation": scene_info["animation"], "light": scene_info["light"]},
              "camera": view, "tone": tone, "meshes": meshes,
-             "materials": ex.materials, "particles": systems, "textures": texture_files(storage, ex.textures, ex.alpha_read, out, sources=ex.sources)}
+             "materials": materials, "particles": systems, "textures": textures,
+             "overlays": overlays, "wears": list(overlays)}
     written = {"scene.json"} | {t["file"] for t in scene["textures"].values()}
     for stale in out.glob("*.webp"):
         if stale.name not in written:
             stale.unlink()
     (out / "scene.json").write_text(json.dumps(scene, separators=(",", ":")), encoding="utf-8", newline="\n")
-    ui.info(f"{len(meshes)} meshes, {len(ex.materials)} materials, {len(systems)} particle systems, {len(scene['textures'])} textures")
+    ui.info(f"{len(meshes)} meshes, {len(materials)} materials, {len(systems)} particle systems, {len(scene['textures'])} textures,"
+            f" {len(overlays)} sky overlays")
     return scene
