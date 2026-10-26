@@ -370,7 +370,9 @@ the texture where its texels hold detail, fills the rest from patches of what is
 (`ui/patch_fill.py`: multi-scale patch matching, in three charts so neither pole pinches) and
 writes the evenly lit surface (`<texture>-base.webp`) with the planet's surface material lit by
 those lights (the file's `light`, at the Play screen's exposure): seen from the game's camera it
-is drawn as the game paints it, and it can be turned and lit from anywhere. Making a surface takes
+is drawn as the game paints it, and it can be turned and lit from anywhere. The game's painting
+is kept as a variant of each (`painted`, in the index's entry for it): switched on, its surface reads
+its painted texture again, drawn flat. Making a surface takes
 minutes (the large planet's), once: it is kept in the cache (`play-relight/`), by its texture, its
 mapping and the generator's version. Each part has a role (surface, layer, shell, ring). A style (`planets/style-<id>.json`) is parts to put about any
 planet and a light to shade it by: `nexus` is the Play screen's look, from its large planet (its

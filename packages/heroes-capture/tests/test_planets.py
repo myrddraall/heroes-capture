@@ -201,6 +201,13 @@ def test_the_planets_from_the_game_s_data(storage, tmp_path: Path):
     small_painting = next(m for m in small["materials"].values() if m["blend"] == "opaque")
     assert medium_painting["diffuse"]["texture"] == small_painting["diffuse"]["texture"]  # one texture: one surface
     assert small["light"]["exposure"] == large["light"]["exposure"] > 0
+    # The painting kept as a variant of the planet (in the index): on, its surface reads the painted
+    # texture, flat.
+    [variant] = {p["id"]: p for p in index["planets"]}["play-large"]["variants"]
+    assert variant["id"] == play_relight.PAINTED and variant["name"] == play_relight.PAINTED_NAME
+    [(key, flat)] = variant["settings"]["materials"].items()
+    assert large["materials"][key] is not None and flat["lit"] is False and "variants" not in large
+    assert flat["layers"]["diffuse"]["texture"] in large["textures"] and not flat["layers"]["diffuse"]["texture"].endswith("-base")
     # It wears the nexus style as its own shield is: unshaded, the grid as the data has it.
     nexus = json.loads((tmp_path / "planets" / "style-nexus.json").read_text())
     [grid] = nexus["parts"][0]["materials"]

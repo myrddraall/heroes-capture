@@ -19,7 +19,9 @@ is too, and so:
 
 A planet's surface material then reads the surface (lit, not unshaded) and its file has the lights,
 in its own frame (x right, y away from the eye, z up), at the Play screen's exposure: lit as the
-camera sees it, it is drawn as the game paints it. Two planets painted with one texture (the medium
+camera sees it, it is drawn as the game paints it. The game's painting is kept as a variant of the
+planet (PAINTED, its own, switched on where wanted): on, its surface reads its painted texture
+again, drawn flat as the game draws it (for simple scenes and previews, where nothing lights it). Two planets painted with one texture (the medium
 and small ones) share one surface, each with its own lights (each maps it its own way round).
 
 Making a surface takes minutes (the large texture's), so each is kept in the cache, by its texture,
@@ -83,6 +85,10 @@ BAND_SOURCE = (35.0, 145.0)
 CAP, CAP_KEPT, CAP_FADE, CAP_BLEND = 52.0, 44.0, 4.0, (45.0, 48.0)
 
 LUMA = np.array([0.2126, 0.7152, 0.0722])
+# The variant of a Play screen planet that puts its painting back (its surface material read flat
+# from its painted texture), by id and name.
+PAINTED = "painted"
+PAINTED_NAME = "Painted"
 
 
 class Mapping:
@@ -385,6 +391,9 @@ def relight(storage: Storage, export: Export, files: dict[str, dict], baked: dic
             export.baked_from[surface_key] = texture
         lights = planet_lights(paintings[texture], mapping)
         file["materials"][key] = {**material, "unshaded": False, "diffuse": {**material["diffuse"], "texture": surface_key}}
-        file["textures"] = sorted((set(file["textures"]) - {texture}) | {surface_key})
+        # (Its painted texture kept too: the PAINTED variant reads it.)
+        file["textures"] = sorted(set(file["textures"]) | {surface_key})
         file["light"] = {"ambient": [0.0, 0.0, 0.0], "directional": lights, "exposure": exposure}
+        file["variants"] = [{"id": PAINTED, "name": PAINTED_NAME, "settings": {
+            "materials": {key: {"lit": False, "layers": {"diffuse": {"texture": texture}}}}}}]
         ui.info(f"{name}: lit by {len(lights)} light{'s' if len(lights) > 1 else ''}, its surface {surface_key}")

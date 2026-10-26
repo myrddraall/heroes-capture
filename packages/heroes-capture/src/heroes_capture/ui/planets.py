@@ -27,8 +27,9 @@ do), in units of the body's radius; with its light (ambient, directional lights 
 travel in that frame, and the flyby's exposure).
 
     <out>/planets/index.json   the planets: id, kind (play, world, painted), the style each wears
-                               unless a scene says otherwise; the Play screen's own set: each where
-                               the game puts it and its size; and the styles
+                               unless a scene says otherwise, its own variants (a Play screen
+                               planet's: its painting, see play_relight); the Play screen's own set:
+                               each where the game puts it and its size; and the styles
     <out>/planets/<id>.json    kind, parts (role, shape, mapping, mapping2?, materials, color),
                                materials, textures, light?, tuning? (TUNING; a Play screen planet's:
                                its style and how it wears it, `variants`)
@@ -811,10 +812,14 @@ def export(storage: Storage, out: Path) -> dict:
     folder = out / "planets"
     folder.mkdir(parents=True, exist_ok=True)
     textures = texture_files(storage, ex.textures, ex.alpha_read, out, baked, ex.sources, ex.baked_from)
+    # A planet's own variants go in the index (the app reads them where it lays out what a planet
+    # wears and how, before its file loads), not its file.
+    variants = {key: file.pop("variants") for key, file in files.items() if "variants" in file}
     for key, file in files.items():
         file["textures"] = {t: textures[t] for t in file["textures"]}
         (folder / f"{key}.json").write_text(json.dumps(file, separators=(",", ":")), encoding="utf-8", newline="\n")
-    index = {"planets": [{"id": key, "kind": file["kind"], **({"style": file["tuning"]["style"]} if "style" in file.get("tuning", {}) else {})}
+    index = {"planets": [{"id": key, "kind": file["kind"], **({"style": file["tuning"]["style"]} if "style" in file.get("tuning", {}) else {}),
+                          **({"variants": variants[key]} if key in variants else {})}
                          for key, file in files.items() if file["kind"] != "style"],
              "play": [{"id": key, "position": planet.placed[0], "radius": planet.placed[1]}
                       for key, planet in planets.items() if planet.placed],
