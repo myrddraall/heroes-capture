@@ -71,7 +71,8 @@ def simulate(work: Path, mode: str = "matte", *args: str, **env: str) -> dict:
     """One simulated capture (tests/sim/fakegame.py) in `work`: its outcome line, its run log
     and its folder."""
     work.mkdir(parents=True, exist_ok=True)
-    subprocess.run([sys.executable, str(SIM / "makemanifest.py"), str(work), mode], check=True)
+    # The map planned for the screen the fake game runs at (FAKE_SCREEN), as a real one is.
+    subprocess.run([sys.executable, str(SIM / "makemanifest.py"), str(work), mode], check=True, env={**os.environ, **env})
     with sim_slot():
         run = subprocess.run([sys.executable, str(SIM / "fakegame.py"), str(PACKAGE), str(work), *args],
                              cwd=work, capture_output=True, text=True, timeout=900, env={**os.environ, **env})
@@ -84,7 +85,7 @@ def simulate(work: Path, mode: str = "matte", *args: str, **env: str) -> dict:
 @pytest.fixture(scope="session")
 def storage():
     """The game's storage on Blizzard's CDN."""
-    from heroes_capture.game_data import open_storage
+    from heroes_capture.common.game_data import open_storage
 
     with open_storage(None) as opened:
         yield opened

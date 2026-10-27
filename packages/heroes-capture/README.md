@@ -5,6 +5,8 @@ script injected into the map hides the HUD, the fog of war and the units, points
 straight down and steps it across the map while screenshots are taken, and the screenshots are
 stitched by their known positions. Structures (forts, towers, cores, gates) can be kept or
 hidden, so each map can be rendered both ways.
+It also extracts the game's interface textures and finds them by description
+([Interface textures](#interface-textures)).
 
 Runs on Windows with the game installed. Start Heroes from the Battle.net app first, so it's
 logged in; the capture then hands the prepared map to the running game.
@@ -18,7 +20,7 @@ included; nothing to install), and its `.sha256`. The newest is always at
 ```powershell
 heroes-capture-win-x64.exe map render "Battlefield of Eternity"
 heroes-capture-win-x64.exe map render --category all   # every map the tool can render
-heroes-capture-win-x64.exe map list     # the game's maps by category, and which have been validated
+heroes-capture-win-x64.exe map list     # the game's maps by category, and which are verified
 ```
 
 The output folder is one a render can be run again on: a map already rendered there is skipped
@@ -28,9 +30,10 @@ same command again picks them up.
 
 A render's images go to `maps\<map id>\` in the folder it runs from (`maps\battlefield-of-eternity\`;
 `-o` / `--output-dir` picks another folder for them). Its working files (the screenshots, the
-prepared map, the diagnostic logs) go to `tmp\` and are removed when the render finishes;
-`--keep-tmp` leaves them for diagnosis, and a failed render leaves them too. `heroes-capture
-clean-up` removes them afterwards (only what heroes-capture wrote in `tmp\`).
+prepared map, the diagnostic logs) go to `tmp\` and stay there: a render that stops carries on
+from them when run again (only one left unfinished, by the same version of the tool; a finished
+render is shot afresh). `--clean-up` removes them once the render is done (for a render known to
+work), and `heroes-capture clean-up` removes them any time (only what heroes-capture wrote in `tmp\`).
 
 Two logs:
 
@@ -41,9 +44,14 @@ Two logs:
   time-stamped; working files, so removed with the rest. A run removes only its own: a failed
   run's stay until `clean-up`. A capture restarted after a lost match carries on in its run's.
 
-On a terminal the output is a live view (the step, its status, progress bars; warnings print
-above it); `--log` gives plain log lines instead, the default in CI or when the output isn't a
-terminal; `-v` / `--verbose` adds the detail messages in either.
+On a terminal the output is a live view of the run as a tree: its steps (preparing, capturing,
+stitching and packing) and each step's stages and passes, the whole run from its start, a line
+each with its bar, count and time (greyed until it starts); one in progress has its latest
+status on a second line under it.
+Warnings print above it; when a run ends its finished tree is printed, so earlier runs are a
+scroll back. `--log` gives plain log lines instead, as a tree (the default in CI or when the
+output isn't a terminal; the log files read the same); `-v` / `--verbose` adds the detail
+messages in either.
 
 The rest of this page is for working on the tool itself.
 
@@ -67,7 +75,8 @@ The rest of this page is for working on the tool itself.
   the usual folders).
 
 - In the game's options: **Display Mode: Windowed (Fullscreen)** (screenshots of exclusive
-  fullscreen come out black), your monitor's native resolution, graphics on Ultra.
+  fullscreen come out black), graphics on Ultra. Any resolution does: the render plans for the
+  monitor the game is on, and the status strip is measured as it comes out on the screen.
 
 ## Render a map
 
@@ -76,33 +85,74 @@ The rest of this page is for working on the tool itself.
 tracked: it contains the machine's source path.
 
 `heroes-capture map render` runs all three steps against the installed game, at the primary
-monitor's resolution, into `maps\<map id>\`, with its working files in `tmp\`:
+monitor's resolution (or another monitor's: `--monitor`), into `maps\<map id>\`, with its working
+files in `tmp\`:
 
 ```powershell
 heroes-capture map render "Towers of Doom"                  # structures kept, into maps\towers-of-doom
 heroes-capture map render "Cursed Hollow" --structures hide # bare terrain
 heroes-capture map render "Dragon Shire" -o D:\renders      # into D:\renders\dragon-shire
-heroes-capture map render "Dragon Shire" --keep-tmp         # tmp\ left for diagnosis
+heroes-capture map render "Dragon Shire" --clean-up         # tmp\ cleared once done
 heroes-capture map render --category arena                  # battleground, arena, brawl, other or all
 heroes-capture map render "Dragon Shire" --force            # again, though maps\dragon-shire has it
-heroes-capture clean-up                                     # removes what a failed or --keep-tmp render left in tmp\
+heroes-capture map survey "Dragon Shire"                    # step 1 of a new map: what the game's data says (no game needed)
+heroes-capture map calibrate "Dragon Shire"                 # measure the map for its elements render (then review it)
+heroes-capture clean-up                                     # removes the working files runs left in tmp\
+heroes-capture job run.yml                                  # the runs a job file lists, in order
+heroes-capture job run.yml --resume                         # carries on a job that stopped
 ```
+
+A job file lists runs in YAML: whole renders, renders of only some parts over the map's last run,
+and calibrations (`heroes_capture/job.py` describes it):
+
+```yaml
+runs:
+  - map: Dragon Shire
+    render: elements          # keep, hide or elements: the whole render
+  - map: Dragon Shire
+    render: elements
+    only: [rubble]            # skies, standing, camps, rubble, tiles: just these, over the kept run
+  - map: Dragon Shire
+    calibrate: [standing]     # calibration stages, or all
+```
+
+A run of some parts builds on the map's kept run of the same render in `tmp\`: what it reshoots is
+removed, the rest kept, and the map is stitched from all of it; the setup those parts need (the map
+prepared and launched, the structures brought down) is done whatever is chosen. The job's progress
+is kept in `tmp\job.json`: `--resume` skips the runs it finished and carries on the one under way.
 
 A map already rendered in the output folder (its viewer is there) is skipped. A render left
 unfinished carries on from its working files when run again with the same options: the capture
 resumes at the first missing screenshot (less the two the saving threads may have left
 half-written), or the stitch runs straight away when they're all there. With other options it
-starts again. Maps not yet validated render too; their line says they may not come out right.
+starts again. Maps not yet verified render too; their line says they may not come out right.
 Options that aren't `map render`'s own go to the preparing step: `heroes-capture prepare --help`
 lists them.
 
+A new map goes through three steps: `map survey` reads what the map's files and the game's data
+say (each structure's team colour standing and in its remains, for each team; how long its death
+plays; which structures can overlap; the water and the sky) and reports what the calibration will
+therefore measure and what the data answers instead, with the odd cases as questions for the
+review; then the calibration and its review, repeated until nothing the render needs is unknown;
+then the render.
+
+An elements render (`--structures elements`) needs the map's reviewed calibration: a short match
+(`map calibrate`) that measures in the game what the render would otherwise assume from
+Battlefield of Eternity (where each structure's copy can stand and still look like it, which
+structures change with the side, what keeps moving while paused) and films each kind's fall,
+followed by a review of what the numbers can't settle. The render stops when the map has none from
+the current tool. `VERIFICATION.md` has the steps.
+
 (`py -m heroes_capture map render ...` is the same.) `heroes-capture map list` lists the game's
-maps by category and which have been validated: their render reviewed and, where needed, tuned
-for. They're in `validated-maps.json`; add a map there once its render has been looked over. The
+maps by category and which are verified: their render passed the checklist in `VERIFICATION.md`,
+with Battlefield of Eternity as the standard, at the checklist's current version. The record is
+`maps/validated-maps.json`; a change to the render bumps the checklist's version there, and every
+map is unverified until it passes again. The
 categories come from the mods each map builds on: Battleground (the 5v5 maps of the Versus AI /
 Quick Match / Storm League pool, with the custom-game-only ones: the game's data doesn't tell them
 apart), Arena and Brawl (each map needs handling of its own, as Punisher Arena's three arenas and
-rounds did, so only the validated ones are supported; naming another renders it with a warning),
+rounds did, so only the known ones are supported, those in `validated-maps.json` at any checklist
+version; naming another renders it with a warning),
 and Other (the sandboxes, and Try Me Mode and the tutorials, listed as unsupported: the game keeps
 them as folders rather than map archives, and the capture builds on an archive). A category's run
 leaves the unsupported maps out. The steps on their own, which leave their files in place:
@@ -116,17 +166,43 @@ heroes-capture prepare "Towers of Doom" --screen 3440x1440 --distance 214 --keep
 heroes-capture capture tmp/towers-of-doom-structures.json
 
 # 3. Stitch: writes maps/towers-of-doom/: the pack (pack/) and the full-size layers (raw/).
+#    --composites also writes the map over its sky layers as three full-size PNGs in raw/.
 heroes-capture stitch tmp/towers-of-doom-structures.json
 ```
 
-The screenshots are kept as raw `.npy` arrays (fast for the stitch to read; older runs' PNG tiles
-still stitch).
+The screenshots are kept as raw `.npy` arrays (fast for the stitch to read).
 
 Use `--structures hide` for bare terrain; it goes to the map folder's `terrain\`.
 
 Map names are as the game shows them (case and punctuation don't matter), or pass a path to any
 `.stormmap`. The battleground maps are `.s2ma` archives under content-hash names in the game's
 storage; the first run after a game update opens each to index them by name (about 20 s).
+
+### Monitors
+
+`--monitor <which>` puts the game's window on that monitor before launching the map, and plans
+the render for that monitor's resolution: `--monitor 2`, by the number Windows lists the monitors
+in (the run's log starts with the list: `monitors: 1 \\.\DISPLAY1 3440x1440 at (0, 0) primary;
+2 ...`), or its device name, or `primary`. Without it the game stays where it is and the primary
+monitor's resolution is planned for. The capture follows the game's window either way; a window
+that didn't take the monitor's size is warned about. The game puts its window back on its own
+monitor when it redraws at a new size, so the window is watched for a few seconds and placed again
+when that happens (up to three times). The narrowest picture the game draws is 5:4: on a narrower
+monitor (1680x1440, say) it draws a 5:4 picture the monitor's width wide (1680x1344), centred, with
+black above and below, and the render is planned for that picture.
+
+To check a monitor before rendering on it, `map render <map> --probe-monitor --monitor <which>`
+runs the start-up there and then reports, instead of rendering: whether the window took the
+monitor, the status strip's cells against what the screen's height predicts, the width blanked for
+the strip, and where the camera lands when sent to a tile. The report (`report.json`, the strip's
+column and the screen at half size) goes to `tmp\probe-monitor-<WxH>-<time>\`; the log line
+`monitor probe at WxH: n of 6 checks ok` sums it up.
+
+### In a Hyper-V VM
+
+To render without giving up the PC, or at a resolution none of its monitors has (4K, say),
+[`vm/`](vm/README.md) sets up a Windows VM for the tool: a share of the PC's GPU, a virtual
+monitor at the resolution you choose, Battle.net, and a session that stays signed in by itself.
 
 ### Options (prepare; `map render` passes them on)
 
@@ -150,9 +226,8 @@ Diagnostics `map render` runs instead of rendering:
 
 | Switch          | Effect                                                                                                                                                                                     |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--probe-light` | command sequences at chosen points, two shots after each (`HRS_PROBE_POINTS="x,y;x,y"`, `HRS_PROBE_TILE_PATH="tile:0.5;tile,black:0.5"`; see `probes.py`), to see what each step does to the picture |
-| `--probe-sky`   | one edge tile over each skybox; the sky part of each shot is measured (mean colour, spread); `HRS_SKY_SEQUENCE` scripts the swaps                                                           |
-| `--probe-waits` | the fixed waits (lighting-refit look, settle before the kept shot, sky swaps) tried shorter on sample tiles and compared with the current ones; and the sky pass with positions further apart (`sky-keep08/`) |
+| `--probe-sky`   | one edge tile over each solid-colour skybox; the sky part of each shot is measured (mean colour, spread), to check the colour shows and is flat; `HRS_SKY_SEQUENCE` scripts the swaps |
+| `--probe-sky-reach` | the camera as far past the camera bounds as it goes, the sky shot there with the render's lens and wider ones: how much parallax sky a map has |
 
 Higher `--px-per-cell` means more screenshots and a closer camera. Past about 64–128 px per
 cell there is no more detail: that's the game's own texture resolution.
@@ -167,23 +242,29 @@ root is the format, written as the contract with the map viewer that reads it.
   - `pack.json`: what's in the pack and how to draw each layer: the map, its arenas, the
     layers' scales, positions and parallax rates in map cells, the pictures, and every file
     with its SHA-256.
-  - A tile pyramid per layer (`map.pmtiles`, `background.pmtiles`, `haze.pmtiles`; one map
-    layer per arena on a map of several): PMTiles archives of 512 px WebP tiles, every level
-    from the full image down to one tile, read by range requests.
-  - `fixed.webp` (the fixed skybox, a screen backdrop), `thumbnail.webp`, and `images\`: the
-    map's own pictures from the game (minimap, custom minimap, replay preview, map-select
-    picture, loading screen and its icons, where the map has them), and the custom minimap
-    redrawn as an SVG (`custom-minimap.svg`) that lies exactly on the map.
-  - `index.html`: the reference viewer. `heroes-capture map view "<map>"` serves the pack on
-    this computer and opens it: drag to pan, mouse wheel to zoom; tiles load coarse first and
-    sharpen as you zoom; the sky layers move at their rates behind the map. The custom minimap
-    shows on the map while the first view loads, then fades away; the buttons show or hide
-    each layer (the background, sky, haze, terrain and minimap; over the terrain the minimap is
-    see-through).
+  - Per layer (`map`, `background`, `haze`; one map layer per arena on a map of several) an
+    overview (`<layer>-overview.webp`: the level the opening view needs, whole) and a tile
+    pyramid (`<layer>.pmtiles`): a PMTiles archive of 512 px WebP tiles of the finer levels,
+    read by range requests.
+  - `fixed.webp` (the fixed skybox, a screen backdrop), `thumbnail.webp`, `images\custom-minimap.svg`
+    (the custom minimap redrawn as an SVG that lies exactly on the map) and, for the elements
+    render, `elements\` (the cut-outs' atlases).
 - `raw\`: the layers at full resolution as PNG (`map.png`, `background.png`, `haze.png`,
-  `fixed.png`), the composites (`composite.png`, background, haze and map together;
+  `fixed.png`), `layers.json` placing them as `pack.json` does, the elements' cut-outs
+  (`elements\`), the map's own pictures from the game (`images\`: minimap, custom minimap,
+  replay preview, map-select picture, loading screen and its icons, where the map has them),
+  with `stitch --composites` the composites (`composite.png`, background, haze and map together;
   `composite-on-black.png`; `composite-with-fixed.png`, over the fixed skybox), and
-  `layers.json`, placing them as `pack.json` does.
+  `index.html`, the reference viewer. `heroes-capture map view "<map>"` serves the map's folder
+  on this computer and opens it: drag to pan, mouse wheel to zoom; each layer's overview shows
+  first and tiles sharpen it as you zoom; the sky layers move at their rates behind the map. The
+  custom minimap shows on the map while the first view loads, then fades away; the buttons show
+  or hide each layer (the background, sky, haze, terrain and minimap; over the terrain the
+  minimap is see-through), and "Swap colours" shows the teams in each other's colours.
+- Team colour: everything the game draws in a team's colour (the structures, and doodads such as
+  Battlefield of Eternity's Heaven lamps) is shot from both sides (our player switched to Chaos
+  and back: `side`), and the pack carries a mask of each team's colour (PACK.md, Team colour), so
+  a viewer can show the teams in any colours.
 
 The map image is cropped to the camera bounds plus `--crop-margin` cells, widened to take in all
 of the map the screenshots show, with the void transparent. Map cells convert to its pixels by
@@ -193,13 +274,136 @@ the shells are a tilted plane (fitted from the sky shots' overlaps), so they com
 trapezoids, transparent in the corners no shot reaches. Every render of a map with its own
 parallax sky also keeps `<id>\sky-layers.json` in its working files, the measured speeds.
 
+## Interface textures
+
+```powershell
+heroes-capture ui extract                                  # the interface's textures into assets\ui\
+heroes-capture ui search "gold hexagonal portrait frame"   # the 40 that fit a description best
+heroes-capture ui search "talent panel background" -n 80
+```
+
+`ui extract` reads the game's data (no need for the game to be running) and writes each of the
+interface's textures as a PNG, at full size and as a thumbnail, into `assets\ui\` (Blizzard's art:
+not in git). The interface's textures are the ones its layouts draw, its asset table names
+(`UI/<name>`), its catalog entries show as pictures (button icons, portraits, loading screens)
+and the ones named with its own prefixes (`storm_ui_`, `ui_`, `hud_`, ...): about 12,400. Sprays
+and banners are left out: they're collectibles drawn in the world.
+
+`assets\ui\catalogue.json` says, for each texture: its size and format, whether it's transparent,
+its asset names, the layout frames that draw it (with the frame's texture type: `Border` and
+`NineSlice` pieces are stretched by their edges) and the catalog entries that show it, with
+their English names. A texture unchanged since the last run isn't decoded again.
+
+`ui search` ranks the textures by how near each picture is to the description, by an image-text
+model ([SigLIP 2](https://arxiv.org/abs/2502.14786) through
+[OpenCLIP](https://github.com/mlfoundations/open_clip), on the CPU), with a little added for the
+description's words in what the catalogue calls the texture. It lists the best and draws them
+on a contact sheet, `assets\ui\searches\<description>.png`. It needs the search extra, which
+the executable leaves out (PyTorch alone is hundreds of megabytes):
+
+```powershell
+uv sync --extra search   # or: pip install -e ".[search]"
+```
+
+The model's weights download once (Hugging Face's cache). The first search looks at every
+picture (`assets\ui\index-<model>.npz`), which takes 10 to 30 minutes on a 16-core CPU; after
+that a search takes seconds, and after a game update only the textures it changed are looked at
+again.
+
+### The Play screen's background
+
+```powershell
+heroes-capture ui background -o ..\heroes-replay-stats\packages\app\public\backgrounds\play
+```
+
+Exports the background of the game's Play screen for a browser to draw (heroes-replay-stats
+draws it with WebGL, at its `/play-background` page): its sky, the energy drifting in towards
+the horizon, the twinkling stars and the planets (their atmospheres, and the faint hex grid over
+them), not the floor. `scene.json` holds the camera, the light's HDR exposure and white point, the
+meshes (the planets' with their normals, their billboards turned to face the camera), their
+materials' layers (colours, fresnels and emissive blends included) and the stars' particle system,
+and the sky's overlays (`overlays`, by id, and the ones it wears, `wears`): parts of the sky set
+apart for the app's sky to wear or take off, each its meshes, materials and the textures they read
+(`SKY_OVERLAYS`: the energy funnel round the view, `horizon-energy`, which the sky wears, so it is
+drawn as before); the textures go beside it as WebP (about 1 MB in all), each with its size and where it is in the
+game data (`source`; one baked onto a planet's own mapping says `baked`, its source the texture it
+was baked from). From the game's
+data (`ui/play_background.py`): the cutscene the Play screen runs (`gluebackground.stormcutscene`:
+its camera, the model its actor shows, the light and animation in effect while it holds the Play
+screen) and that model (`common/m3.py` reads it: its meshes placed by the Stand pose, its
+materials, and the 200-second scrolls of the sequences that run alongside, GLstand).
+
+Beside the scene it exports planets (`planets/`, `ui/planets.py`) for the app to put up in sets
+of its own, each in a file of its own so the app loads only what a set uses: the Play screen's
+three as templates (each in its own space, its body a unit sphere or hemisphere facing -Y, the
+app turning it to face the camera as the game's billboards do; `index.json` says where the game
+puts each and how big); and, from the tutorial's flyby (`tutorial_cutscene_planetflyby`, the
+doodad `Storm_Doodad_Nexus_PlanetsFlyby`), three worlds (Azeroth, Korhal, Sanctuary, with their own
+meshes and layered materials, its space station left out as too heavy; a lit material's shine
+too where it has a specular layer: the layer, its specularity and specular multiplier, the MAT_
+fields at 32, 44 and 76 as m3addon's structures give them; and each light's specular colour times
+its SpecColorMultiplier, an attribute or a child, a channel left out 1, none at all none) and nine painted spheres
+(their textures on the Play screen's hemisphere, which is smooth where theirs are not). Each is
+taken as the flyby shows it best (a world at the moment of the tutorial's own big shot of it,
+read off a recording; a painted sphere when it is largest while well within the camera's view)
+under the light the cutscene has on then, which it switches as the camera passes each world, so
+each is seen under the light of its approach; the light goes in the file (ambient, the
+directional lights the way they travel in the planet's space and their colours times their
+multipliers, the HDR exposure) for the app to light it the same way. A light's direction is the
+way it travels in the world (z up), taken into the planet's frame as the flyby's camera sees it
+then, its bank included, which is what matches the tutorial's shots of each world's approach (lit
+sides, rims). A flyby world wears only its own atmosphere, as the game shows it. A planet's file
+describes its body as parts, not meshes: each of the game's meshes is read for what it is (a
+sphere, seen from outside or, for the inside-out atmosphere shells, from inside; a flat ring), with
+the rule that maps its surface to its texture coordinates fitted to the mesh's own (a uv sphere
+about a pole, linear in the point, or round the ring; a mesh that fits neither gets a plain uv
+sphere, and the export says so), its materials and its vertex colour, so the app draws it with no
+mesh at all. A layer reading a mesh's second texture coordinates gets their rule too where one
+fits (the worlds' clouds); where none does (the Play screen planets' masks and painting are an
+unwrap), the layer is baked into a texture over the first coordinates, as the mesh interpolates
+it, and the material rewritten to read that (`<planet>-<texture>-<slot>.webp`). The Play screen
+planets' painting is taken apart (`ui/play_relight.py`): the game paints each one's light into its
+surface texture (the lit side on the far side, the dark side towards its camera) and draws it
+unshaded, so the export finds that light (its direction, and its falloff fitted as up to three of
+the app's directional lights, the side the game's camera sees weighted most), divides it out of
+the texture where its texels hold detail, fills the rest from patches of what is kept
+(`ui/patch_fill.py`: multi-scale patch matching, in three charts so neither pole pinches) and
+writes the evenly lit surface (`<texture>-base.webp`) with the planet's surface material lit by
+those lights (the file's `light`, at the Play screen's exposure): seen from the game's camera it
+is drawn as the game paints it, and it can be turned and lit from anywhere. The game's painting
+is kept as a variant of each (`painted`, in the index's entry for it): switched on, its surface reads
+its painted texture again, drawn flat. Making a surface takes
+minutes (the large planet's), once: it is kept in the cache (`play-relight/`), by its texture, its
+mapping and the generator's version. Each part has a role (surface, layer, shell, ring). A style (`planets/style-<id>.json`) is parts to put about any
+planet and a light to shade it by: `nexus` is the Play screen's look, from its large planet (its
+hex-grid shield and ring; its shade, a darkening from a side, is this tool's own, set by eye
+against the Play screen's painting). The Play screen's planets are bases: each its painted
+surface alone, wearing `nexus` for its shield and ring (the index names the style a planet wears
+unless a scene says otherwise), set in its tuning's `variants` as its own shield is in the data
+(the grid's brightness, its size from its tiling against the large one's, its fresnel's floor
+as its spread and its fresnel's turn as the side it spreads from, `spreadFrom`; its glow the
+data's, drawn with the game's grid texture, no shade, its painting being shaded; and its own mask, on its own surface's mapping, and its own ring, in the variant's `masks` and `parts`). A Play screen planet's ring carries the distance, in its body's radii, the game's camera sees it from (`seen`): modelled to lie on the limb from there, the app keeps it there from anywhere. Their grid shows as the game shows it by `PLAY_GRID` (its fresnel's `falloff` and a share of its brightness, measured band by band inside the large planet's outline against a Quick Match screenshot). A ring's mapping says where across it its v peaks (`mid`: its mesh is three circles, the edges at v 0 and one between at v 1). A planet's `tuning` (`TUNING` in planets.py: light strength,
+shade, and its materials' settings by name: strength, blend, glow, spread, its pattern's scale,
+cut, width and softness; the nexus style's `NEXUS_SHIELD` for its shield material, its hexes 2.5 times the game's
+size; the pattern says how many hexes a tile of the grid texture has, `HEX_ACROSS`, counted in it,
+so the app's size 1 is the game's) is how the
+app shows it where the data alone isn't right, set by eye against the tutorial's shots. A model whose entry gives no file is found through
+its parents' (`Doodad`:
+`Assets\Doodads\##id##\##id##.m3`).
+
 ## How it works
 
-- **inject.py** copies the `.stormmap` (an MPQ archive, written through StormLib), reads the map
-  size and camera bounds from its `MapInfo`, plans a grid of camera positions, and appends the
-  capture script (`capture_script.galaxy`, filled in by `capture_script.py`) to `MapScript.galaxy`,
-  called at the end of `InitMap`. It also adds
-  the status strip's texture and the solid-colour skyboxes (see below). A map that is several arenas in one (Punisher Arena: one arena per round,
+- **Preparing (`capture/prepare.py`, with `map/prepare.py`)** copies the `.stormmap` (an MPQ
+  archive, written through StormLib), reads the map size and camera bounds from its `MapInfo`,
+  plans a grid of camera positions, and puts heroes-capture's script into `MapScript.galaxy`,
+  called at the end of `InitMap`. The script is assembled from parts, one per layer that takes
+  part (`map/script.py`): the map's own (`map/script.galaxy`: the status strip, the command box,
+  the note, leaving the match), the capture's (`capture/script.galaxy`: tiles, scene, camera,
+  skies), the map's category's (`categories/battleground/script.galaxy`: structures and camps one
+  at a time; `categories/arena/script.galaxy`: rounds) and, when one needs it, a single map's. A
+  part declares its commands and its start-up function in header lines, and a function a later
+  part defines again replaces the earlier one. It also adds the status strip's texture and the
+  solid-colour skyboxes (see below). A map that is several arenas in one (Punisher Arena: one arena per round,
   stacked on the map, the camera bounds moved to the round's arena at run time) marks each
   with a region named `..._MapBounds` in its `Regions` file; with two or more, each gets its
   own grid, the script lifts the camera bounds so the camera can reach them all, and the
@@ -231,12 +435,12 @@ parallax sky also keeps `<id>\sky-layers.json` in its working files, the measure
   light's direction comes from the map's tileset (`t3Terrain.xml`), the tileset's light set
   and that light set's "Key" light, with the map's own `TerrainData.xml` / `LightData.xml`
   overriding; the tilesets and light sets are read from every mod's `GameData/TerrainData.xml`
-  and `LightData.xml` in the game's storage at each run (`game_data.py`, `light_data.py`;
+  and `LightData.xml` in the game's storage at each run (`game_data.py`, `lighting.py`;
   `--refit-yaw` overrides), so a game update that adds tilesets needs nothing done.
 - **Opening events first.** The gates open 3 s in (GameLib's `libCore_gv_bALOpenTheGatesDelay`
   and its countdown timer); then, for 8 real seconds, the map's own timers between the gates and
-  its first objective are cut short as each starts (`opening-timers.json`, by the libraries the
-  map script includes; Hanamura's payload otherwise comes 3 minutes in), so the objective and
+  its first objective are cut short as each starts (the map's own module in `maps/`: Hanamura
+  Temple's payload otherwise comes 3 minutes in), so the objective and
   what it brings are in place before any tile is shot. Everything is paused 18 real seconds
   after the gates open (the fast-forward included), once entrance animations (the cores') have
   finished. The status strip's "ready" bit tells the
@@ -257,13 +461,16 @@ parallax sky also keeps `<id>\sky-layers.json` in its working files, the measure
   referenced by path, and a file in the map at that path replaces the game's, so each colour is
   a stock mesh (the Braxis bowl and the "parallax" bowls; the big heaven/Luxoria bowl won't swap
   at run time) plus solid-colour DDS textures, with the mesh's cloud layers made transparent.
-  The script sets the camera-fixed skybox (`GameSetBackground` layer 0) white at every tile and
-  black on `black`; the tileset's parallax layer and fog are turned off; cloud layers placed in
-  the map as doodads (Battlefield of Eternity, Punisher Arena) are hidden by type. Each tile is
-  shot over white and over black, and the stitch turns the pair into colour and transparency
-  (difference matting: the difference between the shots is exactly the see-through share; the
-  white level is measured from the shots, the game renders it at about 230; pixels that changed
-  between the shots other than by the sky, an animated glow, stay opaque). Whether a map's
+  The script sets the camera-fixed skybox (`GameSetBackground` layer 0) to a light grey at every
+  tile and black on `black`; the tileset's parallax layer and fog are turned off; cloud layers
+  placed in the map as doodads (Battlefield of Eternity, Punisher Arena) are hidden by type. Each
+  tile is shot over the light grey and over black, and the stitch turns the pair into colour and
+  transparency (difference matting: the difference between the shots is exactly the see-through
+  share; the light grey's level is measured from the shots, the game renders it at about 198;
+  pixels that changed between the shots other than by the sky, an animated glow, stay opaque).
+  Not white: the game draws a white sky at about 230, bright enough to set off its bloom, a soft
+  halo round everything in the void that the matte would keep; the light grey doesn't (the matte
+  probe). Whether a map's
   void shows the sky is read from its tileset (from the game's data, with the map's own overrides:
   the lowest terrain level undrawn, or a skybox). Without that (Dragon Shire, Towers of Doom,
   Tomb of the Spider Queen) the void is terrain drawn black, which no skybox shows through:
@@ -275,13 +482,13 @@ parallax sky also keeps `<id>\sky-layers.json` in its working files, the measure
   sweep. It carries a locator, the sequence number of the last command carried out (the
   capture appends one to each command it sends), the camera's actual target (so clamping at
   the map's edge is known, and the camera bounds are measured by sending the camera to two
-  corners), which sky is up, a tick, the game clock, the map's identity and phase, and a parity
+  corners), which sky is up, the game clock, the map's identity and phase, and a parity
   bit (`status.py` has the layout). Reading it is a few pixel averages, so the capture polls it
   fifty times a second and shoots the moment the acknowledgement appears, instead of waiting
   fixed times. The echoed camera position (to 1/64 cell) is what places each screenshot; the
   scale (pixels per cell) comes from the image matches between neighbours. The strip's 64 px
   column is blanked in the kept shots and left out of the stitch (`status.pageLeft`).
-- **The game's state, and recovery.** capture.py tells the game's states apart from a screen
+- **The game's state, and recovery.** The capture (`capture/tiles.py`) tells the game's states apart from a screen
   grab four times a second, cheapest test first: not running (no game process), in our map
   (its status strip), the main menu (its fixed interface, `menu-reference/`), the "Unable to
   open map" dialog (a black band with the menu's backdrop above and below), and otherwise
@@ -295,9 +502,11 @@ parallax sky also keeps `<id>\sky-layers.json` in its working files, the measure
   within 3 s is sent again. And the count of units the clearing removed after the map was
   ready (the log notes a tile where something spawned mid-render), whether the intro cutscene
   is playing, and how many opening timers were cut short.
-- **capture.py** starts Heroes through the Battle.net app if it isn't running (started
+- **The capture (`capture/tiles.py`)** starts Heroes through the Battle.net app if it isn't running (started
   directly it can't authenticate; `--battlenet` or `HRS_BATTLENET` if the app isn't in the
-  usual place), then launches the map through `Support64\HeroesSwitcher_x64.exe` (Heroes must be
+  usual place; the app can let the first launch command go by, so it is sent again after 45 s,
+  then as the `battlenet://Hero` link, and after that the run pauses, up to 10 minutes, for Play
+  to be pressed on the app's Heroes page), then launches the map through `Support64\HeroesSwitcher_x64.exe` (Heroes must be
   at the main menu: a running match keeps its map), waits for the status strip, on a map with its own sky, measures and shoots the sky layers
   while the map gets ready (or once it is ready, when an in-game hero selection hides the world
   meanwhile: Punisher Arena), measures the camera bounds the game really applies (an arena's are far tighter than its map file says)
@@ -308,59 +517,41 @@ parallax sky also keeps `<id>\sky-layers.json` in its working files, the measure
   game in front only as the run starts (or as it starts the game): alt-tabbing away pauses the
   run until you click back into the game. Opening the game's own menu (Esc, Options, the Alt+F4
   dialog) pauses it the same way, until the menu is closed. While paused, the live view says why;
-  the line goes once the run carries on (the logs keep each pause and how long it lasted). Either
+  once the run carries on, the status says how long it was paused and what was done again. Either
   way the tile in progress is dropped and redone from its start; black frames are retaken; where map content reaches an
   outer tile's outer edge (Battlefield of Eternity's arches run past the camera bounds), it lifts
   the camera bounds and adds tiles beyond, outwards until the edge is clear (three at most); it stops early if the map stops responding, and
   leaves the match at the end (`quit`; the stitch runs while the game leaves, and the next launch
   waits for the menu).
-- **stitch.py** places each screenshot where the map script reported its camera
+- **The stitch (`capture/stitch.py`)** places each screenshot where the map script reported its camera
   (`positions.json`), and matches every screenshot against its neighbours, like panorama
   software, to measure their real offsets: the scale comes from those matches, and all
   positions are solved together, dropping matches that disagree and skipping black or
   featureless screenshots. Neighbours meet along a seam routed through their overlap where the
   two agree best (it goes around things off the ground plane, which shift between views),
   never far from the halfway line, blended over a few pixels so small lighting changes don't
-  show as steps. Then the void is made transparent (see above) and the image is cropped to the
-  map. Without `positions.json`, screenshots are placed by the matches alone and the
-  map-to-pixel conversion in `geo.json` is fitted from the middle of the map outward.
+  show as steps. Then the void is made transparent (see above), the game's black at the map's
+  edge is removed (`capture/edge_black.py`: the map's last cell row and column, and anything past
+  them, the game draws black with a one-cell fade, whatever the vision, the fog-of-war data or the
+  camera bounds; a model reaching into the last cell, like Punisher Arena's north orb, gets that
+  black made transparent and the fade before it undone), and the image is cropped to the map.
 
 ## Files
 
-| File                                       | What it does                                                                                  |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------- |
-| `src/heroes_capture/`                      | the package; the modules below are in it                                                      |
-| `cli.py`                                   | the `heroes-capture` command (Typer, Rich): `map render`, `map list`, `prepare`, `capture`, `stitch` |
-| `validated-maps.json`                      | the maps whose renders have been reviewed (`map list`)                                        |
-| `ui.py`                                    | the output: the live view or log lines, warnings, progress bars, the log file                 |
-| `inject.py`                                | prepares the map: reads it, plans the grid, injects the script, adds the textures, writes the manifest |
-| `capture_script.galaxy`, `capture_script.py` | the Galaxy script injected into the map (scene, opening, status strip, command box), and its values |
-| `sky.py`, `light_data.py`                  | the solid-colour skyboxes; the map's tileset, lighting and sky from the game's definitions     |
-| `stormlib.py`                              | MPQ archives through StormLib (ctypes)                                                        |
-| `casclib.py`, `game_data.py`               | the game's CASC storage through CascLib; the install, the maps, tilesets, light sets, models   |
-| `native.py`, `tools/build_native.py`       | where StormLib and CascLib are; fills `native/` with them (not in git)                         |
-| `tools/build_exe.py`                       | builds the one-file `heroes-capture.exe` (PyInstaller) at the release version                 |
-| `js_json.py`                               | JSON written as JavaScript writes it, so manifests match those the Node injector wrote        |
-| `opening-timers.json`                      | per map library, the timers between the gates and the first objective                          |
-| `capture.py`                               | the capture run: start-up, the tiles, recovery                                                |
-| `status.py`                                | reads the status strip                                                                        |
-| `game_control.py`                          | drives the game: focus, commands, launching, waiting for the map, leaving the match            |
-| `game_state.py`                            | tells the game's states apart from a screen grab (`menu-reference/` holds the menu's templates) |
-| `game_menus.py`                            | recognises the game's menus over a match (Esc, Options, the exit dialog) at any screen size    |
-| `game_window.py`                           | Windows calls: the game's process and window, keyboard and cursor                              |
-| `screen.py`                                | screen grabbing and frame comparisons                                                         |
-| `probes.py`                                | the `--probe-*` diagnostics                                                                   |
-| `sky_layers.py` | measures the map's sky layers' speeds and shoots them across the map |
-| `sky_stitch.py` | the sky layer images, the composites and `-layers.json` |
-| `pack.py` | the pack (PACK.md): `raw\`, the tile pyramids, the pictures from the game, `pack.json` |
-| `minimap_svg.py` | the custom minimap redrawn as an SVG of its shapes, for the pack |
-| `serve.py` | `map view`: the pack served locally with byte ranges, for the reference viewer |
-| `stitch.py`                                | stitches the screenshots and writes the outputs                                               |
-| `runlog.py`                                | the run's log (printed and written to `log.txt`)                                              |
-| `frames.py` | screenshots on disk (`.npy`, or PNG from older runs) |
-| `workers.py` | the ordered thread pool the stitches use |
-| `matching.py` | phase correlation, for the stitches' matching |
-| `viewer.py`, `viewer.html` | the pack's reference viewer (`index.html`) |
+The package, `src/heroes_capture/`, is in layers, each a folder; a layer uses only the layers above
+it in this table. The map's category and the map itself take part in the stages through one
+object, `map/specifics.py`'s `Specifics`, which `cli.py` builds for each map.
+
+| Layer | Folder, module | What it does |
+| --- | --- | --- |
+| | `cli.py` | the `heroes-capture` command (Typer, Rich): `map render`, `map survey`, `map calibrate`, `map list`, `map view`, `ui extract`, `ui search`, `ui background`, `prepare`, `capture`, `stitch`; picks a map's category and its own module (`specifics_for`) |
+| 1 everything | `common/` | the game's install and data (`game_data.py`, `casclib.py`, `stormlib.py`, `native.py`, `lighting.py`, `actors.py`: actor trees and models' moving parts, `m3.py`: model files' meshes, materials, particles and animation tracks), its process, window and input (`game_window.py`, `game_control.py`, `monitors.py`), screen grabs and comparisons (`screen.py`, `matching.py`), the game's states and menus (`game_state.py`, `game_menus.py`, `menu-reference/`), images, geometry, DDS textures, JSON and frames on disk, the log and the live view (`runlog.py`, `ui.py`, `watch.py`), the worker pool |
+| 2 the interface's textures | `ui/` | which textures the interface uses and what the game's data says about each (`catalogue.py`), their pictures (`extract.py`), the search by description (`search.py`), the Play screen's background (`play_background.py`), the planets for it (`planets.py`), the Play screen planets' painting taken apart (`play_relight.py`) and the patch fill it uses (`patch_fill.py`) |
+| 2 inside any map | `map/` | the script assembler and the map's own part (`script.py`, `script.galaxy`), the status strip (`status.py`), the Galaxy reader (`galaxy.py`), launching and leaving a match and the command box (`match.py`), what every preparation reads of a map (`prepare.py`), `specifics.py` |
+| 3 capturing maps | `capture/` | preparing for capture (`prepare.py`), the grid, the capture run (`tiles.py`, `shots.py`), a map's calibration (`calibration.py`), skies (`sky.py`, `sky_layers.py`, `sky_stitch.py`), matting and cut-outs (`matting.py`), the stitch (`stitch.py`, `edge_black.py`), the pack (`pack.py`, `minimap_svg.py`), the reference viewer and `map view` (`viewer.py`, `viewer.html`, `serve.py`), the capture's script part, `diagnostics/` (the `--probe-*` switches and their helpers) |
+| 4 categories of maps | `categories/` | `battleground/`: towns, outposts, camps, structure holes, the elements capture, stitch and pack, the calibration's measurements and its review (`calibrate.py`, `calibration_review.py` and its page), its script part; `arena/`: capture areas and rounds |
+| 5 single maps | `maps/` | one module per map that needs something of its own (Hanamura Temple's opening timers, Volskaya Foundry's minimap placement), `validated-maps.json` (the maps verified against `VERIFICATION.md`, and the checklist's version), `calibration/` (the maps' reviewed calibrations) |
+| | `tools/build_native.py`, `tools/build_exe.py` | fills `native/` with StormLib and CascLib (not in git); builds the one-file `heroes-capture.exe` (PyInstaller) |
 
 ## Tests
 
@@ -378,6 +569,14 @@ uv run pytest -n auto --dist loadgroup   # or pnpm test from the workspace root
   render.
 - `tests/test_game_menus.py`: the game's menus told from the map at screen sizes from 600 to
   2160 rows and 16:9 to 32:9 (`tests/sim/menus.py` draws them).
+- `tests/test_play_background.py`: the Play screen's background: its cutscene read for the Play
+  screen, the camera, the light's HDR, ambient and directional lights, animation tracks; and,
+  marker `game_data`, the export from the game's own data.
+- `tests/test_planets.py`: the planets: the frames a planet is put in, the light on at a time of
+  the flyby and as the app lights with it; and, marker `game_data`, the export from the game's own
+  data.
+- `tests/test_ui.py`: the interface's textures on a made-up storage (the catalogue, the pictures,
+  the search's ranking) and, marker `game_data`, the game's own interface catalogue.
 - `tests/test_game_data.py` (marker `game_data`): the game's own data from Blizzard's CDN (no
   install needed): the maps by name, the tilesets and light sets, the sky models, and three maps
   prepared from it, whose injected script may use only names Blizzard's own Galaxy code has. The

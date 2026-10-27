@@ -2,7 +2,7 @@
 
 A Windows command-line tool that drives an installed Heroes of the Storm client to capture game
 assets as images. It starts with battlegrounds: transparent top-down map images, the map's own
-sky layers for a parallax viewer, composites, and a small viewer to look at them in.
+sky layers for a parallax viewer, packed for a map viewer, and a small viewer to look at them in.
 
 ## Download or update
 
