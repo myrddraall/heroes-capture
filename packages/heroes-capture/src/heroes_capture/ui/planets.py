@@ -812,16 +812,20 @@ def export(storage: Storage, out: Path) -> dict:
     folder = out / "planets"
     folder.mkdir(parents=True, exist_ok=True)
     textures = texture_files(storage, ex.textures, ex.alpha_read, out, baked, ex.sources, ex.baked_from)
-    # A planet's own variants go in the index (the app reads them where it lays out what a planet
-    # wears and how, before its file loads), not its file.
+    # A planet's own variants, and whether the overlay it wears is drawn, go in the index (the app
+    # reads them where it lays out what a planet wears and how, before its file loads), not its file.
     variants = {key: file.pop("variants") for key, file in files.items() if "variants" in file}
+    switches = {key: file.pop("overlaysEnabled") for key, file in files.items() if "overlaysEnabled" in file}
     for key, file in files.items():
         file["textures"] = {t: textures[t] for t in file["textures"]}
         (folder / f"{key}.json").write_text(json.dumps(file, separators=(",", ":")), encoding="utf-8", newline="\n")
     index = {"planets": [{"id": key, "kind": file["kind"], **({"style": file["tuning"]["style"]} if "style" in file.get("tuning", {}) else {}),
-                          **({"variants": variants[key]} if key in variants else {})}
+                          **({"variants": variants[key]} if key in variants else {}),
+                          **({"overlaysEnabled": switches[key]} if key in switches else {})}
                          for key, file in files.items() if file["kind"] != "style"],
-             "play": [{"id": key, "position": planet.placed[0], "radius": planet.placed[1]}
+             # (The Play screen's set lit as the game paints it: each planet's NEXUS variant on.)
+             "play": [{"id": key, "position": planet.placed[0], "radius": planet.placed[1],
+                       **({"variantsOn": [play_relight.NEXUS]} if key in PLAY_TEMPLATES else {})}
                       for key, planet in planets.items() if planet.placed],
              "styles": [{"id": key.removeprefix("style-")} for key, file in files.items() if file["kind"] == "style"]}
     (folder / "index.json").write_text(json.dumps(index, separators=(",", ":")), encoding="utf-8", newline="\n")

@@ -186,28 +186,39 @@ def test_the_planets_from_the_game_s_data(storage, tmp_path: Path):
     assert all(large["textures"][m["texture"]]["width"] == planets.BAKE_SIZE for m in masks)
     assert "mapping2" not in body
     # Its painting taken apart: its surface evenly lit (made by this tool, from the game's texture),
-    # lit by the lights that paint it again, from behind it (the game's camera sees its dark side),
-    # at the Play screen's exposure.
+    # the painted texture gone; lit well by a light of its own, at the Play screen's exposure.
     [painting] = [large["materials"][k] for k in body["materials"] if large["materials"][k]["blend"] == "opaque"]
     assert painting["unshaded"] is False and painting["diffuse"]["texture"].endswith("-base")
+    assert "wrap" not in painting and "dropOff" not in painting
     base = large["textures"][painting["diffuse"]["texture"]]
     assert base["baked"] and base["source"].endswith("Storm_UI_HeroSelection_Floor_OrangePlanet.dds")
-    assert 1 <= len(large["light"]["directional"]) <= play_relight.MAX_LIGHTS and large["light"]["ambient"] == [0, 0, 0]
-    for light in large["light"]["directional"]:
-        assert math.hypot(*light["direction"]) == pytest.approx(1, abs=1e-3) and light["direction"][1] < 0
+    assert not any(t.get("source", "").endswith("OrangePlanet.dds") and not t.get("baked") for t in large["textures"].values())
+    assert large["light"]["ambient"] == play_relight.BASE_AMBIENT
+    assert len(large["light"]["directional"]) == len(play_relight.BASE_LIGHTS)
     small = json.loads((tmp_path / "planets" / "play-small.json").read_text())
     medium_painting = next(m for m in json.loads((tmp_path / "planets" / "play-medium.json").read_text())["materials"].values()
                            if m["blend"] == "opaque")
     small_painting = next(m for m in small["materials"].values() if m["blend"] == "opaque")
     assert medium_painting["diffuse"]["texture"] == small_painting["diffuse"]["texture"]  # one texture: one surface
     assert small["light"]["exposure"] == large["light"]["exposure"] > 0
-    # The painting kept as a variant of the planet (in the index): on, its surface reads the painted
-    # texture, flat.
-    [variant] = {p["id"]: p for p in index["planets"]}["play-large"]["variants"]
-    assert variant["id"] == play_relight.PAINTED and variant["name"] == play_relight.PAINTED_NAME
-    [(key, flat)] = variant["settings"]["materials"].items()
-    assert large["materials"][key] is not None and flat["lit"] is False and "variants" not in large
-    assert flat["layers"]["diffuse"]["texture"] in large["textures"] and not flat["layers"]["diffuse"]["texture"].endswith("-base")
+    # Its variants (in the index): lit by the scene alone, and lit as the Play screen paints it (its
+    # own lights off, the painting's light on, from behind it: the game's camera sees its dark side;
+    # its surface's Wrap and Drop off as fitted). The Play screen's set puts the second on.
+    planet = {p["id"]: p for p in index["planets"]}["play-large"]
+    scene_lit, nexus_lit = planet["variants"]
+    assert (scene_lit["id"], nexus_lit["id"]) == (play_relight.SCENE_LIT, play_relight.NEXUS) and "variants" not in large
+    off = {"ambient", "shadow", *(f"directional-{i}" for i in range(len(play_relight.BASE_LIGHTS)))}
+    assert set(scene_lit["settings"]["lights"]) == off == set(nexus_lit["settings"]["lights"])
+    assert all(v == {"enabled": False} for v in scene_lit["settings"]["lights"].values())
+    [added] = nexus_lit["settings"]["added"]
+    assert added["id"] == play_relight.PLAY_LIGHT_ID and added["kind"] == "directional" and added["from"][1] > 0
+    [(key, surface)] = nexus_lit["settings"]["materials"].items()
+    assert large["materials"][key] == painting
+    assert set(surface) <= {"wrap", "dropOff"}
+    assert {p["id"]: p for p in index["play"]}["play-large"]["variantsOn"] == [play_relight.NEXUS]
+    # Its style (the nexus shield) off unless the NEXUS variant is on.
+    assert planet["overlaysEnabled"] == {"nexus": False} and "overlaysEnabled" not in large
+    assert nexus_lit["settings"]["overlaysEnabled"] == {"nexus": True} and "overlaysEnabled" not in scene_lit["settings"]
     # It wears the nexus style as its own shield is: unshaded, the grid as the data has it.
     nexus = json.loads((tmp_path / "planets" / "style-nexus.json").read_text())
     [grid] = nexus["parts"][0]["materials"]

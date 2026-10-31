@@ -9,23 +9,22 @@ is too, and so:
 
   - the light: the direction its painting is brightest towards (the one that explains most of the
     texture's brightness as a function of how squarely a point faces it), and how its brightness
-    falls off, fitted as the app's directional lights (one, or two where a second explains much
-    more: the orange planet's warm wash and its white hot spot), their colours neutral where the
-    light is half on, so the planet's colours stay in its surface;
+    falls off, fitted as the app's directional light and the Wrap and Drop off of the lit
+    material under it (how every light on that material falls off: one shape, so one light),
+    its colour neutral where the light is half on, so the planet's colours stay in its surface;
   - the surface: the texture with that light divided out where the texel holds detail (not dark,
     not blown out), the rest filled from patches of what is kept (patch_fill), in three charts
     that each have little distortion, so no pole pinches: the band about the equator in the
     texture's own layout, and each pole in a flat view about it, rebuilt there and put back.
 
-A planet's surface material then reads the surface (lit, not unshaded) and its file has the lights,
-in its own frame (x right, y away from the eye, z up), at the Play screen's exposure: lit as the
-camera sees it, it is drawn as the game paints it. The game's painting is kept as a variant of the
-planet (PAINTED, its own, switched on where wanted): on, its surface reads its painted texture
-again, drawn flat as the game draws it (for simple scenes and previews, where nothing lights it). Two planets painted with one texture (the medium
-and small ones) share one surface, each with its own lights (each maps it its own way round).
-
-Making a surface takes minutes (the large texture's), so each is kept in the cache, by its texture,
-its mapping and GENERATOR.
+A planet's surface material then reads the surface (lit, not unshaded), and its file has a light of
+its own that shows it well (BASE_LIGHTS, at the Play screen's exposure). How the Play screen paints
+it is its NEXUS variant: its own light off, the light its painting is fitted to (from its own
+point of the texture: each planet maps it its own way round) on, and its surface material's Wrap
+and Drop off as fitted, and the nexus overlay it wears (its shield) on: off unless it is; the Play
+screen's set puts it on. Its SCENE_LIT variant has its own light off, for scenes whose lights light it. Two planets painted
+with one texture (the medium and small ones) share one surface. The painted texture itself is
+used no more.
 """
 
 import hashlib
@@ -45,22 +44,17 @@ from heroes_capture.ui.patch_fill import fill
 from heroes_capture.ui.play_background import Export, texture_image
 
 # Bumped whenever a surface would come out otherwise: the cache's key.
-GENERATOR = 5
+GENERATOR = 6
 # The light's brightness as a function of how squarely a point faces it: in this many steps.
 BINS = 64
 # Directions tried for the light, before narrowing down about the best.
 DIRECTIONS = 4000
-# The app's directional light: its reach is ((facing + wrap) / (1 + wrap)) to the power of its
-# softness, between 0 and 1. Fitted over these (the editor's ranges).
+# How a light reaches the app's lit material: ((facing + wrap) / (1 + wrap)) to the power of its
+# drop off, between 0 and 1, the material's Wrap and Drop off (every light on it alike). Fitted
+# over these (the editor's ranges).
 WRAPS = np.linspace(0.0, 1.0, 11)
 SOFTNESSES = np.geomspace(0.5, 24.0, 28)
-# Lights are added one at a time, up to MAX_LIGHTS, while more than ONE_LIGHT_LEFT of the
-# brightness (squared) is left unexplained, each kept only where it leaves NEXT_LIGHT of the error
-# or less.
-MAX_LIGHTS = 3
-ONE_LIGHT_LEFT = 0.005
-NEXT_LIGHT = 0.7
-# The lights are fitted to the falloff by its relative error (each step weighted by 1 over its
+# The light is fitted to the falloff by its relative error (each step weighted by 1 over its
 # brightness, floored at this share of the brightest): its dim tail, all the game's camera sees of
 # the painting (its lit edge), counts as much as its bright side.
 RELATIVE_FLOOR = 0.002
@@ -85,10 +79,18 @@ BAND_SOURCE = (35.0, 145.0)
 CAP, CAP_KEPT, CAP_FADE, CAP_BLEND = 52.0, 44.0, 4.0, (45.0, 48.0)
 
 LUMA = np.array([0.2126, 0.7152, 0.0722])
-# The variant of a Play screen planet that puts its painting back (its surface material read flat
-# from its painted texture), by id and name.
-PAINTED = "painted"
-PAINTED_NAME = "Painted"
+# A Play screen planet's own light, shown on its own (well lit, all of it to see): a key from the
+# upper left, in front, a cool fill from the right and a little ambient; each from where it comes
+# (the planet's frame: x right, y away from the eye, z up), at the Play screen's exposure.
+BASE_AMBIENT = [0.05, 0.05, 0.06]
+BASE_LIGHTS = [{"from": [-0.55, -0.45, 0.7], "color": [1.5, 1.42, 1.3]},
+               {"from": [0.85, -0.35, -0.4], "color": [0.25, 0.3, 0.4]}]
+# Its variants, by id and name: lit by the scene alone (its own lights off), and lit as the Play
+# screen paints it (its own lights off, the light its painting is fitted to on, its surface
+# material falling off as fitted): the Play screen's set puts it on, with the nexus overlay.
+SCENE_LIT, SCENE_LIT_NAME = "scene-lighting", "Scene lighting"
+NEXUS, NEXUS_NAME = "nexus", "Nexus"
+PLAY_LIGHT_ID, PLAY_LIGHT_NAME = "added-play-screen", "Play screen light"
 
 
 class Mapping:
@@ -194,46 +196,36 @@ def falloff(target: np.ndarray, facing: np.ndarray, weight: np.ndarray) -> tuple
 
 
 def reach(facing: np.ndarray, wrap: float, softness: float) -> np.ndarray:
-    """How much of a directional light reaches a point facing it so squarely (the app's)."""
+    """How much of a directional light reaches a point facing it so squarely, on a lit material of
+    that Wrap and Drop off (`softness`; the app's)."""
     return np.clip((facing + wrap) / (1 + wrap), 0, 1) ** softness
 
 
-def fit_lights(facings: np.ndarray, means: np.ndarray, weights: np.ndarray) -> list[dict]:
-    """The app's directional lights (each {color, wrap, softness}, its colour per channel) that
-    best give `means` at `facings`, by relative error (RELATIVE_FLOOR): up to MAX_LIGHTS, added one
-    at a time while what is left unexplained is more than ONE_LIGHT_LEFT and the next light leaves
-    NEXT_LIGHT of the error or less (the colours fitted together by least squares, none negative)."""
+def fit_light(facings: np.ndarray, means: np.ndarray, weights: np.ndarray) -> dict:
+    """The app's directional light (its colour per channel) and the Wrap and Drop off of the lit
+    material under it ({color, wrap, softness}) that best give `means` at `facings`, by relative
+    error (RELATIVE_FLOOR): every shape tried, its colour fitted by least squares (none negative).
+    (One light: lights of one direction on one material, of one shape, add up to one.)"""
     luma = means @ LUMA
     weights = weights / (luma + RELATIVE_FLOOR * max(float(luma.max()), 1e-12))
-    shapes = [(w, s) for w in WRAPS for s in SOFTNESSES]
-    reaches = np.stack([reach(facings, w, s) for w, s in shapes])  # (K, B)
     root = np.sqrt(weights)
-    total = float((weights[:, None] * means ** 2).sum())
-
-    def solve(chosen: list[int]) -> tuple[np.ndarray, float]:
-        """The colours (len(chosen), 3) of lights of the chosen shapes, and the error left."""
-        a = (reaches[chosen] * root).T
-        colours, error = np.zeros((len(chosen), 3)), 0.0
-        for ch in range(3):
-            colours[:, ch], residual = nnls(a, means[:, ch] * root)
-            error += residual ** 2
-        return colours, error
-
-    chosen: list[int] = []
-    colours, error = np.zeros((0, 3)), total
-    while len(chosen) < MAX_LIGHTS and (not chosen or error > ONE_LIGHT_LEFT * total):
-        tried = [(solve(chosen + [k]), k) for k in range(len(shapes)) if k not in chosen]
-        (best_colours, best_error), k = min(tried, key=lambda t: t[0][1])
-        if chosen and best_error > NEXT_LIGHT * error:
-            break
-        chosen, colours, error = chosen + [k], best_colours, best_error
-    return [{"color": colours[i], "wrap": float(shapes[k][0]), "softness": float(shapes[k][1])}
-            for i, k in enumerate(chosen) if colours[i].any()]
+    best: tuple[float, np.ndarray, float, float] | None = None
+    for w in WRAPS:
+        for s in SOFTNESSES:
+            a = (reach(facings, w, s) * root)[:, None]
+            colour, error = np.zeros(3), 0.0
+            for ch in range(3):
+                solved, residual = nnls(a, means[:, ch] * root)
+                colour[ch], error = solved[0], error + residual ** 2
+            if best is None or error < best[0]:
+                best = (error, colour, float(w), float(s))
+    _, colour, wrap, softness = best
+    return {"color": colour, "wrap": wrap, "softness": softness}
 
 
-def lit_by(facing: np.ndarray, lights: list[dict]) -> np.ndarray:
-    """The light the lights put on points facing the first so squarely (all share its direction)."""
-    return sum(reach(facing, light["wrap"], light["softness"])[..., None] * np.asarray(light["color"]) for light in lights)
+def lit_by(facing: np.ndarray, light: dict) -> np.ndarray:
+    """The light a light puts on points facing it so squarely (see `fit_light`)."""
+    return reach(facing, light["wrap"], light["softness"])[..., None] * np.asarray(light["color"])
 
 
 # --- The surface ----------------------------------------------------------------------------
@@ -258,7 +250,8 @@ def make_surface(stored: np.ndarray, mapping: Mapping, rng: np.random.Generator)
     as stored, as the app lights a texture's colours as they are stored, without decoding them,
     as the game does): the light it is painted under divided out where its texels hold detail,
     the rest filled, the poles rebuilt; and that light, as the texture has it ({at: the texture
-    coordinates of the point it comes straight from, lights: [{color, wrap, softness}]})."""
+    coordinates of the point it comes straight from, and the light and the Wrap and Drop off of the
+    material under it: {color, wrap, softness})."""
     height, width = stored.shape[:2]
     n, polar, used = mapping.directions(height, width)
     area = np.sin(polar) * used
@@ -266,26 +259,24 @@ def make_surface(stored: np.ndarray, mapping: Mapping, rng: np.random.Generator)
     facing = n @ light
     trust, blown = _detail(stored, used)
     facings, means, weights = falloff(stored, facing, _fit_weight(n, area) * ~blown)
-    lights = fit_lights(facings, means, weights)
+    light_fit = fit_light(facings, means, weights)
     # The light neutral where it is half on: the planet's colours are its surface's.
-    lit_steps = lit_by(facings, lights)
+    lit_steps = lit_by(facings, light_fit)
     luma = lit_steps @ LUMA
     half = (luma > 0.25 * luma.max()) & (luma < 0.75 * luma.max())
     tint = (lit_steps[half] / luma[half][:, None]).mean(0) if half.any() else np.ones(3)
-    for one in lights:
-        one["color"] = one["color"] / tint
-    lit = lit_by(facing, lights)
+    light_fit["color"] = light_fit["color"] / tint
+    lit = lit_by(facing, light_fit)
     surface = stored / np.maximum(lit, 1e-4)
     on = lit @ LUMA / max(float((lit @ LUMA).max()), 1e-9)
     trust = trust * (on > 0.02)
     source = (stored @ LUMA > min(DETAIL[1] + 0.02, float(np.percentile((stored @ LUMA)[used], 85)))) & (on > 0.05) & used & ~blown
     scale = SURFACE_TOP / max(float(np.percentile(surface[trust > 0.99].max(-1), 99)), 1e-6)
     surface *= scale
-    for one in lights:
-        one["color"] = one["color"] / scale
+    light_fit["color"] = light_fit["color"] / scale
     at = mapping.coordinates(light[None])
-    painting = {"at": [float(at[0][0]), float(at[1][0])],
-                "lights": [{"color": [float(c) for c in one["color"]], "wrap": one["wrap"], "softness": one["softness"]} for one in lights]}
+    painting = {"at": [float(at[0][0]), float(at[1][0])], "color": [float(c) for c in light_fit["color"]],
+                "wrap": light_fit["wrap"], "softness": light_fit["softness"]}
     # The band about the equator, filled from patches of the band a little wider (mirrored too).
     rows = polar[:, 0]
     band = np.flatnonzero((rows > math.radians(BAND[0])) & (rows < math.radians(BAND[1])))
@@ -328,19 +319,51 @@ def make_surface(stored: np.ndarray, mapping: Mapping, rng: np.random.Generator)
 
 def planet_lights(painting: dict, mapping: Mapping) -> list[dict]:
     """A painting's light (see `make_surface`) as the planet file's directional lights ({direction:
-    the way it travels, color, wrap, softness}), for a planet mapping the texture so: from the
-    point of its sphere the texture's light comes straight from, in the planet's frame."""
+    the way it travels, color}), for a planet mapping the texture so: from the point of its sphere
+    the texture's light comes straight from, in the planet's frame."""
     towards = mapping.direction_at(*painting["at"])[0]
     towards = towards / np.linalg.norm(towards)
-    out = []
-    for one in painting["lights"]:
-        entry = {"direction": [round(float(-c), 5) for c in towards], "color": [round(float(c), 5) for c in one["color"]]}
-        if one["softness"] != 1:
-            entry["softness"] = round(one["softness"], 4)
-        if one["wrap"]:
-            entry["wrap"] = round(one["wrap"], 4)
-        out.append(entry)
+    return [{"direction": [round(float(-c), 5) for c in towards], "color": [round(float(c), 5) for c in painting["color"]]}]
+
+
+def painting_surface(painting: dict) -> dict:
+    """How the lit material under a painting's light takes it (see `make_surface`): its Wrap and
+    Drop off, each where it isn't the app's own (0, 1)."""
+    out: dict = {}
+    if painting["wrap"]:
+        out["wrap"] = round(painting["wrap"], 4)
+    if painting["softness"] != 1:
+        out["dropOff"] = round(painting["softness"], 4)
     return out
+
+
+def _own_lights_off(file: dict) -> dict:
+    """A planet's own lights switched off, by id (as the app names them): its ambient, each of its
+    directional lights and its shade."""
+    ids = ["ambient", *(f"directional-{i}" for i in range(len(file["light"]["directional"]))), "shadow"]
+    return {i: {"enabled": False} for i in ids}
+
+
+def _hex(rgb: list[float]) -> tuple[str, float]:
+    """A colour (each channel 0 up) as the app's colour and strength: its brightest channel 1."""
+    strength = max(max(rgb), 1e-9)
+    return "#" + "".join(f"{round(min(c / strength, 1) * 255):02x}" for c in rgb), round(strength, 5)
+
+
+def play_variants(file: dict, material_key: str, painting: dict, mapping: Mapping) -> list[dict]:
+    """A Play screen planet's variants (see SCENE_LIT, NEXUS): lit by the scene alone, and lit as
+    the Play screen paints it (the light its painting is fitted to, from where it comes, and its
+    surface material's Wrap and Drop off as fitted), wearing the style it wears there."""
+    off = _own_lights_off(file)
+    style = file["tuning"]["style"]
+    [painted] = planet_lights(painting, mapping)
+    colour, strength = _hex(painted["color"])
+    light = {"id": PLAY_LIGHT_ID, "kind": "directional", "name": PLAY_LIGHT_NAME, "colour": colour,
+             "strength": strength, "from": [-c for c in painted["direction"]], "specularStrength": 0, "down": False}
+    surface = painting_surface(painting)
+    return [{"id": SCENE_LIT, "name": SCENE_LIT_NAME, "settings": {"lights": off}},
+            {"id": NEXUS, "name": NEXUS_NAME, "settings": {"overlaysEnabled": {style: True}, "lights": off, "added": [light],
+                                                          **({"materials": {material_key: surface}} if surface else {})}}]
 
 
 def _cached_surface(stored: np.ndarray, mapping: Mapping, name: str) -> tuple[np.ndarray, dict]:
@@ -389,11 +412,14 @@ def relight(storage: Storage, export: Export, files: dict[str, dict], baked: dic
             surface, paintings[texture] = _cached_surface(stored, mapping, name)
             baked[surface_key] = (_surface_image(surface), False)
             export.baked_from[surface_key] = texture
-        lights = planet_lights(paintings[texture], mapping)
         file["materials"][key] = {**material, "unshaded": False, "diffuse": {**material["diffuse"], "texture": surface_key}}
-        # (Its painted texture kept too: the PAINTED variant reads it.)
-        file["textures"] = sorted(set(file["textures"]) | {surface_key})
-        file["light"] = {"ambient": [0.0, 0.0, 0.0], "directional": lights, "exposure": exposure}
-        file["variants"] = [{"id": PAINTED, "name": PAINTED_NAME, "settings": {
-            "materials": {key: {"lit": False, "layers": {"diffuse": {"texture": texture}}}}}}]
-        ui.info(f"{name}: lit by {len(lights)} light{'s' if len(lights) > 1 else ''}, its surface {surface_key}")
+        # (Its painted texture no longer its: only its surface, evenly lit.)
+        file["textures"] = sorted((set(file["textures"]) - {texture}) | {surface_key})
+        file["light"] = {"ambient": BASE_AMBIENT, "exposure": exposure, "directional": [
+            {"direction": [round(-c / math.hypot(*one["from"]), 5) for c in one["from"]], "color": one["color"]}
+            for one in BASE_LIGHTS]}
+        file["variants"] = play_variants(file, key, paintings[texture], mapping)
+        # (The style it wears off unless its NEXUS variant is on.)
+        file["overlaysEnabled"] = {file["tuning"]["style"]: False}
+        painted = paintings[texture]
+        ui.info(f"{name}: its surface {surface_key}, Wrap {painted['wrap']:.2f}, Drop off {painted['softness']:.2f}")

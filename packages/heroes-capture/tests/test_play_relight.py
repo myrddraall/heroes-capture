@@ -55,24 +55,25 @@ def test_the_light_a_texture_is_painted_under_is_found_with_its_falloff():
     # Its falloff, against the surface: one light, of the shape and colour it was painted with.
     ratio = stored / albedo
     facings, means, weights = play_relight.falloff(ratio, n @ towards, np.sin(polar) * used)
-    [light] = play_relight.fit_lights(facings, means, weights)
-    shown = play_relight.lit_by(facings, [light])
+    light = play_relight.fit_light(facings, means, weights)
+    shown = play_relight.lit_by(facings, light)
     expected = play_relight.reach(facings, 0.2, 3.0)[:, None] * [2.0, 1.8, 1.6]
     assert np.average(np.abs(shown - expected), axis=0, weights=weights) == pytest.approx([0, 0, 0], abs=0.05)
 
 
-def test_more_lights_are_added_only_where_one_leaves_much_unexplained():
+def test_the_light_s_shape_is_the_material_s_one_wrap_and_drop_off_found_among_the_editor_s():
     facings = np.linspace(-1, 1, play_relight.BINS)
     weights = np.ones_like(facings)
-    one = play_relight.reach(facings, 0.0, 2.0)[:, None] * [1.0, 0.8, 0.5]
-    assert len(play_relight.fit_lights(facings, one, weights)) == 1
-    two = one + play_relight.reach(facings, 0.0, 16.0)[:, None] * [3.0, 3.0, 3.0]  # a warm wash and a white hot spot
-    lights = play_relight.fit_lights(facings, two, weights)
-    assert 2 <= len(lights) <= play_relight.MAX_LIGHTS
-    assert (np.abs(play_relight.lit_by(facings, lights) - two) / (two + 0.05 * two.max())).max() < 0.1  # by relative error, from a set of shapes
+    painted_so = play_relight.reach(facings, 0.3, 2.0)[:, None] * [1.0, 0.8, 0.5]
+    light = play_relight.fit_light(facings, painted_so, weights)
+    assert (light["wrap"], light["softness"]) == pytest.approx((0.3, 2.0), abs=0.05, rel=0.1)
+    assert (np.abs(play_relight.lit_by(facings, light) - painted_so) / (painted_so + 0.05 * painted_so.max())).max() < 0.1
+    # On the material: its Wrap and Drop off, each where it isn't the app's own.
+    assert play_relight.painting_surface({"wrap": 0.3, "softness": 2.0}) == {"wrap": 0.3, "dropOff": 2.0}
+    assert play_relight.painting_surface({"wrap": 0.0, "softness": 1.0}) == {}
 
 
-def test_a_painted_texture_comes_apart_into_an_even_surface_and_lights_that_paint_it_again():
+def test_a_painted_texture_comes_apart_into_an_even_surface_and_a_light_that_paints_it_again():
     m = play_relight.Mapping(TILTED, {"offset": [0.075, 0.0]})
     albedo = surface(96, 192, seed=3)
     towards = np.array([0.33, 0.75, -0.58])
@@ -91,15 +92,15 @@ def test_a_painted_texture_comes_apart_into_an_even_surface_and_lights_that_pain
     # Where it was dark, it is filled with what was kept: as bright overall, not black.
     dark = (trust == 0) & band
     assert made[dark].mean() == pytest.approx(made[kept].mean(), rel=0.35)
-    # Its lights paint it again as the game painted it, where it held detail.
-    lights = play_relight.planet_lights(painting, m)
-    assert 1 <= len(lights) <= play_relight.MAX_LIGHTS
-    for light in lights:
-        assert math.hypot(*light["direction"]) == pytest.approx(1, abs=1e-4)
-        assert -np.array(light["direction"]) @ towards > 0.99  # it travels away from where it comes from
-    again = made * play_relight.lit_by(n @ -np.array(lights[0]["direction"]),
-                                       [{"color": l["color"], "wrap": l.get("wrap", 0.0), "softness": l.get("softness", 1.0)}
-                                        for l in lights])
+    # Its light paints it again as the game painted it, where it held detail.
+    [light] = play_relight.planet_lights(painting, m)
+    assert math.hypot(*light["direction"]) == pytest.approx(1, abs=1e-4)
+    assert -np.array(light["direction"]) @ towards > 0.99  # it travels away from where it comes from
+    assert set(light) == {"direction", "color"}  # (its shape is its material's)
+    surface_of = play_relight.painting_surface(painting)
+    again = made * play_relight.lit_by(n @ -np.array(light["direction"]),
+                                       {"color": light["color"], "wrap": surface_of.get("wrap", 0.0),
+                                        "softness": surface_of.get("dropOff", 1.0)})
     assert np.abs(again - stored)[kept].mean() < 0.03
 
 
@@ -117,10 +118,10 @@ def test_the_fill_keeps_what_is_kept_and_fills_the_rest_like_the_source():
 
 
 def test_a_painting_s_light_comes_from_the_same_point_of_its_texture_for_every_planet_mapping_it():
-    painting = {"at": [0.3, 0.6], "lights": [{"color": [1.0, 1.0, 1.0], "wrap": 0.2, "softness": 3.0}]}
+    painting = {"at": [0.3, 0.6], "color": [1.0, 1.0, 1.0], "wrap": 0.2, "softness": 3.0}
     one, other = play_relight.Mapping(TILTED, {"offset": [0.075, 0.0]}), play_relight.Mapping(TILTED, {"offset": [0.1, 0.0]})
     [a], [b] = play_relight.planet_lights(painting, one), play_relight.planet_lights(painting, other)
-    assert a["wrap"] == 0.2 and a["softness"] == 3.0 and a["color"] == [1.0, 1.0, 1.0]
+    assert a["color"] == [1.0, 1.0, 1.0] and "wrap" not in a  # (its shape is its material's)
     # Where each planet's mapping puts that point: the light comes straight from there.
     for mapping, light in ((one, a), (other, b)):
         s, t = mapping.coordinates(-np.array([light["direction"]]))
