@@ -205,13 +205,16 @@ def test_the_planets_from_the_game_s_data(storage, tmp_path: Path):
     # own lights off, the painting's light on, from behind it: the game's camera sees its dark side;
     # its surface's Wrap and Drop off as fitted). The Play screen's set puts the second on.
     planet = {p["id"]: p for p in index["planets"]}["play-large"]
-    scene_lit, nexus_lit = planet["variants"]
+    scene_lit, nexus_lit, game_grid = planet["variants"]
     assert (scene_lit["id"], nexus_lit["id"]) == (play_relight.SCENE_LIT, play_relight.NEXUS) and "variants" not in large
+    # And its shield as the game draws it (its grid texture), switched on over the NEXUS variant.
+    assert game_grid == {"id": play_relight.GAME_GRID, "name": play_relight.GAME_GRID_NAME,
+                         "settings": {"materials": {"style:nexus:material10-play-large": {"drawAs": "texture"}}}}
     off = {"ambient", "shadow", *(f"directional-{i}" for i in range(len(play_relight.BASE_LIGHTS)))}
     assert set(scene_lit["settings"]["lights"]) == off == set(nexus_lit["settings"]["lights"])
     assert all(v == {"enabled": False} for v in scene_lit["settings"]["lights"].values())
     [added] = nexus_lit["settings"]["added"]
-    assert added["id"] == play_relight.PLAY_LIGHT_ID and added["kind"] == "directional" and added["from"][1] > 0
+    assert added["id"] == play_relight.PLAY_RIM_ID and added["kind"] == "rim" and added["strength"] > 0
     [(key, surface)] = nexus_lit["settings"]["materials"].items()
     assert large["materials"][key] == painting
     assert set(surface) <= {"wrap", "dropOff"}
@@ -230,7 +233,7 @@ def test_the_planets_from_the_game_s_data(storage, tmp_path: Path):
     assert all(shield["falloff"] == planets.PLAY_GRID["falloff"] for shield in shields.values())
     assert shields["play-medium"]["scale"] == pytest.approx(1.5) and shields["play-small"]["scale"] == pytest.approx(6)  # tiled 6, 4, 1 round
     assert shields["play-medium"]["strength"] == pytest.approx(0.8 * planets.PLAY_GRID["strength"]) and shields["play-small"]["spread"] == pytest.approx(0.2)
-    assert all(shield["drawAs"] == "texture" for shield in shields.values())  # the game's grid, as the game draws it
+    assert all("drawAs" not in shield for shield in shields.values())  # drawn by the app (the game's grid: GAME_GRID)
     # Each its own mask (its file lists it, to load), on its own mapping, and its own ring.
     medium = json.loads((tmp_path / "planets" / "play-medium.json").read_text())
     worn_medium = medium["tuning"]["variants"]["nexus"]

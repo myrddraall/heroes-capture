@@ -122,11 +122,10 @@ NEXUS_SHADE = {"direction": [-0.78, -0.3, -0.55], "strength": 0.85, "softness": 
 # many round a part as the texture's tiling makes them, so its size 1 is the game's.
 HEX_ACROSS = 10
 # How the nexus style's shield material shows (the app's knobs, set by eye): its hex grid is
-# drawn by the app (the game's grid texture is too soft to read at a planet's size: `pattern`),
-# its hexes 2.5 times the game's on the large planet (24 round a world, not 60), spread over the
-# face (a floor under its fresnel), its lines of a width and softly aglow about themselves, and
-# glowing on their own (into the bloom), so they read over a world's own lights.
-NEXUS_SHIELD = {"spread": 0.6, "scale": 2.5, "width": 0.08, "soft": 0.3, "glow": 2.5}
+# drawn by the app (`pattern`: a shell of flat plates, its lines and their glow as the game's
+# grid texture has them, the plates its size), spread over the face (a floor under its fresnel),
+# and glowing on its own (into the bloom), so it reads over a world's own lights.
+NEXUS_SHIELD = {"spread": 0.6, "glow": 2.5}
 # How the Play screen planets' grid (their own shield, worn as the nexus style's) shows as the
 # game shows it, measured against a Quick Match screenshot of the Play screen: its brightness
 # just inside the large planet's outline, band by band from 0.8 to 0.98 of its radius, against
@@ -574,16 +573,15 @@ def spread_from(yaw: float, pitch: float) -> list[float]:
 
 def worn_shield(export: Export, own: str, style: str) -> dict:
     """How a Play screen planet shows the nexus style's shield material (`style`) as its own
-    shield (`own`) is in the data: as the game draws it (its grid texture, not the style's drawn
-    hexes), its grid's brightness and size against the style's, its fresnel's floor (how far it
-    spreads) and turn (the side it spreads from), its glow the data's."""
+    shield (`own`) is in the data (drawn by the app, its hex plates; the game's grid texture is its
+    GAME_GRID variant's): its grid's brightness and size against the style's, its fresnel's floor
+    (how far it spreads) and turn (the side it spreads from), its glow the data's."""
     mine, theirs = export.materials[own]["emissive"], export.materials[style]["emissive"]
     fresnel = mine["fresnel"]
     return {"strength": round(mine["brightMult"] / theirs["brightMult"] * PLAY_GRID["strength"], 4),
             "falloff": PLAY_GRID["falloff"],
             "scale": round(theirs["tiling"][0] / mine["tiling"][0], 4),
-            "spread": fresnel["min"], "spreadFrom": spread_from(fresnel["yaw"], fresnel["pitch"]), "glow": 1.0,
-            "drawAs": "texture"}
+            "spread": fresnel["min"], "spreadFrom": spread_from(fresnel["yaw"], fresnel["pitch"]), "glow": 1.0}
 
 
 def play_base(export: Export, planet: Planet, style_id: str, style: dict) -> dict:

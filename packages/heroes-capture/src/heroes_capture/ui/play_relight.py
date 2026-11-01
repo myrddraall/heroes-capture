@@ -35,7 +35,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 from scipy.ndimage import binary_dilation, map_coordinates
-from scipy.optimize import nnls
+from scipy.optimize import least_squares, nnls
 
 from heroes_capture.common import ui
 from heroes_capture.common.casclib import Storage
@@ -90,7 +90,22 @@ BASE_LIGHTS = [{"from": [-0.55, -0.45, 0.7], "color": [1.5, 1.42, 1.3]},
 # material falling off as fitted): the Play screen's set puts it on, with the nexus overlay.
 SCENE_LIT, SCENE_LIT_NAME = "scene-lighting", "Scene lighting"
 NEXUS, NEXUS_NAME = "nexus", "Nexus"
-PLAY_LIGHT_ID, PLAY_LIGHT_NAME = "added-play-screen", "Play screen light"
+# And its shield as the game draws it (its grid texture) in place of the app's drawn hex plates
+# (a shell of flat plates, as the texture's look: the default), for its NEXUS variant to be seen with.
+GAME_GRID, GAME_GRID_NAME = "game-grid", "Game grid"
+# The light its NEXUS variant adds: a rim light that lights it from the game's camera as the light
+# its painting is fitted to does (its lit edge, see `play_rim`), and keeps to its outline wherever
+# the camera goes (a light fixed behind it would light its far side as the camera came round).
+PLAY_RIM_ID, PLAY_RIM_NAME = "added-play-screen-rim", "Play screen rim"
+# Points on the sphere the rim is fitted over: a spiral of this many, those the camera sees.
+RIM_POINTS = 6000
+# The rim is fitted to how the light looks (each brightness to 1/2.2: its lit edge and its dark
+# face alike, not its brightest pixels alone), over a grid of its leans (degrees round, either way),
+# spreads and drop offs, then from the best of those freely.
+RIM_GAMMA = 1 / 2.2
+RIM_LEANS = np.radians(np.arange(-80, 81, 10))
+RIM_SPREADS = np.linspace(0.0, 1.0, 11)
+RIM_DROP_OFFS = np.geomspace(0.5, 100.0, 16)
 
 
 class Mapping:
@@ -337,6 +352,102 @@ def painting_surface(painting: dict) -> dict:
     return out
 
 
+def rim_turn(lean: np.ndarray) -> tuple[float, float]:
+    """How a rim's lean (a point on the face) turns the view its fresnel is measured against, as
+    the app has it (`rimTurn`): about the view's up (to the right), and about its right (upwards,
+    negative)."""
+    x, _, z = lean / np.linalg.norm(lean)
+    front = math.sqrt(max(0.0, 1 - x * x - z * z))
+    return math.atan2(x, front), -math.asin(max(-1.0, min(1.0, z)))
+
+
+def lean_of(yaw: float, pitch: float) -> list[float]:
+    """The lean (a point on the face, towards the eye) that turns the view so (see `rim_turn`)."""
+    z = -math.sin(pitch)
+    side = math.sqrt(max(0.0, 1 - z * z))
+    return [round(math.sin(yaw) * side, 5), round(-math.cos(yaw) * side, 5), round(z, 5)]
+
+
+def _turning(axis: np.ndarray, angle: float) -> np.ndarray:
+    """A turn about a unit axis by an angle (Rodrigues), as the app's `turning` has it."""
+    x, y, z = axis
+    c, s, k = math.cos(angle), math.sin(angle), 1 - math.cos(angle)
+    return np.array([[c + x * x * k, x * y * k - z * s, x * z * k + y * s],
+                     [y * x * k + z * s, c + y * y * k, y * z * k - x * s],
+                     [z * x * k - y * s, z * y * k + x * s, c + z * z * k]])
+
+
+def rim_reach(n: np.ndarray, to_eye: np.ndarray, yaw: float, pitch: float, spread: float,
+              softness: float) -> np.ndarray:
+    """How much a rim light reaches points of a sphere (normals `n`, the way to the eye from each
+    `to_eye`), as the app's body shader has it: the view turned by its lean (about the view's up by
+    -yaw, then its right by -pitch; seen from the scene's own camera, the planet's frame's z and x),
+    then (spread + (1 - spread)(1 - facing)^3) to the power of its drop off, facing against that."""
+    turn = _turning(np.array([1.0, 0, 0]), -pitch) @ _turning(np.array([0, 0, 1.0]), -yaw)
+    view = to_eye @ turn.T
+    view /= np.linalg.norm(view, axis=-1, keepdims=True)
+    facing = np.clip(np.sum(n * view, axis=-1), 0, 1)
+    return (spread + (1 - spread) * (1 - facing) ** 3) ** softness
+
+
+def _seen_points(seen: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Points of the unit sphere the game's camera sees (at `seen` radii, along -y), the way to it
+    from each, and each one's share of the picture (how squarely it faces the eye, over its
+    distance squared)."""
+    k = np.arange(RIM_POINTS) + 0.5
+    z = 1 - 2 * k / RIM_POINTS
+    a = k * math.pi * (3 - math.sqrt(5))
+    r = np.sqrt(1 - z * z)
+    n = np.stack([r * np.cos(a), r * np.sin(a), z], -1)
+    to = np.array([0.0, -seen, 0.0]) - n
+    dist = np.linalg.norm(to, axis=-1)
+    to_eye = to / dist[:, None]
+    facing = np.sum(n * to_eye, axis=-1)
+    keep = facing > 0
+    return n[keep], to_eye[keep], (facing / dist**2)[keep]
+
+
+def play_rim(light_from: list[float], wrap: float, drop_off: float, seen: float) -> dict:
+    """The rim light that lights a planet, seen from the game's camera (`seen` radii away), as a
+    light from `light_from` (a unit vector, the planet's frame) of strength 1 does through a
+    material of that Wrap and Drop off: its strength (times the light's), lean, spread and drop off,
+    fitted to how it looks (`RIM_GAMMA`) over every point the camera sees, each by its share of the
+    picture. A rim's shape is its own (brightest at the outline, falling in from it), so as near as
+    it comes: the lit edge where the light's is, the face as dark."""
+    n, to_eye, weight = _seen_points(seen)
+    target = reach(n @ np.asarray(light_from, dtype=np.float64), wrap, drop_off)
+    w = weight / weight.sum()
+    looks = target**RIM_GAMMA
+
+    def best_strength(r: np.ndarray) -> float:
+        # (The strength that best gives the light itself where the rim reaches as `r`.)
+        return float((w * r * target).sum() / max((w * r * r).sum(), 1e-12))
+
+    def miss(r: np.ndarray, strength: float) -> float:
+        return float((w * ((strength * r) ** RIM_GAMMA - looks) ** 2).sum())
+
+    tried = []
+    for yaw in RIM_LEANS:
+        for pitch in RIM_LEANS:
+            for spread in RIM_SPREADS:
+                for softness in RIM_DROP_OFFS:
+                    r = rim_reach(n, to_eye, yaw, pitch, spread, softness)
+                    strength = best_strength(r)
+                    tried.append((miss(r, strength), [strength, yaw, pitch, spread, softness]))
+    start = np.array(min(tried, key=lambda t: t[0])[1])
+
+    def misses(x: np.ndarray) -> np.ndarray:
+        strength, yaw, pitch, spread, softness = x
+        r = strength * rim_reach(n, to_eye, yaw, pitch, spread, softness)
+        return (np.maximum(r, 0) ** RIM_GAMMA - looks) * np.sqrt(w)
+
+    fit = least_squares(misses, start, bounds=([0, -math.pi / 2, -math.pi / 2, 0, 0.1],
+                                                [np.inf, math.pi / 2, math.pi / 2, 1, 100]))
+    strength, yaw, pitch, spread, softness = fit.x
+    return {"strength": float(strength), "lean": lean_of(yaw, pitch), "spread": round(float(spread), 4),
+            "softness": round(float(softness), 4)}
+
+
 def _own_lights_off(file: dict) -> dict:
     """A planet's own lights switched off, by id (as the app names them): its ambient, each of its
     directional lights and its shade."""
@@ -351,19 +462,29 @@ def _hex(rgb: list[float]) -> tuple[str, float]:
 
 
 def play_variants(file: dict, material_key: str, painting: dict, mapping: Mapping) -> list[dict]:
-    """A Play screen planet's variants (see SCENE_LIT, NEXUS): lit by the scene alone, and lit as
-    the Play screen paints it (the light its painting is fitted to, from where it comes, and its
-    surface material's Wrap and Drop off as fitted), wearing the style it wears there."""
+    """A Play screen planet's variants (see SCENE_LIT, NEXUS, GAME_GRID): lit by the scene alone,
+    lit as the Play screen paints it (the rim light that lights it from the game's camera as the
+    light its painting is fitted to does: `play_rim`, the camera as far as its ring is modelled
+    for; and its surface material's Wrap and Drop off as fitted), wearing the style it wears there;
+    and that style's shield drawn as the game draws it, its grid texture (its material as the
+    planet's settings key it: the style's and its name)."""
     off = _own_lights_off(file)
     style = file["tuning"]["style"]
+    worn = file["tuning"]["variants"][style]
+    shield = next(iter(worn["materials"]))
     [painted] = planet_lights(painting, mapping)
     colour, strength = _hex(painted["color"])
-    light = {"id": PLAY_LIGHT_ID, "kind": "directional", "name": PLAY_LIGHT_NAME, "colour": colour,
-             "strength": strength, "from": [-c for c in painted["direction"]], "specularStrength": 0, "down": False}
+    rim = play_rim([-c for c in painted["direction"]], painting["wrap"], painting["softness"],
+                   worn["parts"]["ring"]["shape"]["seen"])
+    light = {"id": PLAY_RIM_ID, "kind": "rim", "name": PLAY_RIM_NAME, "colour": colour,
+             "strength": round(strength * rim["strength"], 5), "from": rim["lean"], "fade": rim["spread"],
+             "softness": rim["softness"]}
     surface = painting_surface(painting)
     return [{"id": SCENE_LIT, "name": SCENE_LIT_NAME, "settings": {"lights": off}},
             {"id": NEXUS, "name": NEXUS_NAME, "settings": {"overlaysEnabled": {style: True}, "lights": off, "added": [light],
-                                                          **({"materials": {material_key: surface}} if surface else {})}}]
+                                                          **({"materials": {material_key: surface}} if surface else {})}},
+            {"id": GAME_GRID, "name": GAME_GRID_NAME,
+             "settings": {"materials": {f"style:{style}:{shield}": {"drawAs": "texture"}}}}]
 
 
 def _cached_surface(stored: np.ndarray, mapping: Mapping, name: str) -> tuple[np.ndarray, dict]:

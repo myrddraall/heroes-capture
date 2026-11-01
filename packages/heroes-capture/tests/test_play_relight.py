@@ -129,3 +129,29 @@ def test_a_painting_s_light_comes_from_the_same_point_of_its_texture_for_every_p
     # The second mapping turns the texture a fortieth further round its pole: so does the light.
     turn = math.degrees(math.acos(np.clip(np.dot(a["direction"], b["direction"]), -1, 1)))
     assert 0 < turn < 9
+
+
+def test_a_rim_s_lean_turns_the_view_as_the_app_turns_it_and_back():
+    for yaw, pitch in [(0.3, -0.2), (-0.7, 0.4), (0.0, 0.0)]:
+        lean = play_relight.lean_of(yaw, pitch)
+        assert np.linalg.norm(lean) == pytest.approx(1, abs=1e-4)
+        assert play_relight.rim_turn(np.array(lean)) == pytest.approx((yaw, pitch), abs=1e-4)
+    # Leaning to the right favours the right of the rim (the side a rim light's lean names).
+    n = np.array([[-1.0, 0, 0], [1.0, 0, 0]])
+    to_eye = np.array([[0.0, -1, 0], [0.0, -1, 0]])
+    left, right = play_relight.rim_reach(n, to_eye, 0.5, 0.0, 0.0, 1.0)
+    assert right > left
+
+
+def test_a_rim_light_lights_a_planet_from_the_game_s_camera_as_a_light_from_behind_does():
+    # The large Play screen planet's light (behind it, to the right and below) and its material.
+    light = np.array([0.32774, 0.74514, -0.58082])
+    rim = play_relight.play_rim(list(light), 1.0, 5.7218, 4.3304)
+    n, to_eye, weight = play_relight._seen_points(4.3304)
+    target = play_relight.reach(n @ light, 1.0, 5.7218)
+    yaw, pitch = play_relight.rim_turn(np.array(rim["lean"]))
+    got = rim["strength"] * play_relight.rim_reach(n, to_eye, yaw, pitch, rim["spread"], rim["softness"])
+    # As it looks, close over the picture; its lit edge on the side the light is (right, below).
+    g = play_relight.RIM_GAMMA
+    assert np.sqrt(np.sum(weight * (got**g - target**g) ** 2) / weight.sum()) < 0.05
+    assert rim["lean"][0] > 0 and rim["lean"][2] < 0
