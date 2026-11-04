@@ -6,7 +6,7 @@
     "id": "volskaya-foundry",
     "name": "Volskaya Foundry",
     "category": "Battleground",
-    "validated": false,
+    "validated": true,
     "structures": "keep",
     "sizeCells": [
       248,

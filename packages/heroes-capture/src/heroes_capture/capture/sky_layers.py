@@ -1,0 +1,264 @@
+"""How fast the map's own sky layers move against the map, for a parallax viewer.
+
+A sky model on the parallax layer is a set of shells far below the map: when the camera pans,
+it moves across the screen slower than the map does. The rate (sky shift / map shift: 1 moves
+with the map, 0 stays put) is what a viewer needs to move each layer with the view. Measured,
+not configured: the camera is put at the middle of the map and at two offsets, and at each the
+map is shot, then (near clip past the map, so only the sky is drawn, at speed 1, which freezes
+it in the same position every time) each sky layer; phase correlation gives the shifts. The
+fixed skybox moves with the camera (rate 0 by definition).
+
+Layers: "parallax", the map's parallax model as it is (background art and haze together); and
+"haze", the keyed copy over black, when the map has one (sky.py PARALLAX_KEYS), which shows the
+haze shells alone. Written to <id>/sky-layers.json.
+"""
+
+import math
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import numpy as np
+
+from heroes_capture.capture.sky import lens_scale
+from heroes_capture.common import ui
+from heroes_capture.common.frames import save_frame
+from heroes_capture.common.game_control import settle, step
+from heroes_capture.common.jsonio import write_json
+from heroes_capture.common.matching import grey, phase_correlate
+from heroes_capture.common.runlog import detail, log, warn
+
+SKY_SETTLE = 0.1  # real seconds for a sky swap to be drawn before its shot (was 1; the waits probe found shots within one level down to 0.05)
+MAP_SETTLE = 0.1  # real seconds after a camera move before a shot of the map (as the tiles' settle)
+NEAR_CLIP_SHARE = 1.2  # the near clip, as a share of the camera distance: past the map, before the sky shells
+OFFSETS = ((15.0, 0.0), (0.0, 6.0))  # camera offsets in map cells: across, then up (shifts well under half a screen)
+
+
+def phase_offset(a: np.ndarray, b: np.ndarray) -> tuple[float, float, float]:
+    """(dx, dy, strength): how far the content of `b` moved from where it is in `a`, in screen
+    pixels, to a fraction of a pixel (phase correlation at half size). Strength near 1 is a
+    clean match; under about 0.05 there was nothing to match."""
+    dy, dx, strength = phase_correlate(grey(a, 2), grey(b, 2))
+    return -dx * 2, -dy * 2, strength
+
+
+AXES_AGREE = 0.1  # a shell's rates across and down agree to within this share (the background art: 0.4574, 0.4596)
+
+
+def consistent(name: str, rate: list, strength: list) -> None:
+    """A sky shell moves at one rate across and down, and slower than the map (a rate of 1 or more
+    is impossible for a layer behind it). Soft haze over black can match falsely (strength 0.01: a
+    rate of 1.28 once, where the other axis gave 0.476 at 0.032): when an axis's rate is impossible,
+    or the two disagree by more than AXES_AGREE, the axis with the stronger match stands for both.
+    In place."""
+    usable = [0 < r < 1 if r is not None else False for r in rate]
+    if usable == [True, True] and abs(rate[0] - rate[1]) <= AXES_AGREE * max(rate):
+        return
+    if not any(usable):
+        return
+    best = max((axis for axis in (0, 1) if usable[axis]), key=lambda axis: strength[axis] or 0.0)
+    warn(f"sky layers: {name}'s rates {rate} disagree (matches {strength}); taking axis {'xy'[best]}'s {rate[best]} for both")
+    rate[0] = rate[1] = rate[best]
+
+
+def measure(session, manifest: dict, out_dir: Path, area: dict | None = None) -> dict | None:
+    """Measure the sky layers' rates (see the module notes) and write sky-layers.json; None when
+    the map has no parallax sky. Leaves the scene as the next `tile` expects it (that command
+    puts back the capture camera and our sky)."""
+    sky = manifest.get("sky") or {}
+    models = sky.get("mapSky") or {}
+    if not models.get("parallax"):
+        return None
+    clip = round(manifest["distance"] * NEAR_CLIP_SHARE)
+    layers = {"parallax": "sky mapparallax 1"}
+    if sky.get("keys"):
+        layers["haze"] = "sky parallaxblack 1"
+    area = area or manifest["area"]  # the camera bounds the game applies, when the caller measured them
+    centre = ((area["left"] + area["right"]) / 2, (area["bottom"] + area["top"]) / 2)
+    detail(f"measuring the sky layers' parallax ({', '.join(layers)}; near clip {clip})")
+
+    def shoot(x: float, y: float) -> dict | None:
+        """The map and each sky layer, with the camera at (x, y). Each layer is put up anew at
+        every position: at speed 1 it then shows the same frozen moment each time (left up while
+        the camera moved, the haze drifted enough to skew its rate)."""
+        status = session.move_camera(x, y)
+        if status is None:
+            return None
+        settle(MAP_SETTLE)
+        frames = {"map": session.grab(dark_ok=True), "camera": (status.camera_x, status.camera_y)}
+        if session.send(f"hidemap {clip}") is None:  # map clipped away, sky frozen, our sky down
+            return None
+        for name, command in layers.items():
+            if session.send(command) is None:
+                return None
+            settle(SKY_SETTLE)  # the swap drawn
+            frames[name] = session.grab(dark_ok=True)
+        # The map's own parallax back in its slot (never left empty).
+        session.send("sky mapparallax 1")
+        return frames
+
+    base = shoot(*centre)
+    if base is None:
+        warn("sky layers: the map didn't answer; not measured")
+        return None
+    result = {"cameraDistance": manifest["distance"], "nearClip": clip, "measured": time.strftime("%Y-%m-%d %H:%M"),
+              "layers": {"fixed": {"model": models.get("fixed"), "rate": [0.0, 0.0], "note": "moves with the camera"}}}
+    rates: dict[str, list] = {name: [None, None] for name in layers}
+    strengths: dict[str, list] = {name: [None, None] for name in layers}
+    scale: list = [None, None]  # the map's pixels per cell on screen, from the same shots
+    for axis, (ox, oy) in enumerate(OFFSETS):
+        moved = shoot(centre[0] + ox, centre[1] + oy)
+        if moved is None:
+            warn(f"sky layers: no answer at offset {ox, oy}; that axis not measured")
+            continue
+        map_dx, map_dy, map_strength = phase_offset(base["map"], moved["map"])
+        map_shift = map_dx if axis == 0 else map_dy
+        if abs(map_shift) < 20 or map_strength < 0.05:
+            warn(f"sky layers: the map didn't move measurably ({map_shift:.1f} px, strength {map_strength:.2f}); axis {axis} skipped")
+            continue
+        moved_cells = moved["camera"][axis] - base["camera"][axis]
+        if abs(moved_cells) > 1:
+            scale[axis] = round(abs(map_shift / moved_cells), 3)
+        for name in layers:
+            dx, dy, strength = phase_offset(base[name], moved[name])
+            rates[name][axis] = round((dx if axis == 0 else dy) / map_shift, 4)
+            strengths[name][axis] = round(strength, 3)
+        log(f"  axis {'xy'[axis]}: camera moved {moved['camera'][axis] - base['camera'][axis]:.2f} cells, the map {map_shift:.1f} px; "
+            + ", ".join(f"{n} {rates[n][axis]} (match {strengths[n][axis]})" for n in layers))
+    for name in layers:
+        consistent(name, rates[name], strengths[name])
+        known = [r for r in rates[name] if r is not None]
+        layer = {"model": models["parallax"] if name == "parallax" else f"{models['parallax']} (haze, keyed copy)",
+                 "rate": rates[name], "matchStrength": strengths[name]}
+        if known and np.mean(known) > 0:
+            layer["depth"] = round(manifest["distance"] / float(np.mean(known)), 1)  # from the camera, like cameraDistance
+        result["layers"][name] = layer
+    result["mapPxPerCell"] = scale
+    path = out_dir / "sky-layers.json"
+    write_json(path, result, indent=2)
+    log("sky layers' speeds against the map: " + "; ".join(f"{n} {result['layers'][n]['rate']}" for n in layers))
+    return result
+
+
+# The wider lenses the sky is also shot through, in degrees (the render's own is about 8): the game
+# stops the camera at the camera bounds, so a wider lens is what sees the rest of the sky shells
+# (the sky reach probe on Battlefield of Eternity: through 16 degrees the background art filled
+# every shot but to the south, where it ends; through 32 its edges showed). Each shot through them
+# is softer, so the stitch prefers the narrowest lens wherever the shots overlap.
+WIDE_LENSES = (16.0, 32.0)
+SKY_KEEP = 0.8  # the share of a screen the sky moves between neighbouring camera positions (0.6 gave 20 positions on Battlefield of Eternity, 0.8 gives 12; the shots must overlap for sky_stitch to fit the shells' tilt)
+FIXED_CLIP = 600  # a near clip past the parallax shells and short of the fixed skybox (which survives 1000)
+
+
+def capture(session, manifest: dict, out_dir: Path, measured: dict | None, keep: float = SKY_KEEP, folder_name: str = "sky", area: dict | None = None) -> None:
+    """The sky layers as images, for a parallax viewer: the camera steps across the map (steps
+    sized so the sky, moving at its measured rate, moves `keep` of a screen between
+    positions), the map clipped away, and at each position the keyed copies of the parallax
+    model are shot (sky.py KEY_VARIANTS: the background art alone; white without haze; the
+    haze over the light grey; over black), then the background art over the map's own fixed skybox
+    (where the art lets it through). The same again through each of WIDE_LENSES wider than the
+    render's ("fov"), over fewer positions (3x3 through the widest), for the rest of the sky the
+    camera can't go over. The fixed skybox once per lens, alone. Into <id>/sky/, with
+    positions.json (each position's camera and lens); sky_stitch.py makes the layers and
+    composites from them."""
+    sky = manifest.get("sky") or {}
+    if not sky.get("keys") or not measured:
+        return
+    # Per axis, the fastest layer's rate: the sky that moves most between positions sets the step.
+    rates = [layer.get("rate") or [None, None] for name, layer in measured["layers"].items() if name != "fixed"]
+    rate_xy = [max([r[axis] for r in rates if r[axis]], default=None) for axis in (0, 1)]
+    scale = [s for s in measured.get("mapPxPerCell", []) if s]
+    if not any(rate_xy) or not scale:
+        warn("sky layer images: no measured rate; skipped")
+        return
+    rate_xy = [r or max(r2 for r2 in rate_xy if r2) for r in rate_xy]  # an axis not measured: the other's
+    scale = float(np.mean(scale))
+    folder = out_dir / folder_name
+    folder.mkdir(exist_ok=True)
+    for old in [*folder.glob("*.png"), *folder.glob("*.npy")]:
+        old.unlink()
+    area = area or manifest["area"]
+    screen = manifest["screen"]
+
+    def spread(lo: float, hi: float, view: float, rate: float) -> list[float]:
+        step_cells = keep * view / (rate * scale)
+        count = max(1, math.ceil((hi - lo) / step_cells) + 1)
+        return [lo + (hi - lo) * k / (count - 1) for k in range(count)] if count > 1 else [(lo + hi) / 2]
+
+    render_fov = float(manifest.get("fov") or 0) or None
+    lenses = [render_fov, *(f for f in WIDE_LENSES if render_fov and f > render_fov)]
+    # Per lens: its name prefix and its grid (the widest's: the bounds' corners, edges and middle).
+    grids = []
+    for k, fov in enumerate(lenses):
+        widest = k == len(lenses) - 1 and k > 0
+        wide = lens_scale(fov, render_fov) if fov else 1.0
+        xs = [area["left"], (area["left"] + area["right"]) / 2, area["right"]] if widest else spread(area["left"], area["right"], screen["w"] * wide, rate_xy[0])
+        ys = [area["bottom"], (area["bottom"] + area["top"]) / 2, area["top"]] if widest else spread(area["bottom"], area["top"], screen["h"] * wide, rate_xy[1])
+        grids.append(("p" if k == 0 else f"f{fov:g}-", fov, xs, ys))
+    clip = measured["nearClip"]
+    log(f"sky layer images: {len(grids[0][2])}x{len(grids[0][3])} camera positions, near clip {clip}"
+        + "".join(f"; {len(xs)}x{len(ys)} through {fov:g} degrees" for _, fov, xs, ys in grids[1:]) + " ...")
+    saver = ThreadPoolExecutor(max_workers=2)
+    record = {"keep": keep, "rateUsedForSteps": rate_xy, "mapPxPerCell": scale, "nearClip": clip, "screen": screen, "fov": render_fov, "positions": {}}
+
+    def save(frame: np.ndarray, name: str) -> None:
+        saver.submit(save_frame, folder / name, frame)
+
+    def at(x: float, y: float, near: float) -> tuple[float, float] | None:
+        """The camera to (x, y), the map clipped away at `near`, our sky down."""
+        status = session.move_camera(x, y)
+        if status is None or session.send(f"hidemap {near}") is None:  # map clipped away, sky frozen, our sky down
+            return None
+        return status.camera_x, status.camera_y
+
+    def fixed_alone() -> None:
+        """The fixed skybox through each lens (it moves with the camera: the same at every position)."""
+        first_x, first_y = grids[0][2][0], grids[0][3][0]
+        if at(first_x, first_y, FIXED_CLIP) is None or session.send("sky mapsky 0") is None:
+            raise RuntimeError("the map didn't answer")
+        settle(SKY_SETTLE)
+        save(session.grab(dark_ok=True), "fixed")
+        for fov in lenses[1:]:
+            if session.send(f"fov {fov:g}") is None:
+                raise RuntimeError("the map didn't answer")
+            settle(SKY_SETTLE)
+            save(session.grab(dark_ok=True), f"fixed-fov{fov:g}")
+
+    try:
+        step(fixed_alone, "the fixed skybox")
+    except RuntimeError as e:
+        log(f"  the fixed skybox: {e}; no sky layer images this run")
+        step(lambda: session.send("sky mapparallax 1"), "putting the map's own parallax back")
+        saver.shutdown(wait=True)
+        return
+    # Every position, lens by lens, each grid north first like the tiles.
+    positions = [(f"{prefix}{k:03d}", fov, x, y) for prefix, fov, xs, ys in grids
+                 for k, (y, x) in enumerate((y, x) for y in reversed(ys) for x in xs)]
+    with ui.bar(len(positions), "Sky positions") as advance:
+        for n, (name, fov, x, y) in enumerate(positions):
+            def one() -> None:
+                camera = at(x, y, clip)
+                if camera is None or (fov != render_fov and session.send(f"fov {fov:g}") is None):
+                    raise RuntimeError("the map didn't answer")
+                for variant in ("bare", "lightbare", "light", "black"):
+                    if session.send(f"sky parallax{variant} 1") is None:
+                        raise RuntimeError("the map didn't answer")
+                    settle(SKY_SETTLE)  # drawn; set anew at speed 1, the haze is at the same frozen moment each time
+                    save(session.grab(dark_ok=True), f"{name}-{variant}")
+                # The background art over the map's own fixed skybox: where it lets the skybox through.
+                for command in ("sky mapsky 0", "sky parallaxbare 1"):
+                    if session.send(command) is None:
+                        raise RuntimeError("the map didn't answer")
+                settle(SKY_SETTLE)
+                save(session.grab(dark_ok=True), f"{name}-bareoverfixed")
+                record["positions"][name] = {"camera": list(camera), "fov": fov}
+
+            try:
+                step(one, f"sky layer images {n + 1}/{len(positions)}")
+            except RuntimeError as e:
+                warn(f"sky position {n + 1}: {e}; skipped")
+            advance()
+    step(lambda: session.send("sky mapparallax 1"), "putting the map's own parallax back")
+    saver.shutdown(wait=True)
+    write_json(folder / "positions.json", record, indent=2)
+    detail(f"sky layer images: {len(record['positions'])} positions in {folder.name}/")

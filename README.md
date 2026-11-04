@@ -2,7 +2,7 @@
 
 A Windows command-line tool that drives an installed Heroes of the Storm client to capture game
 assets as images. It starts with battlegrounds: transparent top-down map images, the map's own
-sky layers for a parallax viewer, composites, and a small viewer to look at them in.
+sky layers for a parallax viewer, packed for a map viewer, and a small viewer to look at them in.
 
 ## Download or update
 
@@ -71,3 +71,21 @@ pushing a branch opens a release PR, and merging it builds and publishes the rel
 ```sh
 pnpm install
 ```
+
+## Legal
+
+heroes-capture is a free, non-commercial fan project. It is not affiliated with, endorsed,
+sponsored or approved by Blizzard Entertainment.
+
+Heroes of the Storm is a trademark of Blizzard Entertainment, Inc., in the U.S. and/or other
+countries. Blizzard Entertainment is a trademark or registered trademark of Blizzard
+Entertainment, Inc., in the U.S. and/or other countries. All other trademarks are the property
+of their respective owners. Blizzard's own notices are on its
+[copyright notices page](https://www.blizzard.com/en-us/legal/9c9cb70b-d1ed-4e17-998a-16c6df46be7b/copyright-notices).
+
+heroes-capture reads the game files of a Heroes of the Storm install and captures the game's own
+screens. What it extracts and renders (map pictures, interface textures, models, game data)
+belongs to Blizzard Entertainment, Inc.
+
+The code is MIT licensed: see [LICENSE](LICENSE). The licence covers this project's own code,
+not Blizzard's game content.

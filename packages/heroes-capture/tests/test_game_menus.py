@@ -4,7 +4,7 @@ exit dialog are told from the map, whose own art can have long blue-violet strea
 import numpy as np
 import pytest
 
-from heroes_capture.game_menus import game_menu_open, interface_all_shown
+from heroes_capture.common.game_menus import game_menu_open, interface_all_shown
 from sim.menus import OUTLINE, broken_interface, button, game_menu
 
 SIZES = [(600, 1067), (720, 1280), (1080, 1920), (1080, 2560), (1440, 3440), (1440, 5120), (2160, 3840)]

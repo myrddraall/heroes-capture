@@ -1,0 +1,413 @@
+//--------------------------------------------------------------------------------------------------
+// heroes-capture's map script, the map's own part (map/script.py assembles the parts, layer by
+// layer, after a prototype of every function and before the command table and hrsCap_Init): the
+// status strip, the command box, the note, and leaving the match.
+//--------------------------------------------------------------------------------------------------
+// init: hrsCap_CoreInit
+// command: note hrsCap_gt_Note_Func
+// command: quit hrsCap_gt_Quit_Func
+
+
+// The map's state.
+int hrsCap_skyState = 0;  // 1 the matte's light sky (sky.py LIGHT_SKY), 2 black, 0 other
+bool hrsCap_forwardStarted = false;  // the fast-forward after the gates opened has begun
+bool hrsCap_ready = false;  // fast-forward done: the map's opening events have happened
+bool hrsCap_leaving = false;  // "quit" received: the match is ending
+int hrsCap_clearedSinceReady = 0;  // units the clearing removed after the map was ready
+bool hrsCap_introOn = false;  // the map's intro cutscene is playing (set by the sweep)
+int hrsCap_openingCuts = 0;  // opening timers cut short so far
+
+//--------------------------------------------------------------------------------------------------
+// The status strip: a dialog in the top-left corner, two columns of ${status_rows} black-or-white cells
+// (wide and short), redrawn at the end of every command and every sweep. The capture reads
+// it from the screen far faster than it can judge the picture, so it knows when a command has
+// been carried out and rendered. Cells: 0 white, 1 black (locator), then bits: command sequence
+// number (8), game clock since the gates opened in seconds (10), camera target x and y in 1/64
+// cells (15 each), unused (1), sky white, sky black, tick (flips every sweep), ready (the gates
+// have opened and the map's opening events are in place), the map's identity (16 bits, a hash of
+// its prepared id: the capture checks it is driving the map it prepared), the map's phase (2
+// bits: 0 before the gates open, 1 the opening timers being cut short, 2 ready, 3 leaving),
+// units cleared since ready (8: something spawning mid-render), intro cutscene playing (1),
+// opening timers cut short so far (4), parity of all bits, and a black end cell.
+//--------------------------------------------------------------------------------------------------
+const int hrsCap_statusCells = ${status_cells};
+const int hrsCap_statusCellW = ${status_cell_w};  // cell size in interface units
+const int hrsCap_statusCellH = ${status_cell_h};
+const int hrsCap_statusRows = ${status_rows};
+const int hrsCap_mapId = ${map_id};  // the prepared map's identity (map/prepare.preparation_id)
+int hrsCap_status = c_invalidDialogId;
+int[${status_cells}] hrsCap_statusCtl;
+int hrsCap_statusBackdrop = c_invalidDialogControlId;
+int hrsCap_statusBackdropDialog = c_invalidDialogId;
+int hrsCap_statusFiller = c_invalidDialogControlId;
+int hrsCap_seq = 0;
+int hrsCap_tick = 0;
+int hrsCap_statusParity = 0;
+int hrsCap_statusPlayer = 1;
+
+int hrsCap_LocalPlayer () {
+    int lv_p;
+
+    lv_p = 1;
+    for ( ; lv_p <= 10 ; lv_p += 1 ) {
+        if ((PlayerStatus(lv_p) == c_playerStatusActive)) {
+            return lv_p;
+        }
+    }
+    return 1;
+}
+
+// Cell lp_cell of the strip's 88 (logical): the second column starts with a fixed black cell
+// (so the locator's white cell can't run into a white cell beside it), so cells from the
+// column's height on sit one further down.
+void hrsCap_StatusCell (int lp_cell, int lp_bit) {
+    int lv_c;
+
+    lv_c = lp_cell;
+    if ((lv_c >= hrsCap_statusRows)) {
+        lv_c += 1;
+    }
+    if ((lp_bit != 0)) {
+        DialogControlSetPropertyAsColor(hrsCap_statusCtl[lv_c], c_triggerControlPropertyColor, PlayerGroupAll(), Color(100.0, 100.0, 100.0));
+    }
+    else {
+        DialogControlSetPropertyAsColor(hrsCap_statusCtl[lv_c], c_triggerControlPropertyColor, PlayerGroupAll(), Color(0.0, 0.0, 0.0));
+    }
+}
+
+// Bits of a value, least significant first, into cells from lp_start; the parity keeps up.
+void hrsCap_StatusBits (int lp_start, int lp_count, int lp_value) {
+    int lv_i;
+    int lv_bit;
+
+    lv_i = 0;
+    for ( ; lv_i < lp_count ; lv_i += 1 ) {
+        lv_bit = ((lp_value >> lv_i) & 1);
+        hrsCap_statusParity = (hrsCap_statusParity ^ lv_bit);
+        hrsCap_StatusCell((lp_start + lv_i), lv_bit);
+    }
+}
+
+void hrsCap_StatusDraw () {
+    point lv_target;
+    int lv_x;
+    int lv_y;
+
+    if ((hrsCap_status == c_invalidDialogId)) {
+        return;
+    }
+    lv_target = CameraGetTarget(hrsCap_statusPlayer);
+    lv_x = FixedToInt((PointGetX(lv_target) * 64.0) + 0.5);
+    lv_y = FixedToInt((PointGetY(lv_target) * 64.0) + 0.5);
+    if ((lv_x < 0)) { lv_x = 0; }
+    if ((lv_y < 0)) { lv_y = 0; }
+    if ((lv_x > 32767)) { lv_x = 32767; }
+    if ((lv_y > 32767)) { lv_y = 32767; }
+    hrsCap_statusParity = 0;
+    hrsCap_StatusCell(0, 1);
+    hrsCap_StatusCell(1, 0);
+    hrsCap_StatusBits(2, 8, hrsCap_seq);
+    hrsCap_StatusBits(10, 10, MinI(1023, FixedToInt(TimerGetElapsed(libGame_gv_gameTimer))));  // game clock since the gates, seconds
+    hrsCap_StatusBits(20, 15, lv_x);
+    hrsCap_StatusBits(35, 15, lv_y);
+    hrsCap_StatusBits(50, 1, 0);  // unused
+    hrsCap_StatusBits(51, 1, BoolToInt((hrsCap_skyState == 1)));
+    hrsCap_StatusBits(52, 1, BoolToInt((hrsCap_skyState == 2)));
+    hrsCap_StatusBits(53, 1, hrsCap_tick);
+    hrsCap_StatusBits(54, 1, BoolToInt(hrsCap_ready));
+    hrsCap_StatusBits(55, 16, hrsCap_mapId);
+    hrsCap_StatusBits(73, 8, MinI(255, hrsCap_clearedSinceReady));
+    hrsCap_StatusBits(81, 1, BoolToInt(hrsCap_introOn));
+    hrsCap_StatusBits(82, 4, MinI(15, hrsCap_openingCuts));
+    if (hrsCap_leaving) {
+        hrsCap_StatusBits(71, 2, 3);
+    }
+    else if (hrsCap_ready) {
+        hrsCap_StatusBits(71, 2, 2);
+    }
+    else if (hrsCap_forwardStarted) {
+        hrsCap_StatusBits(71, 2, 1);
+    }
+    else {
+        hrsCap_StatusBits(71, 2, 0);
+    }
+    hrsCap_StatusCell(86, hrsCap_statusParity);
+    hrsCap_StatusCell(87, 0);
+    DialogControlSetPropertyAsColor(hrsCap_statusCtl[hrsCap_statusRows], c_triggerControlPropertyColor, PlayerGroupAll(), Color(0.0, 0.0, 0.0));
+}
+
+// The command being carried out and who sent it (hrsCap_RunCommand sets them): the commands read
+// their words from it, as they once read the chat message.
+string hrsCap_cmd = "";
+int hrsCap_cmdPlayer = 1;
+
+// The sequence number a command carries as its last word (the capture appends it).
+int hrsCap_CommandSeq () {
+    string lv_s;
+    string lv_word;
+    string lv_last;
+    int lv_n;
+
+    lv_s = hrsCap_cmd;
+    lv_last = "";
+    lv_n = 1;
+    // As far as hrsCap_CommandWords reads: a longer command ("el copy <n> make <x> <y> <to x>
+    // <to y>" is 8 words before its number) was carried out but answered with one of its own words.
+    for ( ; lv_n <= 17 ; lv_n += 1 ) {
+        lv_word = StringWord(lv_s, lv_n);
+        if ((lv_word == "")) {
+            break;
+        }
+        lv_last = lv_word;
+    }
+    return (StringToInt(lv_last) & 255);
+}
+
+// Called at the end of a command, once its work is done: the strip shows its sequence number.
+void hrsCap_Ack () {
+    hrsCap_statusPlayer = hrsCap_cmdPlayer;
+    hrsCap_seq = hrsCap_CommandSeq();
+    hrsCap_StatusDraw();
+}
+
+void hrsCap_StatusInit () {
+    int lv_k;
+
+    // A black backdrop down the left edge below the cells: its own dialog, anchored to the
+    // bottom-left and reaching up behind the cells; created first, the strip draws over it.
+    hrsCap_statusBackdropDialog = DialogCreate((hrsCap_statusCellW * 2), 700, c_anchorBottomLeft, 0, 0, false);
+    DialogSetImageVisible(hrsCap_statusBackdropDialog, false);
+    hrsCap_statusBackdrop = DialogControlCreate(hrsCap_statusBackdropDialog, c_triggerControlTypeImage);
+    DialogControlSetPropertyAsString(hrsCap_statusBackdrop, c_triggerControlPropertyImage, PlayerGroupAll(), "Assets/Textures/HrsWhite.dds");
+    DialogControlSetPropertyAsInt(hrsCap_statusBackdrop, c_triggerControlPropertyImageType, PlayerGroupAll(), c_triggerImageTypeNormal);
+    DialogControlSetPropertyAsColor(hrsCap_statusBackdrop, c_triggerControlPropertyColor, PlayerGroupAll(), Color(0.0, 0.0, 0.0));
+    DialogControlSetSize(hrsCap_statusBackdrop, PlayerGroupAll(), (hrsCap_statusCellW * 2), 700);
+    DialogControlSetPosition(hrsCap_statusBackdrop, PlayerGroupAll(), c_anchorTopLeft, 0, 0);
+    DialogSetVisible(hrsCap_statusBackdropDialog, PlayerGroupAll(), true);
+    hrsCap_status = DialogCreate((hrsCap_statusCellW * 2), (hrsCap_statusCellH * hrsCap_statusRows), c_anchorTopLeft, 0, 0, false);
+    DialogSetImageVisible(hrsCap_status, false);
+    // Black under the second column's cells, down to the strip's foot (the backdrop dialog
+    // takes over from there).
+    hrsCap_statusFiller = DialogControlCreate(hrsCap_status, c_triggerControlTypeImage);
+    DialogControlSetPropertyAsString(hrsCap_statusFiller, c_triggerControlPropertyImage, PlayerGroupAll(), "Assets/Textures/HrsWhite.dds");
+    DialogControlSetPropertyAsInt(hrsCap_statusFiller, c_triggerControlPropertyImageType, PlayerGroupAll(), c_triggerImageTypeNormal);
+    DialogControlSetPropertyAsColor(hrsCap_statusFiller, c_triggerControlPropertyColor, PlayerGroupAll(), Color(0.0, 0.0, 0.0));
+    DialogControlSetSize(hrsCap_statusFiller, PlayerGroupAll(), hrsCap_statusCellW, (hrsCap_statusCellH * ((2 * hrsCap_statusRows) - hrsCap_statusCells)));
+    DialogControlSetPosition(hrsCap_statusFiller, PlayerGroupAll(), c_anchorTopLeft, hrsCap_statusCellW, (hrsCap_statusCellH * (hrsCap_statusCells - hrsCap_statusRows)));
+    lv_k = 0;
+    for ( ; lv_k < hrsCap_statusCells ; lv_k += 1 ) {
+        hrsCap_statusCtl[lv_k] = DialogControlCreate(hrsCap_status, c_triggerControlTypeImage);
+        DialogControlSetPropertyAsString(hrsCap_statusCtl[lv_k], c_triggerControlPropertyImage, PlayerGroupAll(), "Assets/Textures/HrsWhite.dds");
+        DialogControlSetPropertyAsInt(hrsCap_statusCtl[lv_k], c_triggerControlPropertyImageType, PlayerGroupAll(), c_triggerImageTypeNormal);
+        DialogControlSetSize(hrsCap_statusCtl[lv_k], PlayerGroupAll(), hrsCap_statusCellW, hrsCap_statusCellH);
+        DialogControlSetPosition(hrsCap_statusCtl[lv_k], PlayerGroupAll(), c_anchorTopLeft, ((lv_k / hrsCap_statusRows) * hrsCap_statusCellW), (ModI(lv_k, hrsCap_statusRows) * hrsCap_statusCellH));
+    }
+    hrsCap_statusPlayer = hrsCap_LocalPlayer();
+    hrsCap_StatusDraw();
+    DialogSetVisible(hrsCap_status, PlayerGroupAll(), true);
+}
+
+//--------------------------------------------------------------------------------------------------
+// The note: a line of text at the top middle of the screen saying what the capture is waiting on
+// while nothing is being shot (the rubble prepared, a wave falling), so the plain sky the screen
+// shows meanwhile isn't a mystery. "note <text>" shows it, "note" alone hides it; the commands
+// every shot starts with ("tile", "el at") hide it first, so no shot has it.
+//--------------------------------------------------------------------------------------------------
+int hrsCap_noteDialog = c_invalidDialogId;
+int hrsCap_noteLabel = c_invalidDialogControlId;
+
+void hrsCap_NoteInit () {
+    int lv_backdrop;
+
+    hrsCap_noteDialog = DialogCreate(1000, 50, c_anchorTop, 0, 30, false);
+    DialogSetImageVisible(hrsCap_noteDialog, false);
+    lv_backdrop = DialogControlCreate(hrsCap_noteDialog, c_triggerControlTypeImage);
+    DialogControlSetPropertyAsString(lv_backdrop, c_triggerControlPropertyImage, PlayerGroupAll(), "Assets/Textures/HrsWhite.dds");
+    DialogControlSetPropertyAsInt(lv_backdrop, c_triggerControlPropertyImageType, PlayerGroupAll(), c_triggerImageTypeNormal);
+    DialogControlSetPropertyAsColor(lv_backdrop, c_triggerControlPropertyColor, PlayerGroupAll(), Color(0.0, 0.0, 0.0));
+    DialogControlSetSize(lv_backdrop, PlayerGroupAll(), 1000, 50);
+    DialogControlSetPosition(lv_backdrop, PlayerGroupAll(), c_anchorTopLeft, 0, 0);
+    hrsCap_noteLabel = DialogControlCreate(hrsCap_noteDialog, c_triggerControlTypeLabel);
+    DialogControlSetFullDialog(hrsCap_noteLabel, PlayerGroupAll(), true);
+    DialogControlSetPosition(hrsCap_noteLabel, PlayerGroupAll(), c_anchorCenter, 0, 0);
+    DialogControlSetPropertyAsString(hrsCap_noteLabel, c_triggerControlPropertyStyle, PlayerGroupAll(), "ScreenButtonText");
+}
+
+void hrsCap_NoteShow (string lp_text) {
+    DialogControlSetPropertyAsText(hrsCap_noteLabel, c_triggerControlPropertyText, PlayerGroupAll(), StringToText(lp_text));
+    DialogSetVisible(hrsCap_noteDialog, PlayerGroupAll(), true);
+}
+
+void hrsCap_NoteHide () {
+    DialogSetVisible(hrsCap_noteDialog, PlayerGroupAll(), false);
+}
+
+//--------------------------------------------------------------------------------------------------
+// The command box: the capture types each command into an edit box of the map's own, in the
+// strip's column (blanked from every shot), as Unicode text ending in ";": "tile 3 12.5 30.25 17;".
+// Text input never acts as a hotkey wherever it lands, and unlike the chat box, which opens and
+// closes on Enter and loses its state when the game loses focus, the box has none to lose (the
+// input probe measured it: about 90 ms from typing to the strip's answer, against about 230 ms
+// through chat, and it kept the keyboard after an alt-tab). Read when its text changes (dialog
+// event type 5, a number: its name isn't in Blizzard's code) and by the sweep as a backstop; the
+// last complete command in it is carried out (earlier ones the capture has given up on), and the
+// box emptied. Until the first command arrives the sweep keeps asking for the keyboard for it
+// (the match is starting); after that, never (the player's own menus keep theirs). The chat
+// command "focus <seq> ;" gives it the keyboard back if it ever lost it (the capture sends it
+// when a command goes unanswered; if the box had the keyboard after all, the text lands in it and
+// is a command too).
+//--------------------------------------------------------------------------------------------------
+int hrsCap_boxDialog = c_invalidDialogId;
+int hrsCap_box = c_invalidDialogControlId;
+bool hrsCap_boxUsed = false;  // a command has come through the box
+trigger hrsCap_gt_BoxChanged;
+trigger hrsCap_gt_Focus;
+
+// A command: its first word picks the trigger (hrsCap_CommandTrigger: the parts' commands, a table
+// the assembler writes), run as a thread of its own (a tile waits for the camera), with the
+// command and the sender set for it.
+void hrsCap_RunCommand (string lp_text, int lp_player) {
+    trigger lv_t;
+
+    hrsCap_cmd = lp_text;
+    hrsCap_cmdPlayer = lp_player;
+    lv_t = hrsCap_CommandTrigger(StringWord(lp_text, 1));
+    if ((lv_t != null)) {
+        TriggerExecute(lv_t, false, false);
+    }
+    else {
+        hrsCap_Ack();  // "focus", or a word the map doesn't know: answered all the same
+    }
+}
+
+// The box read: its last complete command carried out, the box emptied.
+void hrsCap_ReadBox () {
+    string lv_s;
+    string lv_last;
+    int lv_end;
+
+    if ((hrsCap_box == c_invalidDialogControlId)) {
+        return;
+    }
+    lv_s = DialogControlGetPropertyAsString(hrsCap_box, c_triggerControlPropertyEditText, hrsCap_LocalPlayer());
+    lv_end = StringFind(lv_s, ";", c_stringCase);
+    if ((lv_end <= 0)) {
+        return;
+    }
+    lv_last = "";
+    while ((lv_end > 0)) {
+        lv_last = StringSub(lv_s, 1, (lv_end - 1));
+        lv_s = StringSub(lv_s, (lv_end + 1), StringLength(lv_s));
+        lv_end = StringFind(lv_s, ";", c_stringCase);
+    }
+    DialogControlSetPropertyAsString(hrsCap_box, c_triggerControlPropertyEditText, PlayerGroupAll(), "");
+    hrsCap_boxUsed = true;
+    hrsCap_RunCommand(lv_last, hrsCap_LocalPlayer());
+}
+
+bool hrsCap_gt_BoxChanged_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    if ((EventDialogControl() == hrsCap_box)) {
+        hrsCap_ReadBox();
+    }
+    return true;
+}
+
+// Chat "focus <seq> ;": the keyboard back to the box, answered.
+bool hrsCap_gt_Focus_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    hrsCap_cmd = StringReplaceWord(EventChatMessage(false), ";", "", c_stringReplaceAll, c_stringCase);
+    hrsCap_cmdPlayer = EventPlayer();
+    DialogControlRequestFocus(hrsCap_box, PlayerGroupAll());
+    hrsCap_Ack();
+    return true;
+}
+
+void hrsCap_BoxInit () {
+    hrsCap_boxDialog = DialogCreate((hrsCap_statusCellW * 2), 30, c_anchorBottomLeft, 0, 40, false);
+    hrsCap_box = DialogControlCreate(hrsCap_boxDialog, c_triggerControlTypeEditBox);
+    DialogControlSetSize(hrsCap_box, PlayerGroupAll(), (hrsCap_statusCellW * 2), 30);
+    DialogControlSetPosition(hrsCap_box, PlayerGroupAll(), c_anchorTopLeft, 0, 0);
+    DialogSetVisible(hrsCap_boxDialog, PlayerGroupAll(), true);
+    hrsCap_gt_BoxChanged = TriggerCreate("hrsCap_gt_BoxChanged_Func");
+    TriggerAddEventDialogControl(hrsCap_gt_BoxChanged, c_playerAny, hrsCap_box, 5);  // text changed (the input probe saw it fire as type 5)
+    hrsCap_gt_Focus = TriggerCreate("hrsCap_gt_Focus_Func");
+    TriggerAddEventChatMessage(hrsCap_gt_Focus, c_playerAny, "focus", false);
+    DialogControlRequestFocus(hrsCap_box, PlayerGroupAll());
+}
+
+// The command's words from lp_from on, without its last (the sequence number), one space apart.
+string hrsCap_CommandWords (int lp_from) {
+    string lv_text;
+    string lv_word;
+    int lv_n;
+
+    lv_text = "";
+    lv_n = lp_from;
+    for ( ; lv_n <= 16 ; lv_n += 1 ) {
+        lv_word = StringWord(hrsCap_cmd, lv_n);
+        if ((lv_word == "") || (StringWord(hrsCap_cmd, (lv_n + 1)) == "")) {
+            break;
+        }
+        if ((lv_text != "")) {
+            lv_text = (lv_text + " ");
+        }
+        lv_text = (lv_text + lv_word);
+    }
+    return lv_text;
+}
+
+// "note <text>" (at most 15 words): the note shown with that text; "note" alone: hidden.
+bool hrsCap_gt_Note_Func (bool testConds, bool runActions) {
+    string lv_text;
+
+    if (!runActions) {
+        return true;
+    }
+    lv_text = hrsCap_CommandWords(2);
+    if ((lv_text == "")) {
+        hrsCap_NoteHide();
+    }
+    else {
+        hrsCap_NoteShow(lv_text);
+    }
+    hrsCap_Ack();
+    return true;
+}
+
+// What a later part puts back before the match ends (the capture: the interface, the sky, the
+// sweep stopped), redefined there; nothing here.
+void hrsCap_Restore () {
+}
+
+// The match ended: that player's own core killed, and the game ends it its normal way (end
+// sequence, defeat), back towards the menu, where the next run's map loads. (Ending it directly
+// with GameOver crashed Battlefield of Eternity once the match had run about 30 s.) A map of
+// rounds redefines it (the arena part).
+void hrsCap_EndMatch () {
+    UnitKill(libGame_gv_teams[libGame_gf_TeamNumberOfPlayer(hrsCap_cmdPlayer)].lv_core);
+}
+
+// "quit": the match left (hrsCap_Restore, hrsCap_EndMatch).
+bool hrsCap_gt_Quit_Func (bool testConds, bool runActions) {
+    if (!runActions) {
+        return true;
+    }
+    hrsCap_leaving = true;
+    hrsCap_StatusDraw();  // the strip says "leaving" at once (Restore shows the interface again)
+    Wait(0.25, c_timeReal);
+    hrsCap_Restore();
+    Wait(0.5, c_timeReal);
+    hrsCap_EndMatch();
+    return true;
+}
+
+void hrsCap_CoreInit () {
+    hrsCap_StatusInit();
+    hrsCap_NoteInit();
+    hrsCap_BoxInit();
+}
